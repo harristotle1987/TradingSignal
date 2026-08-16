@@ -17,15 +17,33 @@
 import { TradingSignal, SignalGenerationResponse, NormalizedCandle, NormalizedTicker, SignalDirection } from '../../types/index.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
 import { MarketSessionManager } from '../market/MarketSessionManager.js';
+import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 import { ScoringEngine, ScoringResult } from './ScoringEngine.js';
 import { NvidiaAIService } from './NvidiaAIService.js';
 import { SignalValidator, ValidationResult } from './SignalValidator.js';
 import { TradeRankingEngine, ValidatedCandidate } from './TradeRankingEngine.js';
 import { logger } from '../logger.js';
 
-const CRYPTO_UNIVERSE = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT'];
-const FOREX_UNIVERSE  = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'];
-const STOCK_UNIVERSE  = ['AAPL', 'NVDA', 'MSFT', 'TSLA', 'AMZN', 'GOOGL'];
+const CRYPTO_UNIVERSE = [
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT', 'DOGEUSDT', 'DOTUSDT', 'LTCUSDT', 
+  'LINKUSDT', 'AVAXUSDT', 'MATICUSDT', 'SHIBUSDT', 'TRXUSDT', 'UNIUSDT', 'ATOMUSDT', 'ETCUSDT', 
+  'FILUSDT', 'APTUSDT', 'SUIUSDT', 'NEARUSDT', 'OPUSDT', 'ARBUSDT', 'LDOUSDT', 'HBARUSDT', 'ICPUSDT', 
+  'GRTUSDT', 'FTMUSDT', 'INJUSDT', 'RNDRUSDT', 'STXUSDT', 'IMXUSDT', 'TIAUSDT', 'SEIUSDT', 'WIFUSDT', 
+  'BONKUSDT', 'FLOKIUSDT', 'PEPEUSDT', 'JUPUSDT', 'PYTHUSDT', 'DYDXUSDT', 'AAVEUSDT', 'MKRUSDT', 
+  'RUNEUSDT', 'PIUSDT'
+];
+
+const FOREX_UNIVERSE = [
+  'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD', 'EURGBP', 'EURJPY', 'GBPJPY', 
+  'AUDJPY', 'EURCAD', 'AUDCAD', 'EURAUD', 'GBPAUD', 'CHFJPY', 'CADJPY', 'GBPCAD', 'EURCHF', 'GBPCHF'
+];
+
+const STOCK_UNIVERSE = [
+  'AAPL', 'NVDA', 'MSFT', 'TSLA', 'AMZN', 'GOOGL', 'META', 'LLY', 'V', 'UNH', 'TSM', 'JPM', 'NVO', 
+  'XOM', 'WMT', 'MA', 'AVGO', 'ASML', 'JNJ', 'HD', 'PG', 'ADBE', 'MRK', 'COST', 'CVX', 'AMD', 'CRM', 
+  'NFLX', 'PEP', 'KO', 'TMO', 'BAC', 'ABT', 'DIS', 'NKE', 'INTC', 'CMG', 'ORCL', 'QCOM', 'CSCO', 
+  'IBM', 'AMGN', 'SPGI', 'INTU', 'GE', 'AXP', 'NOW', 'TXN'
+];
 
 export class SignalEngine {
   private activeSignals = new Map<string, TradingSignal>();
@@ -38,24 +56,23 @@ export class SignalEngine {
     const cleanSym = symbol.trim().toUpperCase();
     const cleanCat = category?.trim().toUpperCase();
 
-    if (cleanCat === 'CRYPTO' || cleanSym === 'CRYPTO' || CRYPTO_UNIVERSE.includes(cleanSym)) {
+    // 1. Category-specific requests (e.g. category is defined, or the symbol itself is a category keyword)
+    if (cleanCat === 'CRYPTO' || cleanSym === 'CRYPTO') {
       return { assetCategory: 'CRYPTO', universe: CRYPTO_UNIVERSE };
     }
-    if (cleanCat === 'FOREX' || cleanSym === 'FOREX' || FOREX_UNIVERSE.includes(cleanSym)) {
+    if (cleanCat === 'FOREX' || cleanSym === 'FOREX') {
       return { assetCategory: 'FOREX', universe: FOREX_UNIVERSE };
     }
-    if (cleanCat === 'STOCKS' || cleanCat === 'STOCK' || cleanSym === 'STOCKS' || cleanSym === 'STOCK' || STOCK_UNIVERSE.includes(cleanSym)) {
+    if (cleanCat === 'STOCKS' || cleanCat === 'STOCK' || cleanSym === 'STOCKS' || cleanSym === 'STOCK') {
       return { assetCategory: 'STOCKS', universe: STOCK_UNIVERSE };
     }
 
-    const assetType = MarketSessionManager.getAssetClassification(cleanSym);
-    if (assetType === 'FOREX') {
-      return { assetCategory: 'FOREX', universe: FOREX_UNIVERSE };
-    }
-    if (assetType === 'STOCK') {
-      return { assetCategory: 'STOCKS', universe: STOCK_UNIVERSE };
-    }
-    return { assetCategory: 'CRYPTO', universe: CRYPTO_UNIVERSE };
+    // 2. Specific exact symbol request (e.g. PIUSD, BTCUSDT, EURUSD, AAPL).
+    // Do NOT replace the requested symbol with another asset. Resolve that exact symbol first.
+    const detectedType = SymbolNormalizer.getAssetClassification(cleanSym);
+    const assetCategory = detectedType === 'FOREX' ? 'FOREX' : (detectedType === 'STOCK' ? 'STOCKS' : 'CRYPTO');
+    
+    return { assetCategory, universe: [cleanSym] };
   }
 
   /**
@@ -177,7 +194,14 @@ export class SignalEngine {
         direction: SignalDirection;
       }> = [];
 
+      let count = 0;
       for (const asset of openAssets) {
+        // Request throttling: small sleep every 5 items in a category scan to avoid hitting rate limits
+        if (universe.length > 1 && count > 0 && count % 5 === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+        count++;
+
         let htf1h: NormalizedCandle[];
         try {
           htf1h = await marketDataManager.getCandles(asset, undefined, '1h', 50, false);
@@ -194,11 +218,13 @@ export class SignalEngine {
         const pass = this.computeFirstPassScore(asset, htf1h);
         logger.info(`[Stage 1 Screen] ${asset}: Preliminary Score = ${pass.preliminaryScore}/100 (${pass.reason})`);
 
-        if (pass.preliminaryScore >= 40) {
+        // If it's a manual query (universe length is 1), we always advance it to Stage 2 so it gets full analysis and debugging, otherwise we check the threshold
+        const isManualQuery = universe.length === 1;
+        if (isManualQuery || pass.preliminaryScore >= 40) {
           stage1Candidates.push({
             asset,
             htf1h,
-            preliminaryScore: pass.preliminaryScore,
+            preliminaryScore: isManualQuery ? Math.max(40, pass.preliminaryScore) : pass.preliminaryScore,
             direction: pass.direction,
           });
         }
@@ -324,9 +350,10 @@ export class SignalEngine {
           continue;
         }
 
-        const providerName = asset.includes('BTC') || asset.includes('ETH') || asset.includes('SOL')
+        const classification = SymbolNormalizer.getAssetClassification(asset);
+        const providerName = classification === 'CRYPTO'
           ? 'Bitget Live Feed'
-          : 'Twelve Data';
+          : (classification === 'FOREX' ? 'Twelve Data' : 'Finnhub');
 
         const precision = decimals(finalEntry);
         const isForex = asset.includes('USD') && precision === 5;

@@ -19,36 +19,54 @@ export class SymbolNormalizer {
    * rather than a hard-coded list of symbols.
    */
   static getAssetClassification(symbol: string): AssetType {
-    const clean = this.normalizeAppSymbol(symbol);
-    if (!clean) return 'UNKNOWN';
+    if (!symbol) return 'UNKNOWN';
+    const cleanRaw = symbol.trim().toUpperCase();
 
-    // 1. Crypto Detection Rules
-    const cryptoTickers = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE'];
-    const hasCryptoBaseOrQuote = cryptoTickers.some(ticker => clean.startsWith(ticker) || clean.endsWith(ticker));
-    if (
-      clean.endsWith('USDT') ||
-      clean.endsWith('USDC') ||
-      clean.endsWith('BUSD') ||
-      (clean.endsWith('USD') && (clean.startsWith('BTC') || clean.startsWith('ETH') || clean.startsWith('SOL'))) ||
-      hasCryptoBaseOrQuote
-    ) {
+    // 1. Slash-based Detection Rules (inspect raw string before normalization strips slashes)
+    if (cleanRaw.includes('/')) {
+      const parts = cleanRaw.split('/');
+      const base = parts[0]?.trim();
+      const quote = parts[1]?.trim();
+      const fiatCurrencies = ['EUR', 'GBP', 'USD', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD'];
+      if (fiatCurrencies.includes(base) && fiatCurrencies.includes(quote)) {
+        return 'FOREX';
+      }
       return 'CRYPTO';
     }
 
-    // 2. Forex Detection Rules
+    const clean = this.normalizeAppSymbol(symbol);
+    if (!clean) return 'UNKNOWN';
+
+    // 2. Crypto Suffix Detection Rules
+    const cryptoQuotes = ['USDT', 'USDC', 'BUSD'];
+    if (cryptoQuotes.some(quote => clean.endsWith(quote))) {
+      return 'CRYPTO';
+    }
+
+    // Ends with USD but not as part of a 6-letter fiat-to-fiat pair (e.g. PIUSD, BTCUSD)
+    if (clean.endsWith('USD')) {
+      if (clean.length === 6) {
+        const fiatCurrencies = ['EUR', 'GBP', 'USD', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD'];
+        const base = clean.slice(0, 3);
+        if (fiatCurrencies.includes(base)) {
+          return 'FOREX';
+        }
+      }
+      return 'CRYPTO';
+    }
+
+    // 3. Forex Detection Rules (6 characters fiat-to-fiat)
     const fiatCurrencies = ['EUR', 'GBP', 'USD', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD'];
     const isForexPattern = 
-      (clean.length === 6 && 
-        fiatCurrencies.some(fiat => clean.startsWith(fiat)) && 
-        fiatCurrencies.some(fiat => clean.endsWith(fiat))
-      ) || 
-      symbol.includes('/');
+      clean.length === 6 && 
+      fiatCurrencies.some(fiat => clean.startsWith(fiat)) && 
+      fiatCurrencies.some(fiat => clean.endsWith(fiat));
 
     if (isForexPattern) {
       return 'FOREX';
     }
 
-    // 3. Stock Detection Rules
+    // 4. Stock Detection Rules (1 to 5 letters of standard stock symbol)
     if (/^[A-Z]{1,5}$/.test(clean)) {
       return 'STOCK';
     }

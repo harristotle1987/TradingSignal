@@ -100,6 +100,25 @@ export class MarketDataManager {
    * Fetches normalized ticker price for a given symbol and optional provider.
    */
   async getPrice(appSymbol: string, requestedProvider?: string, forceFresh = false): Promise<NormalizedTicker> {
+    const assetType = SymbolNormalizer.getAssetClassification(appSymbol);
+    if (assetType === 'UNKNOWN') {
+      return {
+        symbol: SymbolNormalizer.normalizeAppSymbol(appSymbol),
+        rawSymbol: appSymbol,
+        provider: requestedProvider || 'unknown',
+        assetType: 'UNKNOWN',
+        bid: null,
+        ask: null,
+        price: 0,
+        timestamp: 0,
+        receivedAt: Date.now(),
+        source: 'LIVE',
+        isFresh: false,
+        status: 'MARKET_DATA_UNAVAILABLE',
+        errorMessage: 'ASSET_NOT_SUPPORTED',
+      };
+    }
+
     const cleanSymbol = SymbolNormalizer.normalizeAppSymbol(appSymbol);
     if (!cleanSymbol) {
       return {
@@ -119,7 +138,7 @@ export class MarketDataManager {
       };
     }
 
-    let providerId = (requestedProvider || this.selectProviderForSymbol(cleanSymbol)).toLowerCase();
+    let providerId = (requestedProvider || this.selectProviderForSymbol(appSymbol)).toLowerCase();
     if (providerId === 'forex') {
       providerId = 'twelvedata'; // Twelve Data is the authoritative Forex market data source
     }
@@ -131,7 +150,7 @@ export class MarketDataManager {
         symbol: cleanSymbol,
         rawSymbol: cleanSymbol,
         provider: providerId,
-        assetType: 'UNKNOWN',
+        assetType,
         bid: null,
         ask: null,
         price: 0,
@@ -144,6 +163,19 @@ export class MarketDataManager {
       };
     }
 
+    const normalizeError = (ticker: NormalizedTicker): NormalizedTicker => {
+      if (ticker.status === 'MARKET_DATA_UNAVAILABLE') {
+        const msg = ticker.errorMessage?.toLowerCase() || '';
+        const isQuota = msg.includes('429') || msg.includes('rate limit') || msg.includes('quota') || msg.includes('blocked');
+        const isConn = msg.includes('connection') || msg.includes('timeout') || msg.includes('failed') || msg.includes('network');
+        const isKey = msg.includes('key') || msg.includes('configure') || msg.includes('unauthorized') || msg.includes('credential');
+        if (!isQuota && !isConn && !isKey) {
+          ticker.errorMessage = 'ASSET_NOT_SUPPORTED';
+        }
+      }
+      return ticker;
+    };
+
     const cacheTtlMs = serverConfig.getConfig().marketDataCacheTtlMs;
 
     const isCritical = forceFresh;
@@ -153,11 +185,11 @@ export class MarketDataManager {
         logger.info(`Quota manager blocked live request; returning cached ticker for ${cleanSymbol}`);
         return cached;
       }
-      return {
+      return normalizeError({
         symbol: cleanSymbol,
         rawSymbol: cleanSymbol,
         provider: providerId,
-        assetType: 'UNKNOWN',
+        assetType,
         bid: null,
         ask: null,
         price: 0,
@@ -167,7 +199,7 @@ export class MarketDataManager {
         isFresh: false,
         status: 'MARKET_DATA_UNAVAILABLE',
         errorMessage: `Request blocked by API Quota/Rate-limit Manager for ${providerId}`,
-      };
+      });
     }
 
     if (forceFresh) {
@@ -181,7 +213,7 @@ export class MarketDataManager {
           if (success) {
             marketCache.set(providerId, cleanSymbol, result, cacheTtlMs);
           }
-          return result;
+          return normalizeError(result);
         } catch (err: any) {
           const errMsg = String(err);
           quotaManager.recordResponse(providerId, errMsg.includes('429') || errMsg.includes('rate limit') ? 429 : 500);
@@ -198,7 +230,7 @@ export class MarketDataManager {
           const result = await adapter.fetchPrice(cleanSymbol);
           const success = result.status === 'OK';
           quotaManager.recordResponse(providerId, success ? 200 : (result.errorMessage?.includes('429') ? 429 : 500));
-          return result;
+          return normalizeError(result);
         } catch (err: any) {
           const errMsg = String(err);
           quotaManager.recordResponse(providerId, errMsg.includes('429') || errMsg.includes('rate limit') ? 429 : 500);

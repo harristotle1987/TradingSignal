@@ -6,8 +6,9 @@
 import { useState, useEffect } from 'react';
 import { NavigationTab, HealthResponse } from '../types/index.js';
 import { StatusBadge } from './StatusBadge.js';
-import { Activity, Radio, Settings, ShieldCheck, RefreshCw, Clock, Globe } from 'lucide-react';
+import { Radio, Settings, ShieldCheck, RefreshCw, Clock } from 'lucide-react';
 import { formatTimeWithZone, getLocalTimeZone } from '../utils/time.js';
+import appLogo from '../assets/images/app_logo_icon_1786903027875.jpg';
 
 interface HeaderProps {
   activeTab: NavigationTab;
@@ -37,8 +38,13 @@ export function Header({
         <div className="flex items-center justify-between h-16">
           {/* Logo & App Name */}
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
-              <Activity className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-lg overflow-hidden border border-slate-800/80 bg-slate-950 flex items-center justify-center shadow-lg shadow-black/30">
+              <img
+                src={appLogo}
+                alt="Trading Signal System Logo"
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+              />
             </div>
             <div>
               <div className="flex items-center gap-2">
