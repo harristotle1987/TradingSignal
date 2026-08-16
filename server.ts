@@ -22,10 +22,8 @@ import signalsRouter from './src/server/routes/signals.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-async function startServer() {
+export async function createServer() {
   const app = express();
-  const PORT = 3000;
-  const HOST = '0.0.0.0';
 
   app.use(express.json());
 
@@ -69,17 +67,27 @@ async function startServer() {
     logger.info('Serving static build artifacts from dist directory...');
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api')) {
+        return next();
+      }
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  app.listen(PORT, HOST, () => {
-    logger.info(`Trading Signal System server running on http://${HOST}:${PORT}`);
-  });
+  return app;
 }
 
-startServer().catch((err) => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});
+// Start listener only when run directly (not as a serverless function)
+if (process.env.VERCEL !== '1' && !process.env.VERCEL_ENV) {
+  const PORT = 3000;
+  const HOST = '0.0.0.0';
+  createServer().then((app) => {
+    app.listen(PORT, HOST, () => {
+      logger.info(`Trading Signal System server running on http://${HOST}:${PORT}`);
+    });
+  }).catch((err) => {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  });
+}
