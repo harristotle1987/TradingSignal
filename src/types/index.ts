@@ -145,8 +145,12 @@ export interface TradingSignal {
   isSecondBest?: boolean;
   isSuggestion?: boolean;
   rankTier?: RankTier;
+  estimatedWinRate?: number;
+  isAiValidated?: boolean;
   targetDistance?: number;
   stopDistance?: number;
+  suggestedRiskAmount?: number; // Hypothetical analysis only
+  suggestedPositionSize?: number; // Hypothetical analysis only
   pipPointUnit?: 'PIPS' | 'POINTS';
   estimatedFriction?: {
     spreadPipsOrPoints: number;

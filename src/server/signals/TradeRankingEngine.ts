@@ -108,20 +108,29 @@ export class TradeRankingEngine {
     const topCluster = this.getAssetCluster(topSymbol);
 
     const sig1 = topCandidate.signal;
-    sig1.rankTier = 'BEST_TRADE';
-    sig1.isBestTrade = true;
-    sig1.isSecondBest = false;
-    sig1.isTopTrade = true;
-    sig1.isPrimary = true;
-    sig1.isSuggestion = false;
-    sig1.score = Math.round(topCandidate.compositeScore);
-    sig1.strategy = '[BEST TRADE] Highest-Quality Validated Confluence Setup';
 
-    bestTrade = sig1;
-    if (topCluster) {
-      occupiedClusters.add(`${topCluster}_${sig1.direction}`);
+    // BEST_TRADE strict validation
+    const isBestTradeEligible = 
+        (sig1.estimatedWinRate ?? 0) > 30 &&
+        sig1.riskRewardRatio >= 2.0 &&
+        !!sig1.isAiValidated &&
+        (sig1.score ?? 0) >= 80; // 80 as minimum confidence/quality score
+
+    if (isBestTradeEligible) {
+        sig1.rankTier = 'BEST_TRADE';
+        sig1.isBestTrade = true;
+        sig1.isTopTrade = true;
+        sig1.isPrimary = true;
+        sig1.strategy = '[BEST TRADE] Highest-Quality Validated Confluence Setup';
+        bestTrade = sig1;
+        if (topCluster) {
+            occupiedClusters.add(`${topCluster}_${sig1.direction}`);
+        }
+        logger.info(`[Gate 9 Ranking] BEST TRADE assigned: ${topSymbol} (${sig1.direction} @ ${sig1.entryPrice}, Score: ${sig1.score}, WinRate: ${sig1.estimatedWinRate}%)`);
+    } else {
+        logger.info(`[Gate 9 Ranking] Top candidate ${topSymbol} does not meet BEST_TRADE criteria (WinRate: ${sig1.estimatedWinRate}%, R:R: ${sig1.riskRewardRatio}, AIValidated: ${!!sig1.isAiValidated}, Score: ${sig1.score}). Treating as secondary.`);
+        // Don't assign BEST_TRADE, let it fall through to SECOND_BEST or SUGGESTION logic
     }
-    logger.info(`[Gate 9 Ranking] BEST TRADE assigned: ${topSymbol} (${sig1.direction} @ ${sig1.entryPrice}, Score: ${sig1.score})`);
 
     // Step B: Assign SECOND BEST (next highest candidate)
     const remainingCandidates = validCandidates.slice(1);
@@ -240,9 +249,8 @@ export class TradeRankingEngine {
     const netRR = scoring.estimatedFriction?.netRiskRewardRatio || scoring.riskRewardRatio;
     let rrWeight = 0;
     if (netRR >= 3.0) rrWeight = 8;
-    else if (netRR >= 2.5) rrWeight = 7;
+    else if (netRR >= 2.5) rrWeight = 8; // Increased bonus for preference
     else if (netRR >= 2.0) rrWeight = 6;
-    else if (netRR >= 1.5) rrWeight = 4;
     else rrWeight = 0;
 
     // Timeframe alignment bonus (up to 4 pts bonus, normalized to 100 ceiling)

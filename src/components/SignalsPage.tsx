@@ -742,6 +742,16 @@ export function SignalsPage({ health }: SignalsPageProps) {
                       Confidence:{' '}
                       <strong className="text-emerald-400 font-bold">{signal.confidenceScore}%</strong>
                     </span>
+                    <span className="text-slate-400">
+                      Win Rate:{' '}
+                      <strong className="text-emerald-400 font-bold">{signal.estimatedWinRate?.toFixed(1) || 'N/A'}%</strong>
+                    </span>
+                    <span className="text-slate-400">
+                      AI:{' '}
+                      <strong className={signal.isAiValidated ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
+                        {signal.isAiValidated ? "Validated" : "UNAVAILABLE"}
+                      </strong>
+                    </span>
                     <span className="text-slate-400 bg-slate-950 px-2 py-1 rounded border border-slate-800">
                       {signal.dataSource}
                     </span>

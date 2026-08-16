@@ -11,6 +11,7 @@ import { logger } from '../logger.js';
 export interface NvidiaEvaluationResult {
   aiAssessment: string;
   refinedConfidence: number;
+  isAiValidated: boolean;
 }
 
 export class NvidiaAIService {
@@ -24,6 +25,7 @@ export class NvidiaAIService {
       return {
         aiAssessment: `NVIDIA AI Status: Standby (NVIDIA_API_KEY environment variable unconfigured). Algorithmic engine calculated ${analysis.direction} signal with ${analysis.confidenceScore}% confidence.`,
         refinedConfidence: analysis.confidenceScore,
+        isAiValidated: false,
       };
     }
 
@@ -71,6 +73,7 @@ export class NvidiaAIService {
         return {
           aiAssessment: `NVIDIA AI API returned HTTP ${response.status}. Algorithmic technical confluence validated.`,
           refinedConfidence: analysis.confidenceScore,
+          isAiValidated: false,
         };
       }
 
@@ -81,19 +84,22 @@ export class NvidiaAIService {
         return {
           aiAssessment: `NVIDIA AI Assessment: ${content}`,
           refinedConfidence: Math.min(95, analysis.confidenceScore + 2),
+          isAiValidated: true,
         };
       }
 
       return {
         aiAssessment: 'NVIDIA AI verified setup confluence.',
         refinedConfidence: analysis.confidenceScore,
+        isAiValidated: true,
       };
     } catch (err) {
       const isAbort = err instanceof Error && err.name === 'AbortError';
       logger.info('NVIDIA AI evaluation fallback', { reason: isAbort ? 'Timed out (6s)' : String(err) });
       return {
-        aiAssessment: `NVIDIA AI Standby: ${isAbort ? 'Request Timed Out' : 'Offline'}. Algorithmic confluence validated.`,
+        aiAssessment: `NVIDIA AI ${isAbort ? 'UNAVAILABLE (Request Timed Out)' : 'Offline'}. Algorithmic confluence validated.`,
         refinedConfidence: analysis.confidenceScore,
+        isAiValidated: false,
       };
     }
   }

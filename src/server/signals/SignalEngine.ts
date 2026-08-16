@@ -344,6 +344,12 @@ export class SignalEngine {
         };
 
         const aiResult = await NvidiaAIService.evaluate(candidatePayloadForAI);
+        const winRate = ScoringEngine.estimateWinRate(scoring.score, finalRR);
+        
+        if (winRate <= 30) {
+           logger.info(`[Stage 2 AI] Rejected ${asset} due to low win rate (${winRate}% <= 30%)`);
+           continue;
+        }
 
         if (aiResult.refinedConfidence < 65) {
           logger.info(`[Stage 2 AI] Rejected ${asset} due to low AI confidence (${aiResult.refinedConfidence}%)`);
@@ -373,6 +379,8 @@ export class SignalEngine {
           strategy: 'Multi-Timeframe Trend & Volatility Confluence',
           confluenceReasons: scoring.confluenceReasons,
           confidenceScore: aiResult.refinedConfidence,
+          estimatedWinRate: winRate,
+          isAiValidated: aiResult.isAiValidated,
           stopLoss: finalSL,
           takeProfit: finalTP,
           riskRewardRatio: finalRR,
@@ -380,6 +388,8 @@ export class SignalEngine {
           stopDistance,
           pipPointUnit: scoring.pipPointUnit,
           estimatedFriction: scoring.estimatedFriction,
+          suggestedRiskAmount: scoring.hypotheticalRisk.suggestedRiskAmount,
+          suggestedPositionSize: scoring.hypotheticalRisk.suggestedPositionSize,
           expiresAt: now + (4 * 60 * 60 * 1000),
           timestamp: now,
           validatedAt: validation.validatedAt,

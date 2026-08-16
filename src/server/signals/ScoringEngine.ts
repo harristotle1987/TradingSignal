@@ -33,6 +33,10 @@ export interface ScoringResult {
     feeBufferPct: number;
     netRiskRewardRatio: number;
   };
+  hypotheticalRisk: {
+    suggestedRiskAmount: number;
+    suggestedPositionSize: number;
+  };
   factors: ScoringFactors;
   technicalMetrics?: {
     htfEma9: number;
@@ -58,6 +62,31 @@ interface AssetExecutionProfile {
 }
 
 export class ScoringEngine {
+  /**
+   * Estimates win rate based on technical score and risk/reward ratio.
+   */
+  static estimateWinRate(score: number, rr: number): number {
+    const baseWinRate = 25;
+    const scoreFactor = score / 4; 
+    const rrFactor = Math.min(rr * 5, 20); 
+    return Math.min(95, baseWinRate + scoreFactor + rrFactor);
+  }
+
+  /**
+   * Calculates hypothetical risk sizing based on a default balance and risk percentage.
+   */
+  static calculateHypotheticalRisk(entry: number, stopLoss: number, minStopDistance: number): { suggestedRiskAmount: number, suggestedPositionSize: number } {
+    const hypotheticalBalance = 1000; // Default hypothetical balance
+    const riskPercent = 0.01; // 1%
+    const riskAmount = hypotheticalBalance * riskPercent;
+    const riskDistance = Math.max(Math.abs(entry - stopLoss), minStopDistance);
+    const positionSize = riskAmount / riskDistance;
+    return {
+      suggestedRiskAmount: Number(riskAmount.toFixed(2)),
+      suggestedPositionSize: Number(positionSize.toFixed(4)),
+    };
+  }
+
   /**
    * Evaluates all scoring components deterministically based on real, validated market data.
    * Enforces realistic execution hurdles (ATR, S/R structure, spread, fees, slippage, and market noise).
@@ -393,8 +422,8 @@ export class ScoringEngine {
 
     const rawRiskRewardRatio = Number((rawReward / rawRisk).toFixed(2));
 
-    if (rawRiskRewardRatio < 1.5) {
-      return this.createRejection(`Unfavorable risk/reward profile: calculated R:R is ${rawRiskRewardRatio}:1 (minimum requirement is 1.5:1)`);
+    if (rawRiskRewardRatio < 2.0) {
+      return this.createRejection(`Unfavorable risk/reward profile: calculated R:R is ${rawRiskRewardRatio}:1 (minimum requirement is 2:1)`);
     }
 
     if (rawRiskRewardRatio > 4.5 && timeframesAligned < 4) {
@@ -410,9 +439,9 @@ export class ScoringEngine {
     const effectiveRisk = rawRisk + totalFriction;
     const netRiskRewardRatio = effectiveRisk > 0 ? Number((netReward / effectiveRisk).toFixed(2)) : 0;
 
-    if (netRiskRewardRatio < 1.35) {
+    if (netRiskRewardRatio < 1.5) {
       return this.createRejection(
-        `Net risk/reward after spread and fees (${netRiskRewardRatio}:1) fails minimum 1.35:1 realistic execution threshold (Spread: ${spreadInPrice.toFixed(precision)}, Fees: ${feeInPrice.toFixed(precision)})`
+        `Net risk/reward after spread and fees (${netRiskRewardRatio}:1) fails minimum 1.5:1 realistic execution threshold (Spread: ${spreadInPrice.toFixed(precision)}, Fees: ${feeInPrice.toFixed(precision)})`
       );
     }
 
@@ -471,6 +500,8 @@ export class ScoringEngine {
       totalScore,
     };
 
+    const hypotheticalRisk = this.calculateHypotheticalRisk(entryPrice, stopLoss, profile.minPracticalStopDistance);
+
     const technicalMetrics = {
       htfEma9: Number(lastEma9_1h.toFixed(precision)),
       htfEma21: Number(lastEma21_1h.toFixed(precision)),
@@ -501,6 +532,7 @@ export class ScoringEngine {
         feeBufferPct: Number((profile.estimatedFeeBufferPct * 100).toFixed(3)),
         netRiskRewardRatio,
       },
+      hypotheticalRisk,
       factors,
       technicalMetrics,
     };
@@ -586,6 +618,10 @@ export class ScoringEngine {
         spreadPipsOrPoints: 0,
         feeBufferPct: 0,
         netRiskRewardRatio: 0,
+      },
+      hypotheticalRisk: {
+        suggestedRiskAmount: 0,
+        suggestedPositionSize: 0,
       },
       factors: {
         trendScore: 0,
