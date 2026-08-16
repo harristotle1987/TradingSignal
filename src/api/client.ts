@@ -15,7 +15,9 @@ import {
 class ApiClient {
   private async fetchJson<T>(endpoint: string, options?: RequestInit, retries = 3): Promise<T> {
     try {
-      const response = await fetch(endpoint, {
+      const baseUrl = (import.meta as any).env?.VITE_API_URL || (typeof window !== 'undefined' ? window.location.origin : '');
+      const fullUrl = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`;
+      const response = await fetch(fullUrl, {
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',

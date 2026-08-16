@@ -29,6 +29,17 @@ async function startServer() {
 
   app.use(express.json());
 
+  // CORS Middleware for Production Connection Resilience
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    if (req.method === 'OPTIONS') {
+      return res.status(200).end();
+    }
+    next();
+  });
+
   // Request logger middleware
   app.use((req, _res, next) => {
     if (req.path.startsWith('/api')) {
