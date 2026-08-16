@@ -731,7 +731,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
                     ) : null}
                   </div>
 
-                  <div className="flex items-center gap-3 text-xs font-mono">
+                  <div className="flex flex-wrap items-center gap-2 xs:gap-3 text-xs font-mono">
                     {signal.score !== undefined && (
                       <span className="text-slate-400">
                         Score:{' '}

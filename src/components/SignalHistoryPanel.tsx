@@ -139,7 +139,7 @@ export function SignalHistoryPanel({
                 {/* Main Row */}
                 <div className="flex flex-wrap items-center justify-between gap-2.5">
                   {/* Left: Direction, Symbol, Outcome Badge */}
-                  <div className="flex items-center gap-2.5">
+                  <div className="flex flex-wrap items-center gap-2">
                     {item.direction === 'BUY' ? (
                       <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 text-xs font-mono font-bold flex items-center gap-1">
                         <TrendingUp className="w-3 h-3" /> BUY
@@ -196,7 +196,7 @@ export function SignalHistoryPanel({
                   {/* Center/Right: Numeric Prices & Meta */}
                   <div className="flex flex-wrap items-center gap-3 text-xs font-mono">
                     {item.entryPrice !== undefined && item.entryPrice > 0 ? (
-                      <div className="flex items-center gap-2 text-slate-300">
+                      <div className="flex flex-wrap items-center gap-2 text-slate-300">
                         <span>
                           Entry: <strong className="text-white">{item.entryPrice.toFixed(precision)}</strong>
                         </span>

@@ -12,10 +12,11 @@ const router = Router();
  * GET /api/scanner/settings
  * Retrieves automated hourly scanner configurations and today's stats.
  */
-router.get('/scanner/settings', (_req: Request, res: Response) => {
+router.get('/scanner/settings', async (_req: Request, res: Response) => {
+  const settings = await hourlyScanner.getSettingsAsync();
   res.status(200).json({
     success: true,
-    settings: hourlyScanner.getSettings(),
+    settings,
     timestamp: Date.now(),
   });
 });
@@ -24,13 +25,14 @@ router.get('/scanner/settings', (_req: Request, res: Response) => {
  * POST /api/scanner/settings
  * Updates automated hourly scanner configurations (enabled, notifications).
  */
-router.post('/scanner/settings', (req: Request, res: Response) => {
+router.post('/scanner/settings', async (req: Request, res: Response) => {
   const { enabled, notificationsEnabled } = req.body || {};
   hourlyScanner.updateSettings({ enabled, notificationsEnabled });
+  const settings = await hourlyScanner.getSettingsAsync();
   res.status(200).json({
     success: true,
     message: 'Scanner settings updated successfully',
-    settings: hourlyScanner.getSettings(),
+    settings,
     timestamp: Date.now(),
   });
 });
@@ -42,11 +44,12 @@ router.post('/scanner/settings', (req: Request, res: Response) => {
 router.post('/scanner/trigger', async (_req: Request, res: Response) => {
   try {
     const result = await hourlyScanner.triggerManualScan();
+    const settings = await hourlyScanner.getSettingsAsync();
     res.status(200).json({
       success: true,
       message: result.message,
       signalsFound: result.signalsFound,
-      settings: hourlyScanner.getSettings(),
+      settings,
       timestamp: Date.now(),
     });
   } catch (err: unknown) {

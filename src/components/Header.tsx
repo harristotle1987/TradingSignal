@@ -37,8 +37,8 @@ export function Header({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           {/* Logo & App Name */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg overflow-hidden border border-slate-800/80 bg-slate-950 flex items-center justify-center shadow-lg shadow-black/30">
+          <div className="flex items-center gap-2 xs:gap-3 shrink">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg overflow-hidden border border-slate-800/80 bg-slate-950 flex items-center justify-center shadow-lg shadow-black/30 shrink-0">
               <img
                 src={appLogo}
                 alt="Trading Signal System Logo"
@@ -46,44 +46,44 @@ export function Header({
                 referrerPolicy="no-referrer"
               />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-base font-semibold tracking-tight text-white">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 xs:gap-2">
+                <h1 className="text-xs sm:text-base font-semibold tracking-tight text-white truncate max-w-[95px] xs:max-w-[150px] sm:max-w-none">
                   Trading Signal System
                 </h1>
-                <span className="text-[10px] font-mono uppercase bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-slate-700">
+                <span className="text-[10px] font-mono uppercase bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-slate-700 shrink-0 hidden xs:inline-block">
                   Gate 1
                 </span>
               </div>
-              <p className="text-xs text-slate-400">NVIDIA AI Signal Architecture</p>
+              <p className="text-xs text-slate-400 hidden sm:block">NVIDIA AI Signal Architecture</p>
             </div>
           </div>
 
           {/* Navigation Tabs (Exactly SIGNALS & SETTINGS) */}
-          <nav className="flex items-center space-x-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+          <nav className="flex items-center space-x-0.5 xs:space-x-1 bg-slate-950 p-0.5 xs:p-1 rounded-lg border border-slate-800 shrink-0">
             <button
               id="nav-tab-signals"
               onClick={() => setActiveTab('SIGNALS')}
-              className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-xs font-medium transition-colors ${
+              className={`flex items-center gap-1 xs:gap-2 px-2 xs:px-4 py-1.5 rounded-md text-[10px] xs:text-xs font-medium transition-colors ${
                 activeTab === 'SIGNALS'
                   ? 'bg-slate-800 text-white shadow-sm border border-slate-700'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
               }`}
             >
-              <Radio className="w-3.5 h-3.5" />
+              <Radio className="w-3 h-3 xs:w-3.5 xs:h-3.5" />
               <span>SIGNALS</span>
             </button>
 
             <button
               id="nav-tab-settings"
               onClick={() => setActiveTab('SETTINGS')}
-              className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-xs font-medium transition-colors ${
+              className={`flex items-center gap-1 xs:gap-2 px-2 xs:px-4 py-1.5 rounded-md text-[10px] xs:text-xs font-medium transition-colors ${
                 activeTab === 'SETTINGS'
                   ? 'bg-slate-800 text-white shadow-sm border border-slate-700'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
               }`}
             >
-              <Settings className="w-3.5 h-3.5" />
+              <Settings className="w-3 h-3 xs:w-3.5 xs:h-3.5" />
               <span>SETTINGS</span>
             </button>
           </nav>

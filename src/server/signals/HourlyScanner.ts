@@ -8,6 +8,7 @@ import { signalEngine } from './SignalEngine.js';
 import { logger } from '../logger.js';
 import * as fs from 'fs';
 import * as path from 'path';
+import { getOrInitializeCapState, tryIncrementCapCount } from '../firebaseAdmin.js';
 
 const SETTINGS_FILE_PATH = path.join(process.cwd(), 'scanner_settings.json');
 
@@ -100,18 +101,20 @@ export class HourlyScannerService {
     logger.info('[Hourly Scanner] Initiating automated multi-market hourly scan...');
 
     try {
-      // 1. Enforce rolling 24-hour limit of 5 signals
-      this.cleanSentTimestamps();
-      const currentCount = this.settings.signalsSentTimestamps.length;
-      if (currentCount >= 5) {
-        logger.warn(`[Hourly Scanner] Daily automated signal cap reached (${currentCount}/5). Scanning skipped to protect user portfolio limits.`);
+      // 1. Enforce daily limit from Firestore (or local state if Firestore is not configured)
+      const capState = await getOrInitializeCapState(5);
+      const currentCount = capState.dailySignalCount;
+      const dailyCap = capState.dailySignalCap;
+
+      if (currentCount >= dailyCap) {
+        logger.warn(`[Hourly Scanner] Daily automated signal cap reached (${currentCount}/${dailyCap}). Scanning skipped to protect user portfolio limits.`);
         this.settings.lastScanTime = Date.now();
         this.saveSettings();
         this.isScanning = false;
         return 0;
       }
 
-      const remainingAllowance = 5 - currentCount;
+      const remainingAllowance = dailyCap - currentCount;
       let newSignalsDispatched = 0;
 
       // 2. Scan all three universes in sequence using the existing rate-limiting signalEngine
@@ -119,7 +122,7 @@ export class HourlyScannerService {
       
       for (const category of categories) {
         if (newSignalsDispatched >= remainingAllowance) {
-          logger.info('[Hourly Scanner] Rolling 24-hour cap of 5 signals reached during this scan cycle. Halting additional dispatches.');
+          logger.info('[Hourly Scanner] Rolling daily cap reached during this scan cycle. Halting additional dispatches.');
           break;
         }
 
@@ -138,6 +141,13 @@ export class HourlyScannerService {
               // Check if already in our sent list to prevent duplicate counting
               const alreadyCounted = this.settings.signalsSentTimestamps.some(t => Math.abs(t - sig.timestamp) < 5000);
               if (!alreadyCounted) {
+                // Try to atomically verify cap and increment the counter in Firestore
+                const incrementResult = await tryIncrementCapCount(dailyCap);
+                if (!incrementResult.allowed) {
+                  logger.info('[Hourly Scanner] Daily cap reached atomically during dispatch. Halting further dispatches.');
+                  break;
+                }
+
                 // Attach a marker for automated validation
                 sig.strategy = `[Hourly Automated] ${sig.strategy}`;
                 this.settings.signalsSentTimestamps.push(Date.now());
@@ -157,7 +167,14 @@ export class HourlyScannerService {
       // 3. Complete scan session updates
       this.settings.lastScanTime = Date.now();
       this.saveSettings();
-      logger.info(`[Hourly Scanner] Scan cycle complete. Dispatched ${newSignalsDispatched} new signals. Total sent in last 24h: ${this.settings.signalsSentTimestamps.length}/5.`);
+      
+      // Update local dummy signalsSentTimestamps to align with the database count for the active UI
+      const finalCapState = await getOrInitializeCapState(5);
+      const finalCount = finalCapState.dailySignalCount;
+      const now = Date.now();
+      this.settings.signalsSentTimestamps = Array.from({ length: finalCount }, (_, i) => now - i * 1000);
+
+      logger.info(`[Hourly Scanner] Scan cycle complete. Dispatched ${newSignalsDispatched} new signals. Total sent in last 24h: ${finalCount}/${finalCapState.dailySignalCap}.`);
       
       this.isScanning = false;
       return newSignalsDispatched;
@@ -169,10 +186,26 @@ export class HourlyScannerService {
   }
 
   /**
+   * Return the current configuration and metrics asynchronously from Firestore.
+   */
+  async getSettingsAsync(): Promise<ScannerSettings & { limit: number }> {
+    const capState = await getOrInitializeCapState(5);
+    const count = capState.dailySignalCount;
+    const now = Date.now();
+    
+    // Dynamically align the local signalsSentTimestamps for display purposes
+    this.settings.signalsSentTimestamps = Array.from({ length: count }, (_, i) => now - i * 1000);
+
+    return {
+      ...this.settings,
+      limit: capState.dailySignalCap,
+    };
+  }
+
+  /**
    * Return the current configuration and metrics.
    */
   getSettings(): ScannerSettings & { limit: number } {
-    this.cleanSentTimestamps();
     return {
       ...this.settings,
       limit: 5,
