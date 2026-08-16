@@ -1,0 +1,6 @@
+{
+  "name": "Trading Signal System",
+  "description": "Production-ready trading signal application framework with server-side AI integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
