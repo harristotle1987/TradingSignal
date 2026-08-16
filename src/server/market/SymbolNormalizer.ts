@@ -96,13 +96,20 @@ export class SymbolNormalizer {
 
     switch (lowerProvider) {
       case 'bitget': {
+        let symbol = clean;
+        // Backward-compatible translation of discontinued or migrated tokens
+        if (symbol === 'MATIC' || symbol === 'MATICUSDT') symbol = 'POLUSDT';
+        else if (symbol === 'RNDR' || symbol === 'RNDRUSDT') symbol = 'RENDERUSDT';
+        else if (symbol === 'FTM' || symbol === 'FTMUSDT') symbol = 'SUSDT';
+        else if (symbol === 'MKR' || symbol === 'MKRUSDT') symbol = 'FETUSDT';
+
         // Bitget supports crypto pairs ending in USDT, USDC, BTC, ETH etc.
-        if (clean.endsWith('USDT') || clean.endsWith('USDC') || clean.endsWith('USD') || clean.endsWith('BTC')) {
-          const bitgetSymbol = clean.endsWith('USD') ? `${clean}T` : clean;
+        if (symbol.endsWith('USDT') || symbol.endsWith('USDC') || symbol.endsWith('USD') || symbol.endsWith('BTC')) {
+          const bitgetSymbol = symbol.endsWith('USD') ? `${symbol}T` : symbol;
           return { providerSymbol: bitgetSymbol, assetType: 'CRYPTO' };
         }
         // Default crypto mapping for Bitget
-        return { providerSymbol: `${clean}USDT`, assetType: 'CRYPTO' };
+        return { providerSymbol: `${symbol}USDT`, assetType: 'CRYPTO' };
       }
 
       case 'finnhub': {

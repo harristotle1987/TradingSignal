@@ -26,6 +26,7 @@ import {
   Volume2,
   VolumeX,
   CheckCircle2,
+  Clock,
 } from 'lucide-react';
 
 interface SettingsPageProps {
@@ -45,6 +46,68 @@ export function SettingsPage({
     NotificationService.getPermission()
   );
   const [soundAlerts, setSoundAlerts] = useState<boolean>(true);
+  const [scannerSettings, setScannerSettings] = useState<{
+    enabled: boolean;
+    notificationsEnabled: boolean;
+    signalsSentTimestamps: number[];
+    lastScanTime: number;
+    limit: number;
+  } | null>(null);
+  const [loadingScanner, setLoadingScanner] = useState<boolean>(false);
+  const [triggeringScan, setTriggeringScan] = useState<boolean>(false);
+  const [scannerMessage, setScannerMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const fetchScannerSettings = useCallback(async () => {
+    setLoadingScanner(true);
+    try {
+      const res = await api.getScannerSettings();
+      if (res.success) {
+        setScannerSettings(res.settings);
+      }
+    } catch (err) {
+      console.error('Failed to fetch scanner settings:', err);
+    } finally {
+      setLoadingScanner(false);
+    }
+  }, []);
+
+  const handleUpdateScanner = async (enabled: boolean, notificationsEnabled: boolean) => {
+    try {
+      const res = await api.updateScannerSettings(enabled, notificationsEnabled);
+      if (res.success) {
+        setScannerSettings(res.settings);
+        setScannerMessage({ type: 'success', text: 'Scanner configuration updated successfully.' });
+        setTimeout(() => setScannerMessage(null), 4000);
+      }
+    } catch (err) {
+      console.error('Failed to update scanner settings:', err);
+      setScannerMessage({ type: 'error', text: 'Failed to update scanner settings.' });
+      setTimeout(() => setScannerMessage(null), 4000);
+    }
+  };
+
+  const handleManualScanTrigger = async () => {
+    setTriggeringScan(true);
+    setScannerMessage(null);
+    try {
+      const res = await api.triggerScannerManualScan();
+      if (res.success) {
+        setScannerSettings(res.settings);
+        setScannerMessage({
+          type: 'success',
+          text: `Scan Complete! Dispatched ${res.signalsFound} qualified automated setup(s).`,
+        });
+      }
+    } catch (err: any) {
+      console.error('Failed to trigger manual scan:', err);
+      setScannerMessage({
+        type: 'error',
+        text: err?.message || 'Failed to complete scanner run.',
+      });
+    } finally {
+      setTriggeringScan(false);
+    }
+  };
 
   const handleRequestPermission = async () => {
     const perm = await NotificationService.requestPermission();
@@ -72,7 +135,8 @@ export function SettingsPage({
 
   useEffect(() => {
     fetchMarketStatus();
-  }, [fetchMarketStatus]);
+    fetchScannerSettings();
+  }, [fetchMarketStatus, fetchScannerSettings]);
 
   const envProviders = configStatus?.providers;
   const activeMarketProviders = marketStatus?.providers;
@@ -371,6 +435,145 @@ export function SettingsPage({
                   Enable Permissions
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Automated Hourly Scanner (Gate 10) */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 pb-4 border-b border-slate-800">
+          <div>
+            <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+              <Clock className="w-4 h-4 text-emerald-400" />
+              Automated Hourly Scanner (Server-Side)
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Autonomous background scans of Crypto, Forex, and Stocks using rate-limit safe engines
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {scannerSettings?.enabled ? (
+              <StatusBadge status="ok" label="SCANNING ACTIVE" />
+            ) : (
+              <StatusBadge status="unconfigured" label="DISABLED" />
+            )}
+          </div>
+        </div>
+
+        {scannerMessage && (
+          <div className={`mb-4 p-3 rounded-lg text-xs flex items-center gap-2 ${
+            scannerMessage.type === 'success' ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' : 'bg-red-500/10 border border-red-500/20 text-red-400'
+          }`}>
+            <span className="font-semibold">{scannerMessage.type === 'success' ? 'Success:' : 'Error:'}</span>
+            <span>{scannerMessage.text}</span>
+          </div>
+        )}
+
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Enable/Disable Scanning */}
+            <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 flex items-center justify-between gap-4">
+              <div className="space-y-1">
+                <span className="text-xs font-semibold text-white block">Hourly Core Scan</span>
+                <p className="text-[11px] text-slate-400">
+                  Allows the server to fetch prices and evaluate multi-timeframe trends autonomously every hour.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleUpdateScanner(!scannerSettings?.enabled, scannerSettings?.notificationsEnabled ?? true)}
+                className={`px-3 py-1.5 rounded-lg border text-xs font-mono transition-colors min-w-[90px] ${
+                  scannerSettings?.enabled
+                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                    : 'bg-slate-900 border-slate-800 text-slate-500'
+                }`}
+              >
+                {scannerSettings?.enabled ? 'ENABLED' : 'DISABLED'}
+              </button>
+            </div>
+
+            {/* Enable/Disable Notifications */}
+            <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 flex items-center justify-between gap-4">
+              <div className="space-y-1">
+                <span className="text-xs font-semibold text-white block">Background Alerts</span>
+                <p className="text-[11px] text-slate-400">
+                  Triggers native browser notifications automatically for background scanner findings.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleUpdateScanner(scannerSettings?.enabled ?? true, !scannerSettings?.notificationsEnabled)}
+                className={`px-3 py-1.5 rounded-lg border text-xs font-mono transition-colors min-w-[90px] ${
+                  scannerSettings?.notificationsEnabled
+                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                    : 'bg-slate-900 border-slate-800 text-slate-500'
+                }`}
+              >
+                {scannerSettings?.notificationsEnabled ? 'NOTIFY ON' : 'NOTIFY OFF'}
+              </button>
+            </div>
+          </div>
+
+          {/* Statistics and Controls */}
+          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-white">Daily Automated Signal Cap</span>
+                  <span className="text-[11px] font-mono text-slate-400">
+                    ({scannerSettings?.signalsSentTimestamps?.length ?? 0} / {scannerSettings?.limit ?? 5} today)
+                  </span>
+                </div>
+                
+                {/* Custom Progress Bar */}
+                <div className="w-48 h-1.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
+                  <div
+                    className="h-full bg-emerald-400 transition-all duration-500"
+                    style={{
+                      width: `${Math.min(100, (((scannerSettings?.signalsSentTimestamps?.length ?? 0) / (scannerSettings?.limit ?? 5)) * 100))}%`
+                    }}
+                  />
+                </div>
+                <p className="text-[10px] text-slate-400 leading-relaxed">
+                  Strict safety ceiling limit to prevent over-trading. Max 5 high-conviction background signals per rolling 24 hours.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleManualScanTrigger}
+                  disabled={triggeringScan || loadingScanner}
+                  className="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-mono transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${triggeringScan ? 'animate-spin' : ''}`} />
+                  <span>{triggeringScan ? 'RUNNING SWEEP...' : 'TRIGGER MANUAL SWEEP'}</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-slate-800/60 flex flex-wrap gap-4 text-[10px] text-slate-400 font-mono">
+              <div>
+                <span>Last Scan: </span>
+                <span className="text-slate-200">
+                  {scannerSettings?.lastScanTime && scannerSettings.lastScanTime > 0
+                    ? new Date(scannerSettings.lastScanTime).toLocaleString()
+                    : 'Never'}
+                </span>
+              </div>
+              <div className="hidden sm:block text-slate-600">|</div>
+              <div>
+                <span>Next Automated Run: </span>
+                <span className="text-emerald-400">
+                  {scannerSettings?.lastScanTime && scannerSettings.lastScanTime > 0
+                    ? new Date(scannerSettings.lastScanTime + 60 * 60 * 1000).toLocaleString()
+                    : 'Pending'}
+                </span>
+              </div>
             </div>
           </div>
         </div>

@@ -121,6 +121,32 @@ class ApiClient {
       method: 'DELETE',
     });
   }
+
+  /**
+   * Fetch automated hourly scanner settings and stats
+   */
+  async getScannerSettings(): Promise<{ success: boolean; settings: any }> {
+    return this.fetchJson<{ success: boolean; settings: any }>('/api/scanner/settings');
+  }
+
+  /**
+   * Update automated hourly scanner settings
+   */
+  async updateScannerSettings(enabled: boolean, notificationsEnabled: boolean): Promise<{ success: boolean; settings: any }> {
+    return this.fetchJson<{ success: boolean; settings: any }>('/api/scanner/settings', {
+      method: 'POST',
+      body: JSON.stringify({ enabled, notificationsEnabled }),
+    });
+  }
+
+  /**
+   * Manually trigger a complete background scan
+   */
+  async triggerScannerManualScan(): Promise<{ success: boolean; message: string; signalsFound: number; settings: any }> {
+    return this.fetchJson<{ success: boolean; message: string; signalsFound: number; settings: any }>('/api/scanner/trigger', {
+      method: 'POST',
+    });
+  }
 }
 
 export const api = new ApiClient();

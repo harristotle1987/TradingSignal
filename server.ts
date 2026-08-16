@@ -17,6 +17,7 @@ import healthRouter from './src/server/routes/health.js';
 import configStatusRouter from './src/server/routes/configStatus.js';
 import marketRouter from './src/server/routes/market.js';
 import signalsRouter from './src/server/routes/signals.js';
+import { hourlyScanner } from './src/server/signals/HourlyScanner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -85,6 +86,11 @@ if (process.env.VERCEL !== '1' && !process.env.VERCEL_ENV) {
   createServer().then((app) => {
     app.listen(PORT, HOST, () => {
       logger.info(`Trading Signal System server running on http://${HOST}:${PORT}`);
+      try {
+        hourlyScanner.start();
+      } catch (scanErr) {
+        logger.error('Failed to start background hourly scanner service:', { error: String(scanErr) });
+      }
     });
   }).catch((err) => {
     console.error('Failed to start server:', err);

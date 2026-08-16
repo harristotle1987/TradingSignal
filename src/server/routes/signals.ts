@@ -4,8 +4,61 @@
 
 import { Router, Request, Response } from 'express';
 import { signalEngine } from '../signals/SignalEngine.js';
+import { hourlyScanner } from '../signals/HourlyScanner.js';
 
 const router = Router();
+
+/**
+ * GET /api/scanner/settings
+ * Retrieves automated hourly scanner configurations and today's stats.
+ */
+router.get('/scanner/settings', (_req: Request, res: Response) => {
+  res.status(200).json({
+    success: true,
+    settings: hourlyScanner.getSettings(),
+    timestamp: Date.now(),
+  });
+});
+
+/**
+ * POST /api/scanner/settings
+ * Updates automated hourly scanner configurations (enabled, notifications).
+ */
+router.post('/scanner/settings', (req: Request, res: Response) => {
+  const { enabled, notificationsEnabled } = req.body || {};
+  hourlyScanner.updateSettings({ enabled, notificationsEnabled });
+  res.status(200).json({
+    success: true,
+    message: 'Scanner settings updated successfully',
+    settings: hourlyScanner.getSettings(),
+    timestamp: Date.now(),
+  });
+});
+
+/**
+ * POST /api/scanner/trigger
+ * Manually triggers a complete background scanner run.
+ */
+router.post('/scanner/trigger', async (_req: Request, res: Response) => {
+  try {
+    const result = await hourlyScanner.triggerManualScan();
+    res.status(200).json({
+      success: true,
+      message: result.message,
+      signalsFound: result.signalsFound,
+      settings: hourlyScanner.getSettings(),
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to manually trigger background scan',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
 
 /**
  * GET /api/signals
