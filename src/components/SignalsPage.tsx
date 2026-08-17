@@ -133,11 +133,55 @@ export function SignalsPage({ health }: SignalsPageProps) {
     []
   );
 
+  // Load dedicated signal logs from backend
+  const loadDedicatedSignalLogs = useCallback(async () => {
+    try {
+      const res = await api.getSignalLogs();
+      if (res && res.success && Array.isArray(res.logs) && res.logs.length > 0) {
+        const mappedItems: SignalHistoryItem[] = res.logs.map((log: any) => ({
+          id: log.id,
+          snapshotId: log.snapshotId || log.id,
+          symbol: log.symbol,
+          direction: log.direction,
+          entryPrice: log.entryPrice,
+          stopLoss: log.stopLoss,
+          takeProfit: log.takeProfit,
+          riskRewardRatio: log.riskRewardRatio,
+          score: log.score,
+          confidenceScore: log.confidenceScore,
+          isTopTrade: log.isTopTrade || log.isBestTrade,
+          isBestTrade: log.isBestTrade,
+          outcomeType: log.isBestTrade
+            ? 'BEST_TRADE'
+            : log.status === 'ACTIVE'
+            ? 'VALIDATED'
+            : 'TOP_TRADE',
+          strategy: log.strategy,
+          timeframe: log.timeframe || '1h',
+          dataSource: log.provider || log.dataSource,
+          reason: `Market Type: ${log.marketType || 'Asset'} | Provider: ${log.provider || 'Live Feed'} | Regime: ${log.marketRegime || 'TREND'} | Status: ${log.status || 'ACTIVE'} | Score: ${log.score}/100`,
+          timestamp: log.timestamp || Date.now(),
+          marketType: log.marketType,
+          marketRegime: log.marketRegime,
+          signalStatus: log.status,
+        }));
+        setSignalHistory(mappedItems.slice(0, 15));
+      }
+    } catch (err) {
+      console.warn('Could not load dedicated signal logs from backend:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadDedicatedSignalLogs();
+  }, [loadDedicatedSignalLogs]);
+
   // Clear history handler
-  const handleClearHistory = () => {
+  const handleClearHistory = async () => {
     setSignalHistory([]);
     try {
       localStorage.removeItem(HISTORY_STORAGE_KEY);
+      await api.clearSignalLogs();
     } catch (e) {
       console.warn('Failed to wipe signal history:', e);
     }
@@ -314,6 +358,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
       }
 
       await loadActiveSignals();
+      await loadDedicatedSignalLogs();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setErrorMsg(`Signal generation error: ${msg}`);

@@ -181,6 +181,33 @@ export interface SignalsListResponse {
   timestamp: number;
 }
 
+export type SignalLogStatus = 'ACTIVE' | 'TP HIT' | 'SL HIT' | 'EXPIRED' | 'INVALIDATED';
+
+export interface SignalLogRecord {
+  id: string;
+  timestamp: number;
+  symbol: string;
+  marketType: 'Crypto' | 'Forex' | 'Stocks';
+  provider: string;
+  direction: 'BUY' | 'SELL';
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit: number;
+  riskRewardRatio: number;
+  score: number;
+  confidenceScore: number;
+  strategy: string;
+  marketRegime: string;
+  status: SignalLogStatus;
+  snapshotId: string;
+  confluenceReasons?: string[];
+  timeframe?: string;
+  aiAssessment?: string;
+  isTopTrade?: boolean;
+  isBestTrade?: boolean;
+  updatedAt?: number;
+}
+
 export interface SignalHistoryItem {
   id: string;
   snapshotId: string;
@@ -203,6 +230,9 @@ export interface SignalHistoryItem {
   dataSource?: string;
   reason?: string;
   timestamp: number;
+  marketType?: 'Crypto' | 'Forex' | 'Stocks';
+  marketRegime?: string;
+  signalStatus?: SignalLogStatus;
 }
 
 

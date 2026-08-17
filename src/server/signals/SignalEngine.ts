@@ -22,6 +22,12 @@ import { ScoringEngine, ScoringResult } from './ScoringEngine.js';
 import { NvidiaAIService } from './NvidiaAIService.js';
 import { SignalValidator, ValidationResult } from './SignalValidator.js';
 import { TradeRankingEngine, ValidatedCandidate } from './TradeRankingEngine.js';
+import { SignalLogger } from './SignalLogger.js';
+import { SignalFingerprint } from './SignalFingerprint.js';
+import { CooldownManager } from './CooldownManager.js';
+import { MarketStructureDetector } from './MarketStructureDetector.js';
+import { CorrelationFilter } from './CorrelationFilter.js';
+import { SignalAuditStore } from './SignalAuditStore.js';
 import { logger } from '../logger.js';
 
 const CRYPTO_UNIVERSE = [
@@ -357,8 +363,132 @@ export class SignalEngine {
           crossCheck.agreementPct
         );
 
+        const primaryStrategyName = scoring.primaryStrategy || 'Multi-Timeframe Trend Confluence';
+        const fp = SignalFingerprint.generateFingerprint({
+          symbol: asset,
+          direction: scoring.direction || 'BUY',
+          entryPrice: baselinePrice,
+          timeframe: 'Multi-TF Realism Setup',
+          primaryStrategy: primaryStrategyName,
+          atr: scoring.technicalMetrics?.atr,
+        });
+
         if (!scoring.isValid) {
           logger.info(`[Stage 3 Scoring] ${asset} rejected: ${scoring.rejectionReason}`);
+          SignalAuditStore.logAudit({
+            symbol: asset,
+            direction: scoring.direction,
+            timeframe: 'Multi-TF Realism Setup',
+            primaryStrategy: primaryStrategyName,
+            passedStrategies: scoring.passedStrategies || [],
+            failedStrategies: scoring.failedStrategies || [],
+            marketRegime: scoring.marketRegime || 'UNKNOWN',
+            atr: scoring.technicalMetrics?.atr || 0,
+            dataFreshnessSeconds: 0,
+            providerAgreement: crossCheck.agreementPct >= 99.5,
+            providerAgreementPct: crossCheck.agreementPct,
+            expectedRR: scoring.riskRewardRatio || 0,
+            score: scoring.score || 0,
+            status: 'REJECTED',
+            rejectionReason: scoring.rejectionReason || 'Failed scoring criteria',
+            fingerprint: fp,
+          });
+          continue;
+        }
+
+        // 1. Asset Cooldown & Market Structure Check
+        const assetCooldown = CooldownManager.isAssetInCooldown(asset);
+        if (assetCooldown.inCooldown) {
+          const prevSig = this.activeSignals.get(asset) || SignalLogger.getLastSignalForSymbol(asset);
+          const structCheck = MarketStructureDetector.hasStructureMateriallyChanged({
+            symbol: asset,
+            currentEntry: baselinePrice,
+            currentRegime: scoring.marketRegime,
+            currentDirection: scoring.direction,
+            currentAtr: scoring.technicalMetrics?.atr || 0,
+            candles1h: candlesMap['1h'],
+            prevSignal: prevSig ? {
+              entryPrice: prevSig.entryPrice,
+              marketRegime: (prevSig as any).marketRegime,
+              direction: prevSig.direction,
+              timestamp: prevSig.timestamp,
+            } : undefined,
+          });
+
+          if (!structCheck.hasChanged) {
+            const reason = `Asset in cooldown (${assetCooldown.remainingMinutes}m remaining): ${structCheck.reason}`;
+            logger.info(`[Stage 3 Cooldown] Rejected ${asset}: ${reason}`);
+            SignalAuditStore.logAudit({
+              symbol: asset,
+              direction: scoring.direction,
+              timeframe: 'Multi-TF Realism Setup',
+              primaryStrategy: primaryStrategyName,
+              passedStrategies: scoring.passedStrategies || [],
+              failedStrategies: scoring.failedStrategies || [],
+              marketRegime: scoring.marketRegime,
+              atr: scoring.technicalMetrics?.atr || 0,
+              dataFreshnessSeconds: 0,
+              providerAgreement: crossCheck.agreementPct >= 99.5,
+              providerAgreementPct: crossCheck.agreementPct,
+              expectedRR: scoring.riskRewardRatio,
+              score: scoring.score,
+              status: 'REJECTED',
+              rejectionReason: reason,
+              fingerprint: fp,
+            });
+            continue;
+          }
+        }
+
+        // 2. Strategy Cooldown Check
+        const stratCooldown = CooldownManager.isStrategyInCooldown(asset, primaryStrategyName);
+        if (stratCooldown.inCooldown) {
+          const reason = `Strategy [${primaryStrategyName}] in cooldown on ${asset} (${stratCooldown.remainingMinutes}m remaining)`;
+          logger.info(`[Stage 3 Strategy Cooldown] Rejected ${asset}: ${reason}`);
+          SignalAuditStore.logAudit({
+            symbol: asset,
+            direction: scoring.direction,
+            timeframe: 'Multi-TF Realism Setup',
+            primaryStrategy: primaryStrategyName,
+            passedStrategies: scoring.passedStrategies || [],
+            failedStrategies: scoring.failedStrategies || [],
+            marketRegime: scoring.marketRegime,
+            atr: scoring.technicalMetrics?.atr || 0,
+            dataFreshnessSeconds: 0,
+            providerAgreement: crossCheck.agreementPct >= 99.5,
+            providerAgreementPct: crossCheck.agreementPct,
+            expectedRR: scoring.riskRewardRatio,
+            score: scoring.score,
+            status: 'REJECTED',
+            rejectionReason: reason,
+            fingerprint: fp,
+          });
+          continue;
+        }
+
+        // 3. Duplicate Fingerprint Check
+        const fpCheck = SignalFingerprint.checkDuplicateFingerprint(fp);
+        if (fpCheck.isDuplicate) {
+          const reason = `Duplicate signal fingerprint match [${fp}]. Identical setup previously emitted within 24h.`;
+          logger.info(`[Stage 3 Fingerprint] Rejected ${asset}: ${reason}`);
+          SignalAuditStore.logAudit({
+            symbol: asset,
+            direction: scoring.direction,
+            timeframe: 'Multi-TF Realism Setup',
+            primaryStrategy: primaryStrategyName,
+            passedStrategies: scoring.passedStrategies || [],
+            failedStrategies: scoring.failedStrategies || [],
+            marketRegime: scoring.marketRegime,
+            atr: scoring.technicalMetrics?.atr || 0,
+            dataFreshnessSeconds: 0,
+            providerAgreement: crossCheck.agreementPct >= 99.5,
+            providerAgreementPct: crossCheck.agreementPct,
+            expectedRR: scoring.riskRewardRatio,
+            score: scoring.score,
+            status: 'REJECTED',
+            rejectionReason: reason,
+            fingerprint: fp,
+          });
           continue;
         }
 
@@ -372,6 +502,7 @@ export class SignalEngine {
 
         if (!liveTicker || liveTicker.price <= 0) continue;
 
+        const dataFreshnessSeconds = Math.max(0, Math.round((now - liveTicker.timestamp) / 1000));
         const secondaryPrice = crossCheck.secondaryPrice ? { price: crossCheck.secondaryPrice, source: crossCheck.source2 || 'Secondary' } : undefined;
         const validation = SignalValidator.validate({
           symbol: asset,
@@ -390,6 +521,24 @@ export class SignalEngine {
 
         if (!validation.isValid) {
           logger.warn(`[Stage 3 Validation Rejected] ${asset}: [${validation.validationReason}] ${validation.detailedMessage}`);
+          SignalAuditStore.logAudit({
+            symbol: asset,
+            direction: scoring.direction,
+            timeframe: 'Multi-TF Realism Setup',
+            primaryStrategy: primaryStrategyName,
+            passedStrategies: scoring.passedStrategies || [],
+            failedStrategies: scoring.failedStrategies || [],
+            marketRegime: scoring.marketRegime,
+            atr: scoring.technicalMetrics?.atr || 0,
+            dataFreshnessSeconds,
+            providerAgreement: crossCheck.agreementPct >= 99.5,
+            providerAgreementPct: crossCheck.agreementPct,
+            expectedRR: scoring.riskRewardRatio,
+            score: scoring.score,
+            status: 'REJECTED',
+            rejectionReason: `Gate 8 Validation Failed [${validation.validationReason}]: ${validation.detailedMessage}`,
+            fingerprint: fp,
+          });
           continue;
         }
 
@@ -406,7 +555,7 @@ export class SignalEngine {
           entryPrice: finalEntry,
           direction: scoring.direction,
           timeframe: '5m-1D Multi-TF Realism Check',
-          strategy: 'Multi-Timeframe Trend & ATR Volatility Confluence',
+          strategy: primaryStrategyName,
           confluenceReasons: scoring.confluenceReasons,
           confidenceScore: scoring.score,
           stopLoss: finalSL,
@@ -420,22 +569,98 @@ export class SignalEngine {
         const expectancy = ScoringEngine.calculateExpectancy(winRate, finalRR);
         
         if (winRate <= 30) {
-          logger.info(`[Stage 3 AI] Rejected ${asset} due to low win rate (${winRate}% <= 30%)`);
+          const reason = `Estimated win rate (${winRate}% <= 30% threshold)`;
+          logger.info(`[Stage 3 AI] Rejected ${asset} due to ${reason}`);
+          SignalAuditStore.logAudit({
+            symbol: asset,
+            direction: scoring.direction,
+            timeframe: 'Multi-TF Realism Setup',
+            primaryStrategy: primaryStrategyName,
+            passedStrategies: scoring.passedStrategies || [],
+            failedStrategies: scoring.failedStrategies || [],
+            marketRegime: scoring.marketRegime,
+            atr: scoring.technicalMetrics?.atr || 0,
+            dataFreshnessSeconds,
+            providerAgreement: crossCheck.agreementPct >= 99.5,
+            providerAgreementPct: crossCheck.agreementPct,
+            expectedRR: finalRR,
+            score: scoring.score,
+            status: 'REJECTED',
+            rejectionReason: reason,
+            fingerprint: fp,
+          });
           continue;
         }
 
         if (expectancy <= 0) {
-          logger.info(`[Stage 3 AI] Rejected ${asset} due to non-positive expectancy (${expectancy}R <= 0)`);
+          const reason = `Non-positive expectancy (${expectancy}R <= 0)`;
+          logger.info(`[Stage 3 AI] Rejected ${asset} due to ${reason}`);
+          SignalAuditStore.logAudit({
+            symbol: asset,
+            direction: scoring.direction,
+            timeframe: 'Multi-TF Realism Setup',
+            primaryStrategy: primaryStrategyName,
+            passedStrategies: scoring.passedStrategies || [],
+            failedStrategies: scoring.failedStrategies || [],
+            marketRegime: scoring.marketRegime,
+            atr: scoring.technicalMetrics?.atr || 0,
+            dataFreshnessSeconds,
+            providerAgreement: crossCheck.agreementPct >= 99.5,
+            providerAgreementPct: crossCheck.agreementPct,
+            expectedRR: finalRR,
+            score: scoring.score,
+            status: 'REJECTED',
+            rejectionReason: reason,
+            fingerprint: fp,
+          });
           continue;
         }
 
         if (scoring.score < 75) {
-          logger.info(`[Stage 3 AI] Rejected ${asset} due to score below minimum actionable threshold (${scoring.score}/100 < 75)`);
+          const reason = `Quality score below minimum actionable threshold (${scoring.score}/100 < 75)`;
+          logger.info(`[Stage 3 AI] Rejected ${asset} due to ${reason}`);
+          SignalAuditStore.logAudit({
+            symbol: asset,
+            direction: scoring.direction,
+            timeframe: 'Multi-TF Realism Setup',
+            primaryStrategy: primaryStrategyName,
+            passedStrategies: scoring.passedStrategies || [],
+            failedStrategies: scoring.failedStrategies || [],
+            marketRegime: scoring.marketRegime,
+            atr: scoring.technicalMetrics?.atr || 0,
+            dataFreshnessSeconds,
+            providerAgreement: crossCheck.agreementPct >= 99.5,
+            providerAgreementPct: crossCheck.agreementPct,
+            expectedRR: finalRR,
+            score: scoring.score,
+            status: 'REJECTED',
+            rejectionReason: reason,
+            fingerprint: fp,
+          });
           continue;
         }
 
         if (aiResult.refinedConfidence < 70) {
-          logger.info(`[Stage 3 AI] Rejected ${asset} due to low AI confidence (${aiResult.refinedConfidence}% < 70% threshold)`);
+          const reason = `Low AI confidence (${aiResult.refinedConfidence}% < 70% threshold)`;
+          logger.info(`[Stage 3 AI] Rejected ${asset} due to ${reason}`);
+          SignalAuditStore.logAudit({
+            symbol: asset,
+            direction: scoring.direction,
+            timeframe: 'Multi-TF Realism Setup',
+            primaryStrategy: primaryStrategyName,
+            passedStrategies: scoring.passedStrategies || [],
+            failedStrategies: scoring.failedStrategies || [],
+            marketRegime: scoring.marketRegime,
+            atr: scoring.technicalMetrics?.atr || 0,
+            dataFreshnessSeconds,
+            providerAgreement: crossCheck.agreementPct >= 99.5,
+            providerAgreementPct: crossCheck.agreementPct,
+            expectedRR: finalRR,
+            score: scoring.score,
+            status: 'REJECTED',
+            rejectionReason: reason,
+            fingerprint: fp,
+          });
           continue;
         }
 
@@ -459,7 +684,7 @@ export class SignalEngine {
           direction: scoring.direction,
           entryPrice: finalEntry,
           timeframe: 'Multi-TF Realism Setup',
-          strategy: 'Multi-Timeframe Trend & Volatility Confluence',
+          strategy: primaryStrategyName,
           confluenceReasons: scoring.confluenceReasons,
           confidenceScore: aiResult.refinedConfidence,
           estimatedWinRate: winRate,
@@ -492,13 +717,90 @@ export class SignalEngine {
         });
       }
 
-      // Stage 4: Final Trade Selection & Opportunity Ranking (At most 5 qualified trades: Top 2 BEST TRADE, rest suggestions)
-      const ranking = TradeRankingEngine.rankOpportunities(candidates);
+      // 4. Correlation Filter Across Candidates
+      const correlationInput = candidates.map((c) => ({
+        candidate: c,
+        symbol: c.signal.symbol,
+        direction: c.signal.direction,
+        score: c.signal.score,
+      }));
+      const activeSignalsArray = Array.from(this.activeSignals.values()).map((s) => ({
+        symbol: s.symbol,
+        direction: s.direction,
+        score: s.score,
+      }));
+
+      const correlationResult = CorrelationFilter.filterCorrelatedCandidates(correlationInput, activeSignalsArray);
+
+      // Log audit for candidates rejected by correlation filter
+      for (const rej of correlationResult.rejected) {
+        const c = rej.candidate.candidate;
+        const fp = SignalFingerprint.generateFingerprint({
+          symbol: c.signal.symbol,
+          direction: c.signal.direction,
+          entryPrice: c.signal.entryPrice,
+          timeframe: c.signal.timeframe,
+          primaryStrategy: c.signal.strategy,
+          atr: c.scoring.technicalMetrics?.atr,
+        });
+        SignalAuditStore.logAudit({
+          symbol: c.signal.symbol,
+          direction: c.signal.direction,
+          timeframe: c.signal.timeframe,
+          primaryStrategy: c.signal.strategy,
+          passedStrategies: c.scoring.passedStrategies || [],
+          failedStrategies: c.scoring.failedStrategies || [],
+          marketRegime: c.scoring.marketRegime,
+          atr: c.scoring.technicalMetrics?.atr || 0,
+          dataFreshnessSeconds: 0,
+          providerAgreement: true,
+          expectedRR: c.signal.riskRewardRatio,
+          score: c.signal.score,
+          status: 'REJECTED',
+          rejectionReason: rej.reason,
+          fingerprint: fp,
+        });
+      }
+
+      const filteredCandidates = correlationResult.accepted.map((a) => a.candidate);
+
+      // Stage 4: Final Trade Selection & Opportunity Ranking
+      const ranking = TradeRankingEngine.rankOpportunities(filteredCandidates);
       const validatedSignals = ranking.allRanked.slice(0, 5);
 
       if (validatedSignals.length > 0) {
         for (const sig of validatedSignals) {
           this.activeSignals.set(sig.symbol, sig);
+          SignalLogger.logSignal(sig, 'TREND');
+
+          // Record Fingerprint, Cooldown, and Accepted Audit Explanation
+          const fp = SignalFingerprint.recordFingerprint({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            entryPrice: sig.entryPrice,
+            timeframe: sig.timeframe,
+            primaryStrategy: sig.strategy,
+          });
+
+          CooldownManager.recordSignalEmit(sig.symbol, sig.strategy, sig.timestamp);
+
+          SignalAuditStore.logAudit({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            timeframe: sig.timeframe,
+            primaryStrategy: sig.strategy,
+            passedStrategies: [sig.strategy],
+            failedStrategies: [],
+            marketRegime: 'TRENDING',
+            atr: 0,
+            dataFreshnessSeconds: 0,
+            providerAgreement: true,
+            expectedRR: sig.riskRewardRatio,
+            score: sig.score,
+            status: 'ACCEPTED',
+            rejectionReason: null,
+            fingerprint: fp,
+          });
         }
 
         const bestTrade = ranking.bestTrade;

@@ -114,8 +114,8 @@ export class SignalValidator {
       };
     }
 
-    // 6. SL / TP Sanity & Geometry Verification (INVALID_SL_TP)
-    const slTpCheck = this.verifySlTpSanity(ctx.symbol, ctx.direction, livePrice, ctx.stopLoss, ctx.takeProfit, ctx.entryPrice, ctx.candlesMap);
+    // 6. SL / TP Sanity, ATR & Geometry Verification (INVALID_SL_TP)
+    const slTpCheck = this.verifySlTpSanity(ctx.symbol, ctx.direction, livePrice, ctx.stopLoss, ctx.takeProfit, ctx.entryPrice, ctx.candlesMap, ctx.score);
     if (!slTpCheck.isValid) {
       return {
         isValid: false,
@@ -261,7 +261,8 @@ export class SignalValidator {
     stopLoss: number,
     takeProfit: number,
     originalEntry: number,
-    candlesMap: Record<string, NormalizedCandle[]>
+    candlesMap: Record<string, NormalizedCandle[]>,
+    score: number = 80
   ): { isValid: boolean; message: string; adjustedStopLoss?: number; adjustedTakeProfit?: number; adjustedNetRR?: number } {
     const precision = livePrice < 10 ? 5 : 2;
 
@@ -343,7 +344,16 @@ export class SignalValidator {
       };
     }
 
-    // 4. Net Risk / Reward Ratio Check: Strict 2.0:1 (1:2) minimum
+    // 4. Expected Value (EV) Filtering
+    const evCheck = this.verifyExpectedValue(score, risk, reward, frictionCheck.totalRoundTripFriction || 0);
+    if (!evCheck.isValid) {
+      return {
+        isValid: false,
+        message: evCheck.message,
+      };
+    }
+
+    // 5. Net Risk / Reward Ratio Check: Strict 2.0:1 (1:2) minimum
     const rawRR = reward / risk;
     const adjustedNetRR = Number(rawRR.toFixed(2));
 
@@ -363,12 +373,48 @@ export class SignalValidator {
     };
   }
 
+  private static verifyExpectedValue(
+    score: number,
+    rawRisk: number,
+    rawReward: number,
+    friction: number
+  ): { isValid: boolean; message: string; netEV?: number } {
+    const pWin = Math.min(0.72, Math.max(0.48, 0.45 + (score - 70) * 0.008));
+    const pLoss = 1 - pWin;
+
+    const netReward = rawReward - friction;
+    const netRisk = rawRisk + friction;
+
+    const netEV = pWin * netReward - pLoss * netRisk;
+    const expectancyRatio = netRisk > 0 ? netEV / netRisk : -1;
+
+    if (netEV <= 0) {
+      return {
+        isValid: false,
+        message: `Expected Value rejected: Positive statistical edge not established (Net EV: ${netEV.toFixed(4)} <= 0 for estimated win rate ${(pWin * 100).toFixed(1)}%)`,
+      };
+    }
+
+    if (expectancyRatio < 0.12) {
+      return {
+        isValid: false,
+        message: `Expected Value rejected: Expectancy ratio (${(expectancyRatio * 100).toFixed(1)}%) below 12.0% minimum risk-adjusted hurdle`,
+      };
+    }
+
+    return {
+      isValid: true,
+      message: 'OK',
+      netEV,
+    };
+  }
+
   private static verifyExecutionCost(
     symbol: string,
     price: number,
     rawRisk: number,
     rawReward: number
-  ): { isValid: boolean; message: string; netRR?: number } {
+  ): { isValid: boolean; message: string; netRR?: number; totalRoundTripFriction?: number } {
     const cleanSym = symbol.trim().toUpperCase();
     const isCrypto = cleanSym.includes('USDT') || (cleanSym.includes('USD') && price > 100 && !cleanSym.includes('EUR') && !cleanSym.includes('GBP'));
     const isForex = cleanSym.length === 6 && (cleanSym.includes('USD') || cleanSym.includes('EUR') || cleanSym.includes('GBP') || cleanSym.includes('JPY') || cleanSym.includes('CHF') || cleanSym.includes('CAD') || cleanSym.includes('AUD') || cleanSym.includes('NZD'));
@@ -422,6 +468,7 @@ export class SignalValidator {
       isValid: true,
       message: 'OK',
       netRR,
+      totalRoundTripFriction,
     };
   }
 }

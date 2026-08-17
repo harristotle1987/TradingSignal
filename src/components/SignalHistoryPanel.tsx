@@ -170,7 +170,35 @@ export function SignalHistoryPanel({
                       </span>
                     )}
 
-                    {item.isBestTrade || item.rankTier === 'BEST_TRADE' || item.outcomeType === 'BEST_TRADE' ? (
+                    {item.marketType && (
+                      <span className="text-[10px] font-mono text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800">
+                        {item.marketType}
+                      </span>
+                    )}
+
+                    {item.marketRegime && (
+                      <span className="text-[10px] font-mono text-indigo-300 bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-800">
+                        {item.marketRegime}
+                      </span>
+                    )}
+
+                    {item.signalStatus ? (
+                      <span
+                        className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border ${
+                          item.signalStatus === 'TP HIT'
+                            ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
+                            : item.signalStatus === 'SL HIT'
+                            ? 'bg-rose-950 text-rose-300 border-rose-500'
+                            : item.signalStatus === 'EXPIRED'
+                            ? 'bg-amber-950 text-amber-300 border-amber-600'
+                            : item.signalStatus === 'INVALIDATED'
+                            ? 'bg-slate-900 text-slate-400 border-slate-700'
+                            : 'bg-blue-950 text-blue-300 border-blue-500'
+                        }`}
+                      >
+                        {item.signalStatus}
+                      </span>
+                    ) : item.isBestTrade || item.rankTier === 'BEST_TRADE' || item.outcomeType === 'BEST_TRADE' ? (
                       <span className="text-[10px] font-mono font-bold bg-amber-950/90 text-amber-300 border border-amber-500/80 px-2 py-0.5 rounded">
                         ★ BEST TRADE
                       </span>

@@ -132,10 +132,14 @@ class ApiClient {
   /**
    * Update automated hourly scanner settings
    */
-  async updateScannerSettings(enabled: boolean, notificationsEnabled: boolean): Promise<{ success: boolean; settings: any }> {
+  async updateScannerSettings(
+    enabled: boolean,
+    notificationsEnabled: boolean,
+    notifyOnNoTrade?: boolean
+  ): Promise<{ success: boolean; settings: any }> {
     return this.fetchJson<{ success: boolean; settings: any }>('/api/scanner/settings', {
       method: 'POST',
-      body: JSON.stringify({ enabled, notificationsEnabled }),
+      body: JSON.stringify({ enabled, notificationsEnabled, notifyOnNoTrade }),
     });
   }
 
@@ -145,6 +149,29 @@ class ApiClient {
   async triggerScannerManualScan(): Promise<{ success: boolean; message: string; signalsFound: number; settings: any }> {
     return this.fetchJson<{ success: boolean; message: string; signalsFound: number; settings: any }>('/api/scanner/trigger', {
       method: 'POST',
+    });
+  }
+
+  /**
+   * Fetch full scanner history, sent signals today, and rejected audit logs
+   */
+  async getScannerHistory(): Promise<any> {
+    return this.fetchJson<any>('/api/scanner/history');
+  }
+
+  /**
+   * Fetch dedicated signal logs from the backend
+   */
+  async getSignalLogs(): Promise<{ success: boolean; logs: any[]; count: number }> {
+    return this.fetchJson<{ success: boolean; logs: any[]; count: number }>('/api/signals/log');
+  }
+
+  /**
+   * Clear dedicated signal logs
+   */
+  async clearSignalLogs(): Promise<{ success: boolean; message: string }> {
+    return this.fetchJson<{ success: boolean; message: string }>('/api/signals/log', {
+      method: 'DELETE',
     });
   }
 }

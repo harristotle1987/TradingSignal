@@ -1,0 +1,315 @@
+/**
+ * Dedicated Signal Log Persistence & Analysis Engine
+ *
+ * Implements a strict, dedicated SIGNAL LOG separate from general application/system logs.
+ *
+ * Every recorded signal entry contains:
+ * - Timestamp
+ * - Asset / Symbol
+ * - Market Type: Crypto / Forex / Stocks
+ * - Provider Used
+ * - Direction: BUY / SELL
+ * - Entry Price
+ * - Stop Loss
+ * - Take Profit
+ * - Risk-to-Reward Ratio (R:R)
+ * - Deterministic Score
+ * - Confidence Score
+ * - Strategy / Confluence Used
+ * - Market Regime (TREND, RANGE, BREAKOUT, HIGH-VOLATILITY, LOW-VOLATILITY)
+ * - Signal Status: ACTIVE / TP HIT / SL HIT / EXPIRED / INVALIDATED
+ * - Snapshot ID
+ *
+ * Durability:
+ * - Persisted synchronously to local `signal_logs.json`
+ * - Persisted asynchronously to Firestore collection `signal_logs`
+ * - Restored seamlessly across container / Vercel restarts
+ */
+
+import * as fs from 'fs';
+import * as path from 'path';
+import { TradingSignal } from '../../types/index.js';
+import { getFirestoreAdmin } from '../firebaseAdmin.js';
+import { logger } from '../logger.js';
+
+export type SignalLogStatus = 'ACTIVE' | 'TP HIT' | 'SL HIT' | 'EXPIRED' | 'INVALIDATED';
+
+export interface SignalLogRecord {
+  id: string;
+  timestamp: number;
+  symbol: string;
+  marketType: 'Crypto' | 'Forex' | 'Stocks';
+  provider: string;
+  direction: 'BUY' | 'SELL';
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit: number;
+  riskRewardRatio: number;
+  score: number;
+  confidenceScore: number;
+  strategy: string;
+  marketRegime: string;
+  status: SignalLogStatus;
+  snapshotId: string;
+  confluenceReasons?: string[];
+  timeframe?: string;
+  aiAssessment?: string;
+  isTopTrade?: boolean;
+  isBestTrade?: boolean;
+  updatedAt?: number;
+}
+
+const LOCAL_SIGNAL_LOG_PATH = path.join(process.cwd(), 'signal_logs.json');
+const FIRESTORE_COLLECTION = 'signal_logs';
+
+export class SignalLogger {
+  private static logs: Map<string, SignalLogRecord> = new Map();
+  private static isInitialized = false;
+
+  /**
+   * Helper to detect Market Type from Symbol structure
+   */
+  public static detectMarketType(symbol: string): 'Crypto' | 'Forex' | 'Stocks' {
+    const s = symbol.toUpperCase();
+    if (
+      s.includes('USDT') ||
+      s.includes('BTC') ||
+      s.includes('ETH') ||
+      s.includes('SOL') ||
+      s.includes('XRP') ||
+      s.includes('BNB') ||
+      s.includes('ADA') ||
+      s.includes('AVAX') ||
+      s.includes('LINK') ||
+      s.includes('DOGE')
+    ) {
+      return 'Crypto';
+    }
+    if (
+      s.includes('EUR') ||
+      s.includes('GBP') ||
+      s.includes('JPY') ||
+      s.includes('AUD') ||
+      s.includes('CAD') ||
+      s.includes('CHF') ||
+      s.includes('NZD') ||
+      (s.length === 6 && s.endsWith('USD'))
+    ) {
+      return 'Forex';
+    }
+    return 'Stocks';
+  }
+
+  /**
+   * Initializes signal log state from local disk and Firestore
+   */
+  public static async init(): Promise<void> {
+    if (this.isInitialized) return;
+
+    // 1. Read from local disk file first
+    try {
+      if (fs.existsSync(LOCAL_SIGNAL_LOG_PATH)) {
+        const raw = fs.readFileSync(LOCAL_SIGNAL_LOG_PATH, 'utf-8');
+        const parsed: SignalLogRecord[] = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            if (item && item.id) {
+              this.logs.set(item.id, item);
+            }
+          }
+          logger.info(`[SignalLogger] Loaded ${this.logs.size} signal records from local storage.`);
+        }
+      }
+    } catch (err) {
+      logger.warn('[SignalLogger] Could not read local signal log file:', { error: String(err) });
+    }
+
+    // 2. Fetch/merge from Firestore Admin if available
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      try {
+        const snapshot = await firestore.collection(FIRESTORE_COLLECTION).get();
+        let firestoreCount = 0;
+        snapshot.forEach((doc) => {
+          const data = doc.data() as SignalLogRecord;
+          if (data && data.id) {
+            // Firestore data takes precedence if newer
+            const existing = this.logs.get(data.id);
+            if (!existing || (data.updatedAt || data.timestamp) >= (existing.updatedAt || existing.timestamp)) {
+              this.logs.set(data.id, data);
+            }
+            firestoreCount++;
+          }
+        });
+        if (firestoreCount > 0) {
+          logger.info(`[SignalLogger] Restored/merged ${firestoreCount} signal records from Firebase Firestore.`);
+          this.flushToDisk();
+        }
+      } catch (err) {
+        logger.debug('[SignalLogger] Firestore query deferred:', { reason: String(err) });
+      }
+    }
+
+    this.isInitialized = true;
+  }
+
+  /**
+   * Flushes in-memory signal logs to disk synchronously
+   */
+  private static flushToDisk(): void {
+    try {
+      const records = Array.from(this.logs.values()).sort((a, b) => b.timestamp - a.timestamp);
+      fs.writeFileSync(LOCAL_SIGNAL_LOG_PATH, JSON.stringify(records, null, 2), 'utf-8');
+    } catch (err) {
+      logger.warn('[SignalLogger] Failed to write signal logs to disk:', { error: String(err) });
+    }
+  }
+
+  /**
+   * Persists a record into Firestore asynchronously
+   */
+  private static syncToFirestore(record: SignalLogRecord): void {
+    const firestore = getFirestoreAdmin();
+    if (!firestore) return;
+
+    firestore
+      .collection(FIRESTORE_COLLECTION)
+      .doc(record.id)
+      .set(record, { merge: true })
+      .catch((err) => {
+        logger.debug(`[SignalLogger] Firestore sync deferred for signal ${record.id}`, { error: String(err) });
+      });
+  }
+
+  /**
+   * Records a newly generated trading signal into the dedicated Signal Log.
+   */
+  public static async logSignal(
+    signal: TradingSignal,
+    marketRegime = 'TREND',
+    overrideStatus?: SignalLogStatus
+  ): Promise<SignalLogRecord> {
+    await this.init();
+
+    const id = signal.id || signal.snapshotId || `${signal.symbol}_${signal.timestamp}`;
+    const snapshotId = signal.snapshotId || id;
+    const marketType = this.detectMarketType(signal.symbol);
+    const provider = signal.dataSource || (marketType === 'Crypto' ? 'Bitget' : 'Twelve Data');
+    const strategy =
+      signal.strategy ||
+      (signal.confluenceReasons && signal.confluenceReasons.length > 0
+        ? signal.confluenceReasons.join('; ')
+        : 'Multi-Strategy Confluence');
+
+    const status: SignalLogStatus = overrideStatus || 'ACTIVE';
+
+    const record: SignalLogRecord = {
+      id,
+      snapshotId,
+      timestamp: signal.validatedAt || signal.timestamp || Date.now(),
+      symbol: signal.symbol,
+      marketType,
+      provider,
+      direction: signal.direction,
+      entryPrice: signal.entryPrice,
+      stopLoss: signal.stopLoss,
+      takeProfit: signal.takeProfit,
+      riskRewardRatio: Number(signal.riskRewardRatio?.toFixed(2) || 2.0),
+      score: signal.score || 0,
+      confidenceScore: signal.confidenceScore || 0,
+      strategy,
+      marketRegime,
+      status,
+      confluenceReasons: signal.confluenceReasons,
+      timeframe: signal.timeframe || '1h',
+      aiAssessment: signal.aiAssessment,
+      isTopTrade: signal.isTopTrade || signal.rankTier === 'BEST_TRADE',
+      isBestTrade: signal.isBestTrade || signal.rankTier === 'BEST_TRADE',
+      updatedAt: Date.now(),
+    };
+
+    this.logs.set(id, record);
+    this.flushToDisk();
+    this.syncToFirestore(record);
+
+    logger.info(
+      `[SignalLogger] RECORDED SIGNAL LOG: ${record.symbol} [${record.direction}] | Type: ${record.marketType} | Provider: ${record.provider} | Status: ${record.status} | Regime: ${record.marketRegime} | Score: ${record.score} | Snapshot: ${record.snapshotId}`
+    );
+
+    return record;
+  }
+
+  /**
+   * Updates the lifecycle status of an existing signal in the Signal Log.
+   */
+  public static async updateStatus(signalId: string, status: SignalLogStatus): Promise<boolean> {
+    await this.init();
+
+    let record = this.logs.get(signalId);
+
+    // If not found by exact ID, search by snapshotId or symbol prefix
+    if (!record) {
+      for (const r of this.logs.values()) {
+        if (r.snapshotId === signalId || r.id.startsWith(signalId)) {
+          record = r;
+          break;
+        }
+      }
+    }
+
+    if (!record) {
+      logger.warn(`[SignalLogger] Cannot update status: signal ${signalId} not found in Signal Log.`);
+      return false;
+    }
+
+    record.status = status;
+    record.updatedAt = Date.now();
+
+    this.logs.set(record.id, record);
+    this.flushToDisk();
+    this.syncToFirestore(record);
+
+    logger.info(`[SignalLogger] UPDATED SIGNAL LOG STATUS: ${record.symbol} -> ${status}`);
+    return true;
+  }
+
+  /**
+   * Retrieves all dedicated Signal Log records (sorted newest first).
+   */
+  public static async getSignalLogs(limit = 100): Promise<SignalLogRecord[]> {
+    await this.init();
+    const sorted = Array.from(this.logs.values()).sort((a, b) => b.timestamp - a.timestamp);
+    return sorted.slice(0, limit);
+  }
+
+  /**
+   * Retrieves the most recent signal for a symbol from the signal log.
+   */
+  public static getLastSignalForSymbol(symbol: string): SignalLogRecord | undefined {
+    const sym = symbol.toUpperCase();
+    const records = Array.from(this.logs.values())
+      .filter((r) => r.symbol === sym)
+      .sort((a, b) => b.timestamp - a.timestamp);
+    return records[0];
+  }
+
+  /**
+   * Clears the signal log cache and disk file.
+   */
+  public static async clearLogs(): Promise<void> {
+    this.logs.clear();
+    this.flushToDisk();
+
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      try {
+        const snapshot = await firestore.collection(FIRESTORE_COLLECTION).get();
+        const batch = firestore.batch();
+        snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+        await batch.commit();
+      } catch (err) {
+        logger.debug('[SignalLogger] Firestore clear logs deferred:', { error: String(err) });
+      }
+    }
+  }
+}

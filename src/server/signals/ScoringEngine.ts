@@ -1,6 +1,7 @@
 import { NormalizedCandle, SignalDirection } from '../../types/index.js';
 import { TechnicalIndicators } from './TechnicalIndicators.js';
 import { StrategyEngine, MarketRegime } from './StrategyEngine.js';
+import { StrategyPerformanceTracker } from './StrategyPerformanceTracker.js';
 import { logger } from '../logger.js';
 
 export interface ScoringFactors {
@@ -57,6 +58,9 @@ export interface ScoringResult {
     suggestedRiskAmount: number;
     suggestedPositionSize: number;
   };
+  passedStrategies?: string[];
+  failedStrategies?: string[];
+  primaryStrategy?: string;
   factors: ScoringFactors;
   technicalMetrics?: {
     htfEma9: number;
@@ -489,7 +493,7 @@ export class ScoringEngine {
     // =========================================================================
     // TOTAL 0–100 QUALITY SCORE CALCULATION
     // =========================================================================
-    const totalScore = Math.min(
+    const rawTotalScore = Math.min(
       100,
       higherTfTrendScore +
         marketStructureScore +
@@ -500,6 +504,15 @@ export class ScoringEngine {
         entryQualityScore +
         newsSentimentScore
     );
+
+    // Apply empirical confidence calibration factor (backend performance weighting)
+    const primaryStratId = strategyEval.strategyResults?.find(s => s.passed)?.id;
+    const calibrationFactor = StrategyPerformanceTracker.getConfidenceCalibrationFactor(
+      rawTotalScore,
+      primaryStratId,
+      cleanSymbol
+    );
+    const totalScore = Math.min(100, Math.max(0, Math.round(rawTotalScore * calibrationFactor)));
 
     // =========================================================================
     // SL / TP Geometry & Risk/Reward Hurdle
@@ -658,6 +671,9 @@ export class ScoringEngine {
         netRiskRewardRatio: netRR,
       },
       hypotheticalRisk,
+      passedStrategies: strategyEval.strategyResults?.filter(s => s.passed).map(s => s.name) || [],
+      failedStrategies: strategyEval.strategyResults?.filter(s => !s.passed).map(s => s.name) || [],
+      primaryStrategy: strategyEval.strategyResults?.find(s => s.passed)?.name || 'Multi-Timeframe Trend Confluence',
       factors,
       technicalMetrics: {
         htfEma9: lastEma9_1h,

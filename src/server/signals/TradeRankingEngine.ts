@@ -40,7 +40,7 @@ export interface RankingResult {
 
 export class TradeRankingEngine {
   // Correlated risk clusters to prevent duplicate market exposure across all returned signals
-  private static readonly CORRELATION_CLUSTERS: Record<string, string[]> = {
+  public static readonly CORRELATION_CLUSTERS: Record<string, string[]> = {
     CRYPTO_MAJORS: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'PIUSDT'],
     FOREX_USD_EUROPE: ['EURUSD', 'GBPUSD', 'USDCHF', 'EURGBP'],
     FOREX_COMMODITY: ['AUDUSD', 'USDCAD', 'USDJPY', 'NZDUSD'],
@@ -290,7 +290,7 @@ export class TradeRankingEngine {
   /**
    * Resolves the risk correlation cluster for a symbol.
    */
-  private static getAssetCluster(symbol: string): string | null {
+  public static getAssetCluster(symbol: string): string | null {
     for (const [clusterName, symbols] of Object.entries(this.CORRELATION_CLUSTERS)) {
       if (symbols.includes(symbol)) {
         return clusterName;

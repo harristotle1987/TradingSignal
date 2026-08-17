@@ -524,6 +524,30 @@ export class MarketDataManager {
       overallStatus,
     };
   }
+
+  /**
+   * Fetches candles across multiple timeframes concurrently for backtests & multi-timeframe analysis.
+   */
+  async getMultiTimeframeCandles(
+    appSymbol: string,
+    timeframes = ['5m', '15m', '1h', '4h'],
+    limit = 200
+  ): Promise<Record<string, NormalizedCandle[]>> {
+    const result: Record<string, NormalizedCandle[]> = {};
+    await Promise.all(
+      timeframes.map(async (tf) => {
+        try {
+          const c = await this.getCandles(appSymbol, undefined, tf, limit);
+          if (c && c.length > 0) {
+            result[tf] = c;
+          }
+        } catch (err) {
+          logger.debug(`[MarketDataManager] getMultiTimeframeCandles failed for ${appSymbol} (${tf})`, { error: String(err) });
+        }
+      })
+    );
+    return result;
+  }
 }
 
 export const marketDataManager = new MarketDataManager();

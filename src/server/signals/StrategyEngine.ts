@@ -29,13 +29,18 @@
 
 import { NormalizedCandle, SignalDirection } from '../../types/index.js';
 import { TechnicalIndicators } from './TechnicalIndicators.js';
+import { StrategyPerformanceTracker } from './StrategyPerformanceTracker.js';
 import { logger } from '../logger.js';
 
 export type MarketRegime =
+  | 'TRENDING'
+  | 'RANGING'
+  | 'BREAKOUT'
+  | 'HIGH_VOLATILITY'
+  | 'LOW_VOLATILITY'
   | 'UPTREND'
   | 'DOWNTREND'
   | 'RANGE'
-  | 'BREAKOUT'
   | 'HIGH-VOLATILITY'
   | 'LOW-VOLATILITY';
 
@@ -65,9 +70,29 @@ export interface MultiStrategyAgreement {
 }
 
 export class StrategyEngine {
+  static isTrending(regime: MarketRegime): boolean {
+    return regime === 'TRENDING' || regime === 'UPTREND' || regime === 'DOWNTREND';
+  }
+
+  static isRanging(regime: MarketRegime): boolean {
+    return regime === 'RANGING' || regime === 'RANGE';
+  }
+
+  static isBreakout(regime: MarketRegime): boolean {
+    return regime === 'BREAKOUT';
+  }
+
+  static isHighVolatility(regime: MarketRegime): boolean {
+    return regime === 'HIGH_VOLATILITY' || regime === 'HIGH-VOLATILITY';
+  }
+
+  static isLowVolatility(regime: MarketRegime): boolean {
+    return regime === 'LOW_VOLATILITY' || regime === 'LOW-VOLATILITY';
+  }
+
   /**
    * Classifies the market regime from multi-timeframe candle datasets:
-   * UPTREND / DOWNTREND / RANGE / BREAKOUT / HIGH-VOLATILITY / LOW-VOLATILITY
+   * TRENDING / RANGING / BREAKOUT / HIGH_VOLATILITY / LOW_VOLATILITY
    */
   static classifyMarketRegime(
     symbol: string,
@@ -80,7 +105,7 @@ export class StrategyEngine {
     const s1d = tfMap['1d'] || [];
 
     if (s1h.length < 20) {
-      return { regime: 'RANGE', regimeDetails: 'Insufficient 1H history to determine regime' };
+      return { regime: 'RANGING', regimeDetails: 'Insufficient 1H history to determine regime' };
     }
 
     // 1. Volatility Metrics Check (1H & 15m)
@@ -90,13 +115,13 @@ export class StrategyEngine {
     // A. Extreme Volatility (High or Low)
     if (vm1h.atrRatio >= 1.85 || vm1h.isErratic) {
       return {
-        regime: 'HIGH-VOLATILITY',
+        regime: 'HIGH_VOLATILITY',
         regimeDetails: `High-volatility regime: 1H ATR ratio (${vm1h.atrRatio}x) shows wide volatility expansion / momentum surge`,
       };
     }
     if (vm1h.atrRatio <= 0.55 || (vm1h.isSqueeze && vm15m.isSqueeze)) {
       return {
-        regime: 'LOW-VOLATILITY',
+        regime: 'LOW_VOLATILITY',
         regimeDetails: `Low-volatility regime: 1H ATR ratio (${vm1h.atrRatio}x) compressed into tight volatility squeeze`,
       };
     }
@@ -166,20 +191,20 @@ export class StrategyEngine {
 
     if (isBullTrend) {
       return {
-        regime: 'UPTREND',
-        regimeDetails: 'Uptrend regime: Bullish hierarchical EMA stack & higher high/low structure',
+        regime: 'TRENDING',
+        regimeDetails: 'TRENDING (UPTREND): Bullish hierarchical EMA stack & higher high/low structure',
       };
     }
     if (isBearTrend) {
       return {
-        regime: 'DOWNTREND',
-        regimeDetails: 'Downtrend regime: Bearish hierarchical EMA stack & lower high/low structure',
+        regime: 'TRENDING',
+        regimeDetails: 'TRENDING (DOWNTREND): Bearish hierarchical EMA stack & lower high/low structure',
       };
     }
 
     return {
-      regime: 'RANGE',
-      regimeDetails: 'Range regime: Price moving between horizontal support/resistance boundaries',
+      regime: 'RANGING',
+      regimeDetails: 'RANGING: Price moving between horizontal support/resistance boundaries',
     };
   }
 
@@ -193,12 +218,6 @@ export class StrategyEngine {
   ): MultiStrategyAgreement {
     const cleanSym = symbol.trim().toUpperCase();
 
-    // 1. Timeframe hierarchy processing:
-    // 4H/1D = Major Direction
-    // 1H = Setup
-    // 15M = Confirmation
-    // 5M = Entry
-    // 30M/2H/1W = Auxiliary confirmation
     const tfMap: Record<string, NormalizedCandle[]> = {};
     const availableTfs: string[] = [];
 
@@ -217,13 +236,13 @@ export class StrategyEngine {
     // 2. Classify the Market Regime
     const { regime, regimeDetails } = this.classifyMarketRegime(cleanSym, entryPrice, tfMap);
 
-    // 3. Evaluate the 6 Backend Strategies with their assigned baseline roles
-    const s1 = this.evalTrendFollowing(cleanSym, entryPrice, tfMap);
-    const s2 = this.evalMomentumZeroLag(cleanSym, entryPrice, tfMap);
-    const s3 = this.evalIntradayBreakout(cleanSym, entryPrice, tfMap);
+    // 3. Evaluate the 6 Backend Strategies enforcing regime appropriateness
+    const s1 = this.evalTrendFollowing(cleanSym, entryPrice, tfMap, regime);
+    const s2 = this.evalMomentumZeroLag(cleanSym, entryPrice, tfMap, regime);
+    const s3 = this.evalIntradayBreakout(cleanSym, entryPrice, tfMap, regime);
     const s4 = this.evalBollingerMeanReversion(cleanSym, entryPrice, tfMap, s1, regime);
-    const s5 = this.evalOrderFlowImbalance(cleanSym, entryPrice, tfMap, s1.direction);
-    const s6 = this.evalVolatilityProtection(cleanSym, entryPrice, tfMap);
+    const s5 = this.evalOrderFlowImbalance(cleanSym, entryPrice, tfMap, s1.direction, regime);
+    const s6 = this.evalVolatilityProtection(cleanSym, entryPrice, tfMap, regime);
 
     // 4. Apply Strategy Weighting According to Regime
     this.applyRegimeWeights(regime, [s1, s2, s3, s4, s5, s6]);
@@ -237,13 +256,17 @@ export class StrategyEngine {
 
     // 5. Directional Determination according to Regime
     let dominantDirection: SignalDirection | null = null;
-    if (regime === 'UPTREND') dominantDirection = 'BUY';
-    else if (regime === 'DOWNTREND') dominantDirection = 'SELL';
-    else if (regime === 'BREAKOUT' && s3.passed && s3.direction !== 'NEUTRAL') {
+    if (StrategyEngine.isTrending(regime)) {
+      if (s1.passed && s1.direction !== 'NEUTRAL') dominantDirection = s1.direction;
+      else if (s2.passed && s2.direction !== 'NEUTRAL') dominantDirection = s2.direction;
+      else if (s3.passed && s3.direction !== 'NEUTRAL') dominantDirection = s3.direction;
+    } else if (StrategyEngine.isBreakout(regime) && s3.passed && s3.direction !== 'NEUTRAL') {
       dominantDirection = s3.direction;
+    } else if (StrategyEngine.isRanging(regime) && s4.passed && s4.direction !== 'NEUTRAL') {
+      dominantDirection = s4.direction;
     } else if (s1.passed && s1.direction !== 'NEUTRAL') {
       dominantDirection = s1.direction;
-    } else if (s2.passed && s2.direction !== 'NEUTRAL' && s4.passed && s4.direction === s2.direction) {
+    } else if (s2.passed && s2.direction !== 'NEUTRAL') {
       dominantDirection = s2.direction;
     } else if (s3.passed && s3.direction !== 'NEUTRAL') {
       dominantDirection = s3.direction;
@@ -327,9 +350,13 @@ export class StrategyEngine {
 
   /**
    * Applies Strategy Weighting according to Market Regime:
-   * - TREND: Trend + Momentum + Pullback receive highest weight.
+   * - TREND (UPTREND/DOWNTREND): Trend + Momentum + Pullback receive highest weight.
    * - BREAKOUT: Breakout + Volume + Momentum + Volatility receive highest weight.
+   * - HIGH-VOLATILITY: Volatility Gate + Breakout + Momentum receive highest weight.
    * - RANGE: Mean Reversion + Structure + Volatility receive highest weight.
+   * - LOW-VOLATILITY: Mean Reversion + Structure + Breakout Anticipation receive highest weight.
+   *
+   * Also applies Bayesian regularized empirical performance feedback without overfitting.
    */
   private static applyRegimeWeights(regime: MarketRegime, strategies: StrategyResult[]): void {
     const sMap = new Map(strategies.map((s) => [s.id, s]));
@@ -341,23 +368,45 @@ export class StrategyEngine {
       if (sMap.has('strat_5')) sMap.get('strat_5')!.weight = 1.3; // Order flow
       if (sMap.has('strat_6')) sMap.get('strat_6')!.weight = 1.0; // Volatility gate
       if (sMap.has('strat_3')) sMap.get('strat_3')!.weight = 0.8; // Breakout
-      if (sMap.has('strat_4')) sMap.get('strat_4')!.weight = 0.4; // Mean reversion (lowest in trend)
-    } else if (regime === 'BREAKOUT' || regime === 'HIGH-VOLATILITY') {
+      if (sMap.has('strat_4')) sMap.get('strat_4')!.weight = 0.3; // Mean reversion (lowest in trend)
+    } else if (regime === 'BREAKOUT') {
       // BREAKOUT: Breakout (strat_3) + Volume/Order Flow (strat_5) + Momentum (strat_2) + Volatility (strat_6)
       if (sMap.has('strat_3')) sMap.get('strat_3')!.weight = 2.0; // Breakout (Highest)
-      if (sMap.has('strat_5')) sMap.get('strat_5')!.weight = 1.6; // Volume & Order Flow (Highest)
-      if (sMap.has('strat_2')) sMap.get('strat_2')!.weight = 1.5; // Momentum (Highest)
+      if (sMap.has('strat_5')) sMap.get('strat_5')!.weight = 1.8; // Volume & Order Flow (Highest)
+      if (sMap.has('strat_2')) sMap.get('strat_2')!.weight = 1.6; // Momentum (Highest)
       if (sMap.has('strat_6')) sMap.get('strat_6')!.weight = 1.4; // Volatility (Highest)
-      if (sMap.has('strat_1')) sMap.get('strat_1')!.weight = 1.0; // Trend
+      if (sMap.has('strat_1')) sMap.get('strat_1')!.weight = 1.1; // Trend
       if (sMap.has('strat_4')) sMap.get('strat_4')!.weight = 0.2; // Mean Reversion (suppressed during breakout)
+    } else if (regime === 'HIGH-VOLATILITY') {
+      // HIGH-VOLATILITY: Volatility Gate (strat_6) + Momentum (strat_2) + Breakout (strat_3)
+      if (sMap.has('strat_6')) sMap.get('strat_6')!.weight = 2.0; // Strict Volatility Gate (Highest)
+      if (sMap.has('strat_2')) sMap.get('strat_2')!.weight = 1.6; // Momentum
+      if (sMap.has('strat_3')) sMap.get('strat_3')!.weight = 1.5; // Breakout
+      if (sMap.has('strat_1')) sMap.get('strat_1')!.weight = 1.3; // Trend
+      if (sMap.has('strat_5')) sMap.get('strat_5')!.weight = 1.3; // Order flow
+      if (sMap.has('strat_4')) sMap.get('strat_4')!.weight = 0.3; // Mean reversion
+    } else if (regime === 'LOW-VOLATILITY') {
+      // LOW-VOLATILITY: Mean Reversion (strat_4) + Structure (strat_1) + Squeeze Breakout Anticipation (strat_3)
+      if (sMap.has('strat_4')) sMap.get('strat_4')!.weight = 1.9; // Mean Reversion (Highest)
+      if (sMap.has('strat_1')) sMap.get('strat_1')!.weight = 1.5; // Market Structure & S/R (Highest)
+      if (sMap.has('strat_6')) sMap.get('strat_6')!.weight = 1.5; // Volatility (Highest)
+      if (sMap.has('strat_3')) sMap.get('strat_3')!.weight = 1.4; // Breakout Anticipation
+      if (sMap.has('strat_5')) sMap.get('strat_5')!.weight = 1.0; // Order flow
+      if (sMap.has('strat_2')) sMap.get('strat_2')!.weight = 0.9; // Momentum
     } else {
-      // RANGE / LOW-VOLATILITY: Mean Reversion (strat_4) + Structure (strat_1) + Volatility (strat_6)
+      // RANGE: Mean Reversion (strat_4) + Structure (strat_1) + Volatility (strat_6)
       if (sMap.has('strat_4')) sMap.get('strat_4')!.weight = 2.0; // Mean Reversion (Highest)
       if (sMap.has('strat_1')) sMap.get('strat_1')!.weight = 1.5; // Market Structure & S/R (Highest)
       if (sMap.has('strat_6')) sMap.get('strat_6')!.weight = 1.4; // Volatility (Highest)
       if (sMap.has('strat_5')) sMap.get('strat_5')!.weight = 1.2; // Order flow absorption
       if (sMap.has('strat_2')) sMap.get('strat_2')!.weight = 0.8; // Momentum
       if (sMap.has('strat_3')) sMap.get('strat_3')!.weight = 0.3; // Breakout (suppressed in range)
+    }
+
+    // Apply empirical performance multiplier (regularized [0.75, 1.25])
+    for (const s of strategies) {
+      const perfMultiplier = StrategyPerformanceTracker.getDynamicStrategyWeightMultiplier(s.id, regime);
+      s.weight = Number((s.weight * perfMultiplier).toFixed(2));
     }
   }
 
@@ -369,8 +418,21 @@ export class StrategyEngine {
   private static evalTrendFollowing(
     symbol: string,
     entryPrice: number,
-    tfMap: Record<string, NormalizedCandle[]>
+    tfMap: Record<string, NormalizedCandle[]>,
+    regime?: MarketRegime
   ): StrategyResult {
+    if (regime && (StrategyEngine.isRanging(regime) || StrategyEngine.isLowVolatility(regime))) {
+      return {
+        id: 'strat_1',
+        name: 'Trend Following (EMA Stack Rider & Trend-Pullback)',
+        direction: 'NEUTRAL',
+        score: 0,
+        passed: false,
+        weight: 1.5,
+        reasons: [`Strategy 1 (Trend Following) inactive in ${regime} market regime`],
+      };
+    }
+
     const s5m = tfMap['5m'];
     const s15m = tfMap['15m'];
     const s1h = tfMap['1h'];
@@ -539,8 +601,21 @@ export class StrategyEngine {
   private static evalMomentumZeroLag(
     symbol: string,
     entryPrice: number,
-    tfMap: Record<string, NormalizedCandle[]>
+    tfMap: Record<string, NormalizedCandle[]>,
+    regime?: MarketRegime
   ): StrategyResult {
+    if (regime && (StrategyEngine.isRanging(regime) || StrategyEngine.isLowVolatility(regime))) {
+      return {
+        id: 'strat_2',
+        name: 'Momentum (Zero-Lag MACD + RSI)',
+        direction: 'NEUTRAL',
+        score: 0,
+        passed: false,
+        weight: 1.35,
+        reasons: [`Strategy 2 (Momentum) inactive in ${regime} market regime`],
+      };
+    }
+
     const s15m = tfMap['15m'];
     const s1h = tfMap['1h'];
 
@@ -628,8 +703,21 @@ export class StrategyEngine {
   private static evalIntradayBreakout(
     symbol: string,
     entryPrice: number,
-    tfMap: Record<string, NormalizedCandle[]>
+    tfMap: Record<string, NormalizedCandle[]>,
+    regime?: MarketRegime
   ): StrategyResult {
+    if (regime && StrategyEngine.isRanging(regime)) {
+      return {
+        id: 'strat_3',
+        name: 'Intraday Breakout (H1/H4 + volume)',
+        direction: 'NEUTRAL',
+        score: 0,
+        passed: false,
+        weight: 1.2,
+        reasons: [`Strategy 3 (Intraday Breakout) inactive in ${regime} market regime`],
+      };
+    }
+
     const s1h = tfMap['1h'];
     const s15m = tfMap['15m'];
 
@@ -899,7 +987,8 @@ export class StrategyEngine {
     symbol: string,
     entryPrice: number,
     tfMap: Record<string, NormalizedCandle[]>,
-    contextDirection: SignalDirection | 'NEUTRAL'
+    contextDirection: SignalDirection | 'NEUTRAL',
+    regime?: MarketRegime
   ): StrategyResult {
     const s15m = tfMap['15m'];
     const of15m = TechnicalIndicators.calculateOrderFlowMetrics(s15m, 14);
@@ -971,7 +1060,8 @@ export class StrategyEngine {
   private static evalVolatilityProtection(
     symbol: string,
     entryPrice: number,
-    tfMap: Record<string, NormalizedCandle[]>
+    tfMap: Record<string, NormalizedCandle[]>,
+    regime?: MarketRegime
   ): StrategyResult {
     const s15m = tfMap['15m'];
     const s1h = tfMap['1h'];

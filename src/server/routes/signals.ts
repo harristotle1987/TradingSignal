@@ -5,6 +5,11 @@
 import { Router, Request, Response } from 'express';
 import { signalEngine } from '../signals/SignalEngine.js';
 import { hourlyScanner } from '../signals/HourlyScanner.js';
+import { SignalLogger } from '../signals/SignalLogger.js';
+import { SignalAuditStore } from '../signals/SignalAuditStore.js';
+import { StrategyPerformanceTracker, PERFORMANCE_LEGAL_DISCLAIMER } from '../signals/StrategyPerformanceTracker.js';
+import { WalkForwardEngine } from '../signals/WalkForwardEngine.js';
+import { marketDataManager } from '../market/MarketDataManager.js';
 
 const router = Router();
 
@@ -23,11 +28,11 @@ router.get('/scanner/settings', async (_req: Request, res: Response) => {
 
 /**
  * POST /api/scanner/settings
- * Updates automated hourly scanner configurations (enabled, notifications).
+ * Updates automated hourly scanner configurations (enabled, notifications, notifyOnNoTrade).
  */
 router.post('/scanner/settings', async (req: Request, res: Response) => {
-  const { enabled, notificationsEnabled } = req.body || {};
-  hourlyScanner.updateSettings({ enabled, notificationsEnabled });
+  const { enabled, notificationsEnabled, notifyOnNoTrade } = req.body || {};
+  hourlyScanner.updateSettings({ enabled, notificationsEnabled, notifyOnNoTrade });
   const settings = await hourlyScanner.getSettingsAsync();
   res.status(200).json({
     success: true,
@@ -35,6 +40,29 @@ router.post('/scanner/settings', async (req: Request, res: Response) => {
     settings,
     timestamp: Date.now(),
   });
+});
+
+/**
+ * GET /api/scanner/history
+ * Retrieves full notification history, sent signals today, and rejected candidate logs.
+ */
+router.get('/scanner/history', async (_req: Request, res: Response) => {
+  try {
+    const history = await hourlyScanner.getFullHistory();
+    res.status(200).json({
+      success: true,
+      ...history,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve scanner history',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
 });
 
 /**
@@ -57,6 +85,82 @@ router.post('/scanner/trigger', async (_req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       message: 'Failed to manually trigger background scan',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * GET /api/signals/audits
+ * Retrieves complete backend explanation audit records (passed/failed strategies, regime, ATR, expected R:R, rejection reason, fingerprint).
+ */
+router.get('/signals/audits', async (req: Request, res: Response) => {
+  try {
+    const symbol = req.query.symbol as string | undefined;
+    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 100;
+    const audits = symbol
+      ? SignalAuditStore.getAuditLogsBySymbol(symbol, limit)
+      : SignalAuditStore.getAuditLogs(limit);
+
+    res.status(200).json({
+      success: true,
+      audits,
+      count: audits.length,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve signal audit explanations',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * GET /api/signals/log
+ * Retrieves dedicated signal logs separate from application logs.
+ */
+router.get('/signals/log', async (_req: Request, res: Response) => {
+  try {
+    const logs = await SignalLogger.getSignalLogs();
+    res.status(200).json({
+      success: true,
+      logs,
+      count: logs.length,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve signal logs',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * DELETE /api/signals/log
+ * Clears dedicated signal log records.
+ */
+router.delete('/signals/log', async (_req: Request, res: Response) => {
+  try {
+    await SignalLogger.clearLogs();
+    res.status(200).json({
+      success: true,
+      message: 'Dedicated signal logs cleared successfully',
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to clear signal logs',
       error: msg,
       timestamp: Date.now(),
     });
@@ -115,6 +219,89 @@ router.delete('/signals', (_req: Request, res: Response) => {
     message: 'Active signals cache cleared successfully',
     timestamp: Date.now(),
   });
+});
+
+/**
+ * GET /api/signals/performance
+ * Retrieves backend performance intelligence state (strategy, asset, timeframe, regime, confidence range, rolling WR, expectancy, profit factor, max losing streak).
+ */
+router.get('/signals/performance', (_req: Request, res: Response) => {
+  try {
+    const performance = StrategyPerformanceTracker.getPerformanceMetrics();
+    res.status(200).json({
+      success: true,
+      performance,
+      disclaimer: PERFORMANCE_LEGAL_DISCLAIMER,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve performance intelligence metrics',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/backtest
+ * Runs bar-by-bar backtest simulation using production strategy logic.
+ */
+router.post('/signals/backtest', async (req: Request, res: Response) => {
+  try {
+    const symbol = (req.body?.symbol as string) || 'EURUSD';
+    const maxBars = req.body?.maxBars ? parseInt(req.body.maxBars as string, 10) : 300;
+
+    // Fetch multi-timeframe candle datasets for backtest
+    const candlesMap = await marketDataManager.getMultiTimeframeCandles(symbol, ['15m', '1h', '4h']);
+    const backtestResult = WalkForwardEngine.runBacktest(symbol, candlesMap, maxBars);
+
+    res.status(200).json({
+      success: true,
+      backtest: backtestResult,
+      disclaimer: PERFORMANCE_LEGAL_DISCLAIMER,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Backtest execution error',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/walk-forward
+ * Runs rolling window walk-forward evaluation using production strategy logic.
+ */
+router.post('/signals/walk-forward', async (req: Request, res: Response) => {
+  try {
+    const symbol = (req.body?.symbol as string) || 'EURUSD';
+    const windows = req.body?.windows ? parseInt(req.body.windows as string, 10) : 3;
+
+    const candlesMap = await marketDataManager.getMultiTimeframeCandles(symbol, ['15m', '1h', '4h']);
+    const wfReport = WalkForwardEngine.runWalkForward(symbol, candlesMap, windows);
+
+    res.status(200).json({
+      success: true,
+      walkForward: wfReport,
+      disclaimer: PERFORMANCE_LEGAL_DISCLAIMER,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Walk-forward evaluation error',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
 });
 
 export default router;
