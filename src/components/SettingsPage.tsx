@@ -92,7 +92,10 @@ export function SettingsPage({
     try {
       const res = await api.triggerScannerManualScan();
       if (res.success) {
-        setScannerSettings(res.settings);
+        try {
+          const freshSettings = await api.getScannerSettings();
+          setScannerSettings(freshSettings.settings);
+        } catch (_) {}
         setScannerMessage({
           type: 'success',
           text: `Scan Complete! Dispatched ${res.signalsFound} qualified automated setup(s).`,

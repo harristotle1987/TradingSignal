@@ -42,7 +42,7 @@ export class QuotaManager {
     const lockedTime = this.lockedUntil.get(cleanProvider) || 0;
     if (now < lockedTime) {
       const waitLeft = Math.ceil((lockedTime - now) / 1000);
-      logger.warn(`Request blocked: Provider ${providerId} is in cooldown lock`, { waitLeftSeconds: waitLeft });
+      logger.debug(`Request blocked: Provider ${providerId} is in cooldown lock`, { waitLeftSeconds: waitLeft });
       return false;
     }
 
@@ -95,6 +95,14 @@ export class QuotaManager {
     const cleanProvider = providerId.toLowerCase();
 
     if (status === 429) {
+      const now = Date.now();
+      const existingLock = this.lockedUntil.get(cleanProvider) || 0;
+
+      // Guard against duplicate backoff increments if locked very recently (within last 5 seconds)
+      if (existingLock > now && (existingLock - now) > 5000) {
+        return;
+      }
+
       // Trigger exponential backoff
       const currentCount = (this.backoffCount.get(cleanProvider) || 0) + 1;
       this.backoffCount.set(cleanProvider, currentCount);
@@ -102,10 +110,10 @@ export class QuotaManager {
       // Backoff doubles: 15s, 30s, 60s, 120s up to 600s (10 min)
       const baseBackoff = 15 * 1000;
       const backoffDuration = Math.min(600 * 1000, baseBackoff * Math.pow(2, currentCount - 1));
-      const unlockTime = Date.now() + backoffDuration;
+      const unlockTime = now + backoffDuration;
 
       this.lockedUntil.set(cleanProvider, unlockTime);
-      logger.error(`Provider ${providerId} returned HTTP 429. Exponential backoff triggered`, {
+      logger.warn(`Provider ${providerId} returned HTTP 429. Exponential backoff triggered`, {
         consecutiveRateLimits: currentCount,
         cooldownMs: backoffDuration,
         lockedUntil: new Date(unlockTime).toISOString(),

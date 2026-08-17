@@ -10,6 +10,8 @@ import { SignalAuditStore } from '../signals/SignalAuditStore.js';
 import { StrategyPerformanceTracker, PERFORMANCE_LEGAL_DISCLAIMER } from '../signals/StrategyPerformanceTracker.js';
 import { WalkForwardEngine } from '../signals/WalkForwardEngine.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
+import { marketCache } from '../market/CacheStore.js';
+import { logger } from '../logger.js';
 
 const router = Router();
 
@@ -67,26 +69,110 @@ router.get('/scanner/history', async (_req: Request, res: Response) => {
 
 /**
  * POST /api/scanner/trigger
- * Manually triggers a complete background scanner run.
+ * Production entry point for external automated cron scheduler.
+ * Strictly protected by server-side SCANNER_CRON_SECRET bearer token.
  */
-router.post('/scanner/trigger', async (_req: Request, res: Response) => {
+router.post('/scanner/trigger', async (req: Request, res: Response) => {
+  const cronSecret = process.env.SCANNER_CRON_SECRET;
+  const authHeader = req.headers.authorization;
+
+  // Verify authentication BEFORE initiating any market data or AI API calls
+  let isAuthenticated = false;
+  if (cronSecret && cronSecret.trim().length > 0) {
+    if (authHeader && authHeader.trim() === `Bearer ${cronSecret.trim()}`) {
+      isAuthenticated = true;
+    }
+  }
+
+  if (!isAuthenticated) {
+    return res.status(401).json({
+      success: false,
+      status: 'UNAUTHORIZED',
+      message: 'Unauthorized: Invalid or missing SCANNER_CRON_SECRET bearer token.',
+      timestamp: Date.now(),
+      lastScanTime: 0,
+      candidatesEvaluated: 0,
+      acceptedSignalsCount: 0,
+      acceptedSignals: [],
+      signalsFound: 0,
+      qualifiedSetups: [],
+      rejectedCount: 0,
+      rejectionReasons: ['Unauthorized: Request missing valid Bearer SCANNER_CRON_SECRET token.'],
+    });
+  }
+
+  // 1. Log external scan start
+  logger.info('EXTERNAL_HOURLY_SCAN_STARTED');
+
+  try {
+    // 2. Clear marketCache to force fresh market data retrieval
+    marketCache.clear();
+
+    // 3. Trigger manual scan with isExternal = true to suppress default notifyOnNoTrade notifications
+    const result = await hourlyScanner.triggerManualScan(true);
+
+    let statusLog = '';
+    if (result.status === 'COMPLETED') {
+      logger.info('EXTERNAL_HOURLY_SCAN_COMPLETED');
+      statusLog = 'EXTERNAL_HOURLY_SCAN_COMPLETED';
+    } else if (result.status === 'SKIPPED_CAP_REACHED' || result.status === 'SCAN_ALREADY_RUNNING') {
+      logger.info('EXTERNAL_HOURLY_SCAN_SKIPPED');
+      statusLog = 'EXTERNAL_HOURLY_SCAN_SKIPPED';
+    } else {
+      logger.error('EXTERNAL_HOURLY_SCAN_FAILED');
+      statusLog = 'EXTERNAL_HOURLY_SCAN_FAILED';
+    }
+
+    const httpCode = result.status === 'ERROR' ? 500 : 200;
+    res.status(httpCode).json({
+      ...result,
+      external_hourly_scan_status: statusLog
+    });
+  } catch (err: unknown) {
+    logger.error('EXTERNAL_HOURLY_SCAN_FAILED');
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      status: 'ERROR',
+      message: 'Failed to execute hourly scanner trigger',
+      external_hourly_scan_status: 'EXTERNAL_HOURLY_SCAN_FAILED',
+      timestamp: Date.now(),
+      lastScanTime: 0,
+      candidatesEvaluated: 0,
+      acceptedSignalsCount: 0,
+      acceptedSignals: [],
+      signalsFound: 0,
+      qualifiedSetups: [],
+      rejectedCount: 0,
+      rejectionReasons: [msg],
+    });
+  }
+});
+
+/**
+ * POST /api/scanner/manual-trigger
+ * Separate endpoint for in-app UI manual/admin scanner execution.
+ */
+router.post('/scanner/manual-trigger', async (_req: Request, res: Response) => {
   try {
     const result = await hourlyScanner.triggerManualScan();
-    const settings = await hourlyScanner.getSettingsAsync();
-    res.status(200).json({
-      success: true,
-      message: result.message,
-      signalsFound: result.signalsFound,
-      settings,
-      timestamp: Date.now(),
-    });
+    const httpCode = result.status === 'ERROR' ? 500 : 200;
+    res.status(httpCode).json(result);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     res.status(500).json({
       success: false,
-      message: 'Failed to manually trigger background scan',
-      error: msg,
+      status: 'ERROR',
+      message: 'Failed to execute manual scanner trigger',
       timestamp: Date.now(),
+      lastScanTime: 0,
+      candidatesEvaluated: 0,
+      acceptedSignalsCount: 0,
+      acceptedSignals: [],
+      signalsFound: 0,
+      qualifiedSetups: [],
+      rejectedCount: 0,
+      rejectionReasons: [msg],
     });
   }
 });
@@ -203,8 +289,8 @@ router.delete('/signals/log', async (_req: Request, res: Response) => {
  * GET /api/signals
  * Retrieves all currently active validated trading signals.
  */
-router.get('/signals', (_req: Request, res: Response) => {
-  const signals = signalEngine.getActiveSignals();
+router.get('/signals', async (_req: Request, res: Response) => {
+  const signals = await signalEngine.getActiveSignals();
   res.status(200).json({
     success: true,
     signals,

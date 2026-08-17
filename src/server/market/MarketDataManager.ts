@@ -15,6 +15,7 @@ import { IMarketDataProvider } from './adapters/IMarketDataProvider.js';
 import { BitgetAdapter } from './adapters/BitgetAdapter.js';
 import { FinnhubAdapter } from './adapters/FinnhubAdapter.js';
 import { TwelveDataAdapter } from './adapters/TwelveDataAdapter.js';
+import { ExchangeRateAdapter } from './adapters/ExchangeRateAdapter.js';
 import { NormalizedTicker, NormalizedCandle, MarketStatusResponse, ProviderHealth } from './types.js';
 import { SymbolNormalizer } from './SymbolNormalizer.js';
 import { marketCache } from './CacheStore.js';
@@ -68,6 +69,7 @@ export class MarketDataManager {
     this.registerProvider(new BitgetAdapter());
     this.registerProvider(new FinnhubAdapter());
     this.registerProvider(new TwelveDataAdapter());
+    this.registerProvider(new ExchangeRateAdapter());
   }
 
   private registerProvider(provider: IMarketDataProvider): void {
@@ -110,7 +112,7 @@ export class MarketDataManager {
     // 2. FOREX: Twelve Data is the authoritative primary Forex source
     if (assetClass === 'FOREX') {
       const primaryProvider = 'twelvedata';
-      const fallbackProviders: string[] = [];
+      const fallbackProviders: string[] = ['exchangerate'];
       // Finnhub can serve as fallback if configured
       if (hasFinnhub) {
         fallbackProviders.push('finnhub');

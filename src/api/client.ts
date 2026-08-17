@@ -146,8 +146,22 @@ class ApiClient {
   /**
    * Manually trigger a complete background scan
    */
-  async triggerScannerManualScan(): Promise<{ success: boolean; message: string; signalsFound: number; settings: any }> {
-    return this.fetchJson<{ success: boolean; message: string; signalsFound: number; settings: any }>('/api/scanner/trigger', {
+  async triggerScannerManualScan(): Promise<{
+    success: boolean;
+    status: string;
+    message: string;
+    timestamp: number;
+    lastScanTime: number;
+    candidatesEvaluated: number;
+    acceptedSignalsCount: number;
+    acceptedSignals: any[];
+    signalsFound: number;
+    qualifiedSetups: any[];
+    rejectedCount: number;
+    rejectionReasons: string[];
+    capState: any;
+  }> {
+    return this.fetchJson<any>('/api/scanner/manual-trigger', {
       method: 'POST',
     });
   }

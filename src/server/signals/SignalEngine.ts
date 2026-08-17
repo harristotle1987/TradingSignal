@@ -28,6 +28,7 @@ import { CooldownManager } from './CooldownManager.js';
 import { MarketStructureDetector } from './MarketStructureDetector.js';
 import { CorrelationFilter } from './CorrelationFilter.js';
 import { SignalAuditStore } from './SignalAuditStore.js';
+import { ScannerPersistence } from './ScannerPersistence.js';
 import { logger } from '../logger.js';
 
 const CRYPTO_UNIVERSE = [
@@ -846,9 +847,51 @@ export class SignalEngine {
 
   /**
    * Retrieves active signals list (sorted by TOP TRADEs first, then by score descending).
+   * Dynamically synchronizes active signals from persistent Firebase/disk storage on cold starts.
    */
-  getActiveSignals(): TradingSignal[] {
+  async getActiveSignals(): Promise<TradingSignal[]> {
     const now = Date.now();
+
+    // If the memory map is empty (e.g. on a cold serverless invocation), try to restore from persistence
+    if (this.activeSignals.size === 0) {
+      try {
+        const persisted = await ScannerPersistence.getSentSignalsToday();
+        for (const s of persisted) {
+          // If active and not expired yet (using same 2-hour threshold)
+          if (s.status === 'ACTIVE' && (now - s.timestamp <= 2 * 60 * 60 * 1000)) {
+            const sig: TradingSignal = {
+              id: s.id,
+              snapshotId: s.snapshotId,
+              symbol: s.symbol,
+              direction: s.direction,
+              entryPrice: s.entryPrice,
+              stopLoss: s.stopLoss,
+              takeProfit: s.takeProfit,
+              riskRewardRatio: s.riskRewardRatio,
+              score: s.score,
+              confidenceScore: s.score,
+              rankTier: s.rankTier,
+              isBestTrade: s.rankTier === 'BEST_TRADE',
+              isSecondBest: s.rankTier === 'SECOND_BEST',
+              isTopTrade: s.rankTier === 'BEST_TRADE',
+              strategy: s.strategy,
+              timeframe: s.timeframe,
+              dataSource: s.dataSource,
+              status: 'ACTIVE',
+              timestamp: s.timestamp,
+              validatedAt: s.timestamp,
+              confluenceReasons: [],
+              estimatedWinRate: s.estimatedWinRate,
+              aiAssessment: s.aiAssessment,
+            };
+            this.activeSignals.set(sig.symbol, sig);
+          }
+        }
+      } catch (err) {
+        logger.warn('[SignalEngine] Failed to restore active signals from persistence:', { error: String(err) });
+      }
+    }
+
     const active: TradingSignal[] = [];
 
     for (const [symbol, signal] of this.activeSignals.entries()) {

@@ -10,10 +10,10 @@ import { signalEngine } from '../signals/SignalEngine.js';
 const router = Router();
 const startTime = Date.now();
 
-router.get('/health', (_req: Request, res: Response) => {
+router.get('/health', async (_req: Request, res: Response) => {
   const config = serverConfig.getConfig();
   const uptimeSeconds = Math.floor((Date.now() - startTime) / 1000);
-  const activeSignals = signalEngine.getActiveSignals();
+  const activeSignals = await signalEngine.getActiveSignals();
 
   res.status(200).json({
     status: 'ok',
