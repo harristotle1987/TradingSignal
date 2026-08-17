@@ -523,7 +523,7 @@ export function AssetClassScanner({
           <div className="flex items-center justify-between pb-2 border-b border-slate-800">
             <div className="flex items-center gap-2 font-mono font-bold text-amber-400 text-sm">
               <AlertCircle className="w-4 h-4" />
-              <span>NO VALID SETUP</span>
+              <span>{scanResult.message || 'NO QUALIFIED TRADE'}</span>
             </div>
             <span className="text-[10px] font-mono bg-slate-900 text-slate-400 border border-slate-800 px-2 py-0.5 rounded">
               0 TRADES FORCED

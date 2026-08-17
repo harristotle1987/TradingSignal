@@ -17,9 +17,9 @@ export class QuotaManager {
   
   // Configured limits
   private providerQuotas: Record<string, ProviderQuota> = {
-    twelvedata: { maxPerMinute: 8, lowThreshold: 6 },
-    finnhub: { maxPerMinute: 30, lowThreshold: 20 },
-    bitget: { maxPerMinute: 100, lowThreshold: 80 },
+    twelvedata: { maxPerMinute: 8, lowThreshold: 8 },
+    finnhub: { maxPerMinute: 30, lowThreshold: 28 },
+    bitget: { maxPerMinute: 120, lowThreshold: 100 },
   };
 
   private constructor() {}

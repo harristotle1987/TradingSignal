@@ -972,6 +972,20 @@ export function SignalsPage({ health }: SignalsPageProps) {
           </div>
         </div>
       </div>
+
+      {/* Signal Bot Identity & Risk Management Disclaimer */}
+      <div className="bg-slate-950/80 border border-amber-900/40 rounded-xl p-4 sm:p-5 text-slate-400 text-xs leading-relaxed space-y-2">
+        <div className="flex items-center gap-2 text-amber-400 font-semibold text-xs tracking-wide uppercase">
+          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>Signal Bot Analytical Decision-Support Notice</span>
+        </div>
+        <p className="text-slate-400 text-[11px]">
+          This system functions strictly as an analytical <strong className="text-slate-200">SIGNAL BOT</strong> and technical decision-support tool. It does not execute trades, manage funds, or connect to brokerage accounts. Suggested position sizes and risk figures are purely mathematical illustrations based on configurable hypothetical balances.
+        </p>
+        <p className="text-slate-500 text-[10px]">
+          No representation is made that any signal will achieve guaranteed profits or avoid losses. All financial trading carries substantial risk of capital loss. Minimum qualification filters (win-rate estimate &gt; 30%, R:R &ge; 2:1, ATR noise protection hurdles) are algorithmic safeguards designed to reject weak or noise-vulnerable market setups.
+        </p>
+      </div>
     </div>
   );
 }

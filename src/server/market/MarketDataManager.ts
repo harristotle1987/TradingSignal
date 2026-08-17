@@ -28,9 +28,9 @@ class ProviderRequestQueue {
 
   // Minimum spacing in ms between outbound network requests per provider
   private minSpacingMs: Record<string, number> = {
-    twelvedata: 1200, // Twelve Data limit: 8 req/min (spaced safely)
-    finnhub: 400,     // Finnhub limit: 30 req/min
-    bitget: 100,      // Bitget limit: 100 req/min
+    twelvedata: 7500, // Twelve Data limit: 8 req/min (7.5s safe spacing)
+    finnhub: 1000,    // Finnhub limit: 30-60 req/min
+    bitget: 200,      // Bitget limit: 100 req/min
   };
 
   async enqueue<T>(providerId: string, fn: () => Promise<T>): Promise<T> {
@@ -80,164 +80,323 @@ export class MarketDataManager {
 
   /**
    * Enforces strict asset-class provider routing:
-   * - CRYPTO -> Bitget
-   * - FOREX -> Twelve Data (Authoritative)
-   * - STOCKS -> Finnhub
+   * - CRYPTO -> Bitget primary (Never route BTCUSDT, ETHUSDT, etc. to Finnhub as primary)
+   * - FOREX -> Twelve Data primary (Authoritative)
+   * - STOCKS -> Finnhub / Twelve Data according to supported-symbol routing
    */
+  public getRoutingForSymbol(appSymbol: string, requestedProvider?: string): {
+    assetClass: 'CRYPTO' | 'STOCK' | 'FOREX' | 'INDEX' | 'UNKNOWN';
+    primaryProvider: string;
+    fallbackProviders: string[];
+  } {
+    const assetClass = SymbolNormalizer.getAssetClassification(appSymbol);
+    const cleanRequested = requestedProvider ? requestedProvider.toLowerCase().trim() : undefined;
+    const requested = cleanRequested === 'forex' ? 'twelvedata' : cleanRequested;
+
+    const hasFinnhub = Boolean(process.env.FINNHUB_API_KEY && process.env.FINNHUB_API_KEY.trim().length > 0);
+    const hasTwelveData = Boolean(process.env.TWELVE_DATA_API_KEY && process.env.TWELVE_DATA_API_KEY.trim().length > 0);
+
+    // 1. CRYPTO: Bitget is ALWAYS the primary crypto price source
+    if (assetClass === 'CRYPTO') {
+      const primaryProvider = 'bitget';
+      const fallbackProviders: string[] = [];
+      // Finnhub used ONLY as legitimate secondary fallback if key is configured
+      if (hasFinnhub) {
+        fallbackProviders.push('finnhub');
+      }
+      return { assetClass, primaryProvider, fallbackProviders };
+    }
+
+    // 2. FOREX: Twelve Data is the authoritative primary Forex source
+    if (assetClass === 'FOREX') {
+      const primaryProvider = 'twelvedata';
+      const fallbackProviders: string[] = [];
+      // Finnhub can serve as fallback if configured
+      if (hasFinnhub) {
+        fallbackProviders.push('finnhub');
+      }
+      return { assetClass, primaryProvider, fallbackProviders };
+    }
+
+    // 3. STOCKS: Finnhub / Twelve Data routing
+    if (assetClass === 'STOCK') {
+      if (requested === 'twelvedata') {
+        const fallbacks: string[] = [];
+        if (hasFinnhub) fallbacks.push('finnhub');
+        return { assetClass, primaryProvider: 'twelvedata', fallbackProviders: fallbacks };
+      }
+
+      if (requested === 'finnhub') {
+        const fallbacks: string[] = [];
+        if (hasTwelveData) fallbacks.push('twelvedata');
+        return { assetClass, primaryProvider: 'finnhub', fallbackProviders: fallbacks };
+      }
+
+      // Default stock routing: Finnhub primary if configured, Twelve Data fallback
+      if (hasFinnhub) {
+        const fallbacks: string[] = [];
+        if (hasTwelveData) fallbacks.push('twelvedata');
+        return { assetClass, primaryProvider: 'finnhub', fallbackProviders: fallbacks };
+      } else if (hasTwelveData) {
+        return { assetClass, primaryProvider: 'twelvedata', fallbackProviders: [] };
+      }
+
+      return { assetClass, primaryProvider: 'finnhub', fallbackProviders: [] };
+    }
+
+    // 4. Default / Unknown
+    return {
+      assetClass,
+      primaryProvider: requested || 'bitget',
+      fallbackProviders: [],
+    };
+  }
+
   private selectProviderForSymbol(appSymbol: string): string {
-    const assetType = SymbolNormalizer.getAssetClassification(appSymbol);
-    if (assetType === 'STOCK') {
-      return 'finnhub';
+    return this.getRoutingForSymbol(appSymbol).primaryProvider;
+  }
+
+  private async fetchPriceFromProviderDirect(
+    providerId: string,
+    cleanSymbol: string,
+    assetClass: 'CRYPTO' | 'STOCK' | 'FOREX' | 'INDEX' | 'UNKNOWN',
+    isCritical: boolean
+  ): Promise<NormalizedTicker> {
+    const adapter = this.getProvider(providerId);
+    if (!adapter) {
+      return this.createErrorTicker(
+        cleanSymbol,
+        cleanSymbol,
+        providerId,
+        assetClass,
+        `Provider '${providerId}' is not registered or supported`
+      );
     }
-    if (assetType === 'FOREX') {
-      return 'twelvedata';
+
+    if (!quotaManager.canMakeRequest(providerId, isCritical)) {
+      return this.createErrorTicker(
+        cleanSymbol,
+        cleanSymbol,
+        providerId,
+        assetClass,
+        `Request blocked by API Quota/Rate-limit Manager for ${providerId}`
+      );
     }
-    // CRYPTO or other -> Bitget
-    return 'bitget';
+
+    return providerQueue.enqueue(providerId, async () => {
+      quotaManager.recordRequest(providerId);
+      try {
+        const result = await adapter.fetchPrice(cleanSymbol);
+        const success = result.status === 'OK' && result.price > 0;
+        quotaManager.recordResponse(
+          providerId,
+          success ? 200 : (result.errorMessage?.includes('429') ? 429 : 500)
+        );
+        return result;
+      } catch (err: any) {
+        const errMsg = String(err);
+        quotaManager.recordResponse(
+          providerId,
+          errMsg.includes('429') || errMsg.includes('rate limit') ? 429 : 500
+        );
+        return this.createErrorTicker(
+          cleanSymbol,
+          cleanSymbol,
+          providerId,
+          assetClass,
+          `Provider '${providerId}' call failed: ${errMsg}`
+        );
+      }
+    });
   }
 
   /**
    * Fetches normalized ticker price for a given symbol and optional provider.
+   * Reuses cached market data within the 60-second TTL to avoid hitting external rate limits.
+   * If primary provider fails, attempts legitimate fallbacks before returning 503 MARKET_DATA_UNAVAILABLE.
    */
   async getPrice(appSymbol: string, requestedProvider?: string, forceFresh = false): Promise<NormalizedTicker> {
-    const assetType = SymbolNormalizer.getAssetClassification(appSymbol);
-    if (assetType === 'UNKNOWN') {
-      return {
-        symbol: SymbolNormalizer.normalizeAppSymbol(appSymbol),
-        rawSymbol: appSymbol,
-        provider: requestedProvider || 'unknown',
-        assetType: 'UNKNOWN',
-        bid: null,
-        ask: null,
-        price: 0,
-        timestamp: 0,
-        receivedAt: Date.now(),
-        source: 'LIVE',
-        isFresh: false,
-        status: 'MARKET_DATA_UNAVAILABLE',
-        errorMessage: 'ASSET_NOT_SUPPORTED',
-      };
-    }
-
     const cleanSymbol = SymbolNormalizer.normalizeAppSymbol(appSymbol);
     if (!cleanSymbol) {
-      return {
-        symbol: '',
-        rawSymbol: '',
-        provider: requestedProvider || 'unknown',
-        assetType: 'UNKNOWN',
-        bid: null,
-        ask: null,
-        price: 0,
-        timestamp: 0,
-        receivedAt: Date.now(),
-        source: 'LIVE',
-        isFresh: false,
-        status: 'MARKET_DATA_UNAVAILABLE',
-        errorMessage: 'Invalid or empty symbol parameter',
-      };
+      return this.createErrorTicker(
+        appSymbol,
+        appSymbol,
+        requestedProvider || 'unknown',
+        'UNKNOWN',
+        'Invalid or empty symbol parameter'
+      );
     }
 
-    let providerId = (requestedProvider || this.selectProviderForSymbol(appSymbol)).toLowerCase();
-    if (providerId === 'forex') {
-      providerId = 'twelvedata'; // Twelve Data is the authoritative Forex market data source
+    const { assetClass, primaryProvider, fallbackProviders } = this.getRoutingForSymbol(appSymbol, requestedProvider);
+
+    if (assetClass === 'UNKNOWN') {
+      return this.createErrorTicker(
+        cleanSymbol,
+        appSymbol,
+        primaryProvider,
+        'UNKNOWN',
+        'ASSET_NOT_SUPPORTED'
+      );
     }
 
-    const adapter = this.getProvider(providerId);
+    const cacheTtlMs = serverConfig.getConfig().marketDataCacheTtlMs; // 60,000ms
 
-    if (!adapter) {
-      return {
-        symbol: cleanSymbol,
-        rawSymbol: cleanSymbol,
-        provider: providerId,
-        assetType,
-        bid: null,
-        ask: null,
-        price: 0,
-        timestamp: 0,
-        receivedAt: Date.now(),
-        source: 'LIVE',
-        isFresh: false,
-        status: 'MARKET_DATA_UNAVAILABLE',
-        errorMessage: `Provider '${providerId}' is not registered or supported`,
-      };
-    }
+    // 1. Cache Lookup (when not forcing fresh data)
+    if (!forceFresh) {
+      // Check primary provider cache
+      const cachedPrimary = marketCache.get(primaryProvider, cleanSymbol);
+      if (cachedPrimary && cachedPrimary.status === 'OK' && cachedPrimary.price > 0) {
+        const dataAgeMs = Date.now() - cachedPrimary.timestamp;
+        logger.info(`[MarketData Price] Cache hit for ${cleanSymbol}`, {
+          assetClass,
+          primaryProvider,
+          fallbackProvider: 'none',
+          cacheHit: true,
+          cacheMiss: false,
+          priceTimestamp: cachedPrimary.timestamp,
+          dataAgeMs,
+        });
+        return cachedPrimary;
+      }
 
-    const normalizeError = (ticker: NormalizedTicker): NormalizedTicker => {
-      if (ticker.status === 'MARKET_DATA_UNAVAILABLE') {
-        const msg = ticker.errorMessage?.toLowerCase() || '';
-        const isQuota = msg.includes('429') || msg.includes('rate limit') || msg.includes('quota') || msg.includes('blocked');
-        const isConn = msg.includes('connection') || msg.includes('timeout') || msg.includes('failed') || msg.includes('network');
-        const isKey = msg.includes('key') || msg.includes('configure') || msg.includes('unauthorized') || msg.includes('credential');
-        if (!isQuota && !isConn && !isKey) {
-          ticker.errorMessage = 'ASSET_NOT_SUPPORTED';
+      // Check fallback provider cache if primary cache missed
+      for (const fbId of fallbackProviders) {
+        const cachedFallback = marketCache.get(fbId, cleanSymbol);
+        if (cachedFallback && cachedFallback.status === 'OK' && cachedFallback.price > 0) {
+          const dataAgeMs = Date.now() - cachedFallback.timestamp;
+          logger.info(`[MarketData Price] Cache hit (fallback: ${fbId}) for ${cleanSymbol}`, {
+            assetClass,
+            primaryProvider,
+            fallbackProvider: fbId,
+            cacheHit: true,
+            cacheMiss: false,
+            priceTimestamp: cachedFallback.timestamp,
+            dataAgeMs,
+          });
+          return cachedFallback;
         }
       }
-      return ticker;
-    };
-
-    const cacheTtlMs = serverConfig.getConfig().marketDataCacheTtlMs;
-
-    const isCritical = forceFresh;
-    if (!quotaManager.canMakeRequest(providerId, isCritical)) {
-      const cached = marketCache.get(providerId, cleanSymbol);
-      if (cached) {
-        logger.info(`Quota manager blocked live request; returning cached ticker for ${cleanSymbol}`);
-        return cached;
-      }
-      return normalizeError({
-        symbol: cleanSymbol,
-        rawSymbol: cleanSymbol,
-        provider: providerId,
-        assetType,
-        bid: null,
-        ask: null,
-        price: 0,
-        timestamp: 0,
-        receivedAt: Date.now(),
-        source: 'LIVE',
-        isFresh: false,
-        status: 'MARKET_DATA_UNAVAILABLE',
-        errorMessage: `Request blocked by API Quota/Rate-limit Manager for ${providerId}`,
-      });
     }
+
+    // 2. Cache Miss or forceFresh: Fetch from Primary Provider with request deduplication
+    let primaryResult: NormalizedTicker;
 
     if (forceFresh) {
-      logger.info('Bypassing cache to fetch fresh live market price', { provider: providerId, symbol: cleanSymbol });
-      return providerQueue.enqueue(providerId, async () => {
-        quotaManager.recordRequest(providerId);
-        try {
-          const result = await adapter.fetchPrice(cleanSymbol);
-          const success = result.status === 'OK';
-          quotaManager.recordResponse(providerId, success ? 200 : (result.errorMessage?.includes('429') ? 429 : 500));
-          if (success) {
-            marketCache.set(providerId, cleanSymbol, result, cacheTtlMs);
-          }
-          return normalizeError(result);
-        } catch (err: any) {
-          const errMsg = String(err);
-          quotaManager.recordResponse(providerId, errMsg.includes('429') || errMsg.includes('rate limit') ? 429 : 500);
-          throw err;
-        }
+      primaryResult = await this.fetchPriceFromProviderDirect(primaryProvider, cleanSymbol, assetClass, true);
+      if (primaryResult.status === 'OK' && primaryResult.price > 0) {
+        marketCache.set(primaryProvider, cleanSymbol, primaryResult, cacheTtlMs);
+      }
+    } else {
+      primaryResult = await marketCache.getOrFetch(primaryProvider, cleanSymbol, cacheTtlMs, async () => {
+        return this.fetchPriceFromProviderDirect(primaryProvider, cleanSymbol, assetClass, true);
       });
     }
 
-    return marketCache.getOrFetch(providerId, cleanSymbol, cacheTtlMs, async () => {
-      logger.info('Fetching live market price from provider', { provider: providerId, symbol: cleanSymbol });
-      return providerQueue.enqueue(providerId, async () => {
-        quotaManager.recordRequest(providerId);
-        try {
-          const result = await adapter.fetchPrice(cleanSymbol);
-          const success = result.status === 'OK';
-          quotaManager.recordResponse(providerId, success ? 200 : (result.errorMessage?.includes('429') ? 429 : 500));
-          return normalizeError(result);
-        } catch (err: any) {
-          const errMsg = String(err);
-          quotaManager.recordResponse(providerId, errMsg.includes('429') || errMsg.includes('rate limit') ? 429 : 500);
-          throw err;
-        }
+    if (primaryResult.status === 'OK' && primaryResult.price > 0) {
+      const dataAgeMs = Date.now() - primaryResult.timestamp;
+      logger.info(`[MarketData Price] Live price fetched from primary provider for ${cleanSymbol}`, {
+        assetClass,
+        primaryProvider,
+        fallbackProvider: 'none',
+        cacheHit: false,
+        cacheMiss: true,
+        priceTimestamp: primaryResult.timestamp,
+        dataAgeMs,
       });
+      return primaryResult;
+    }
+
+    // 3. Primary provider failed: Try legitimate fallback providers if supported
+    if (fallbackProviders.length > 0) {
+      const primaryErr = primaryResult.errorMessage || primaryResult.status || 'Unknown error';
+      logger.warn(`[MarketData Price] Primary provider '${primaryProvider}' failed for ${cleanSymbol}: ${primaryErr}. Trying fallback providers: [${fallbackProviders.join(', ')}]`, {
+        assetClass,
+        primaryProvider,
+        fallbackProviders,
+      });
+
+      for (const fbId of fallbackProviders) {
+        let fallbackResult: NormalizedTicker;
+
+        if (forceFresh) {
+          fallbackResult = await this.fetchPriceFromProviderDirect(fbId, cleanSymbol, assetClass, true);
+          if (fallbackResult.status === 'OK' && fallbackResult.price > 0) {
+            marketCache.set(fbId, cleanSymbol, fallbackResult, cacheTtlMs);
+          }
+        } else {
+          fallbackResult = await marketCache.getOrFetch(fbId, cleanSymbol, cacheTtlMs, async () => {
+            return this.fetchPriceFromProviderDirect(fbId, cleanSymbol, assetClass, true);
+          });
+        }
+
+        if (fallbackResult.status === 'OK' && fallbackResult.price > 0) {
+          const dataAgeMs = Date.now() - fallbackResult.timestamp;
+          logger.info(`[MarketData Price] Live price fetched from fallback provider (${fbId}) for ${cleanSymbol}`, {
+            assetClass,
+            primaryProvider,
+            fallbackProvider: fbId,
+            cacheHit: false,
+            cacheMiss: true,
+            priceTimestamp: fallbackResult.timestamp,
+            dataAgeMs,
+          });
+          return fallbackResult;
+        }
+      }
+    }
+
+    // 4. All legitimate providers failed: Return MARKET_DATA_UNAVAILABLE (HTTP 503)
+    // Never synthesize, estimate, or return placeholder/stale prices.
+    logger.warn(`[MarketData Price] All legitimate providers failed for ${cleanSymbol}`, {
+      assetClass,
+      primaryProvider,
+      fallbackProvider: fallbackProviders.join(',') || 'none',
+      cacheHit: false,
+      cacheMiss: true,
+      priceTimestamp: 0,
+      dataAgeMs: 0,
+      lastError: primaryResult?.errorMessage || 'Unknown error',
     });
+
+    return {
+      symbol: cleanSymbol,
+      rawSymbol: cleanSymbol,
+      provider: primaryProvider,
+      assetType: assetClass,
+      bid: null,
+      ask: null,
+      price: 0,
+      timestamp: 0,
+      receivedAt: Date.now(),
+      source: 'LIVE',
+      isFresh: false,
+      status: 'MARKET_DATA_UNAVAILABLE',
+      errorMessage: primaryResult?.errorMessage || `MARKET_DATA_UNAVAILABLE: All legitimate providers failed for ${cleanSymbol}`,
+    };
+  }
+
+  private createErrorTicker(
+    symbol: string,
+    rawSymbol: string,
+    provider: string,
+    assetType: 'CRYPTO' | 'STOCK' | 'FOREX' | 'INDEX' | 'UNKNOWN',
+    errorMessage: string
+  ): NormalizedTicker {
+    return {
+      symbol: SymbolNormalizer.normalizeAppSymbol(symbol),
+      rawSymbol,
+      provider,
+      assetType,
+      bid: null,
+      ask: null,
+      price: 0,
+      timestamp: 0,
+      receivedAt: Date.now(),
+      source: 'LIVE',
+      isFresh: false,
+      status: 'MARKET_DATA_UNAVAILABLE',
+      errorMessage,
+    };
   }
 
   private getTimeframeTtl(timeframe: string): number {
@@ -258,19 +417,14 @@ export class MarketDataManager {
   }
 
   /**
-   * Fetches candles if supported by the specified provider with caching & rate-limit check.
+   * Fetches candles if supported by the specified provider with caching, rate-limit check, and fallback.
    */
   async getCandles(appSymbol: string, requestedProvider?: string, timeframe = '1m', limit = 50, critical = false): Promise<NormalizedCandle[]> {
     const cleanSymbol = SymbolNormalizer.normalizeAppSymbol(appSymbol);
-    let primaryProviderId = (requestedProvider || this.selectProviderForSymbol(cleanSymbol)).toLowerCase();
+    const routing = this.getRoutingForSymbol(cleanSymbol, requestedProvider);
+    let primaryProviderId = (requestedProvider || routing.primaryProvider).toLowerCase();
     if (primaryProviderId === 'forex') {
       primaryProviderId = 'twelvedata'; // Twelve Data is authoritative
-    }
-
-    const adapter = this.getProvider(primaryProviderId);
-
-    if (!adapter) {
-      throw new Error(`Provider '${primaryProviderId}' is not registered`);
     }
 
     const ttlMs = this.getTimeframeTtl(timeframe);
@@ -278,13 +432,16 @@ export class MarketDataManager {
     return marketCache.getOrFetchCandles(primaryProviderId, cleanSymbol, timeframe, ttlMs, async () => {
       let candles: NormalizedCandle[] = [];
 
+      const adapter = this.getProvider(primaryProviderId);
       if (adapter && adapter.fetchCandles) {
         if (quotaManager.canMakeRequest(primaryProviderId, critical)) {
           candles = await providerQueue.enqueue(primaryProviderId, async () => {
             quotaManager.recordRequest(primaryProviderId);
             try {
               const res = await adapter.fetchCandles!(cleanSymbol, timeframe, limit);
-              quotaManager.recordResponse(primaryProviderId, 200);
+              if (res && res.length > 0) {
+                quotaManager.recordResponse(primaryProviderId, 200);
+              }
               return res;
             } catch (err: any) {
               const errMsg = String(err);
@@ -300,7 +457,35 @@ export class MarketDataManager {
         return candles;
       }
 
-      logger.warn(`No real OHLC candle data available for ${cleanSymbol} (${timeframe}) from authoritative provider ${primaryProviderId}`);
+      // If primary provider failed or is rate-limited, attempt legitimate fallback providers
+      for (const fallbackId of routing.fallbackProviders) {
+        const fallbackAdapter = this.getProvider(fallbackId);
+        if (fallbackAdapter && fallbackAdapter.fetchCandles) {
+          if (quotaManager.canMakeRequest(fallbackId, critical)) {
+            candles = await providerQueue.enqueue(fallbackId, async () => {
+              quotaManager.recordRequest(fallbackId);
+              try {
+                const res = await fallbackAdapter.fetchCandles!(cleanSymbol, timeframe, limit);
+                if (res && res.length > 0) {
+                  quotaManager.recordResponse(fallbackId, 200);
+                  logger.info(`Candles fetched from fallback provider '${fallbackId}' for ${cleanSymbol} (${timeframe})`);
+                }
+                return res;
+              } catch (err: any) {
+                const errMsg = String(err);
+                quotaManager.recordResponse(fallbackId, errMsg.includes('429') || errMsg.includes('rate limit') ? 429 : 500);
+                logger.warn(`Fallback provider '${fallbackId}' candle fetch failed for ${cleanSymbol} (${timeframe})`, { error: errMsg });
+                return [];
+              }
+            });
+            if (candles && candles.length > 0) {
+              return candles;
+            }
+          }
+        }
+      }
+
+      logger.warn(`No real OHLC candle data available for ${cleanSymbol} (${timeframe}) from primary or fallback providers`);
       return [];
     });
   }

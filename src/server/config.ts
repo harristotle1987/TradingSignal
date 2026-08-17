@@ -38,7 +38,7 @@ class ConfigService {
     const appUrl = process.env.APP_URL || `http://localhost:${port}`;
 
     const marketDataMaxAgeMs = parseInt(process.env.MARKET_DATA_MAX_AGE_MS || '60000', 10);
-    const marketDataCacheTtlMs = parseInt(process.env.MARKET_DATA_CACHE_TTL_MS || '5000', 10);
+    const marketDataCacheTtlMs = parseInt(process.env.MARKET_DATA_CACHE_TTL_MS || '60000', 10);
     const marketDataTimeoutMs = parseInt(process.env.MARKET_DATA_TIMEOUT_MS || '8000', 10);
 
     const nvidiaConfigured = Boolean(process.env.NVIDIA_API_KEY && process.env.NVIDIA_API_KEY.trim().length > 0);

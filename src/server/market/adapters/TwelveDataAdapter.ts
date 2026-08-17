@@ -12,6 +12,7 @@ import { IMarketDataProvider } from './IMarketDataProvider.js';
 import { NormalizedTicker, NormalizedCandle, ProviderHealth } from '../types.js';
 import { SymbolNormalizer } from '../SymbolNormalizer.js';
 import { aggregateOHLCCandles } from '../CandleAggregator.js';
+import { quotaManager } from '../QuotaManager.js';
 import { serverConfig } from '../../config.js';
 import { logger } from '../../logger.js';
 
@@ -95,6 +96,9 @@ export class TwelveDataAdapter implements IMarketDataProvider {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
+        if (response.status === 429) {
+          quotaManager.recordResponse(this.id, 429);
+        }
         return this.createErrorTicker(
           appSymbol,
           providerSymbol,
@@ -106,6 +110,9 @@ export class TwelveDataAdapter implements IMarketDataProvider {
       const json = (await response.json()) as TwelveDataQuoteResponse;
 
       if (json.status === 'error' || (json.code && json.code >= 400)) {
+        if (json.code === 429 || json.message?.toLowerCase().includes('rate limit') || json.message?.toLowerCase().includes('429')) {
+          quotaManager.recordResponse(this.id, 429);
+        }
         return this.createErrorTicker(
           appSymbol,
           providerSymbol,
@@ -235,11 +242,17 @@ export class TwelveDataAdapter implements IMarketDataProvider {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
+        if (response.status === 429) {
+          quotaManager.recordResponse(this.id, 429);
+        }
         throw new Error(`Twelve Data Time Series API returned HTTP ${response.status}`);
       }
 
       const json = (await response.json()) as TwelveDataTimeSeriesResponse;
       if (json.status === 'error' || !json.values || !Array.isArray(json.values)) {
+        if (json.code === 429 || json.message?.toLowerCase().includes('rate limit') || json.message?.toLowerCase().includes('429')) {
+          quotaManager.recordResponse(this.id, 429);
+        }
         if (json.message) throw new Error(`Twelve Data API error: ${json.message}`);
         return [];
       }
@@ -319,10 +332,16 @@ export class TwelveDataAdapter implements IMarketDataProvider {
           return directCandles;
         }
       } catch (err) {
-        logger.warn(`Twelve Data direct fetch for interval '${mappedInterval}' (${timeframe}) failed, trying aggregation`, {
+        const errMsg = String(err);
+        const isRateLimit = errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit');
+        logger.warn(`Twelve Data direct fetch for interval '${mappedInterval}' (${timeframe}) failed${isRateLimit ? ' (Rate Limited)' : ', trying aggregation'}`, {
           symbol: appSymbol,
-          error: String(err),
+          error: errMsg,
         });
+        // If rate limited, do not hammer the API with an immediate secondary request
+        if (isRateLimit) {
+          return [];
+        }
       }
     }
 

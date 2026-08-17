@@ -132,8 +132,10 @@ export class HourlyScannerService {
           const result = await signalEngine.generateSignal(category, category);
           
           if (result.success && Array.isArray(result.signals)) {
-            // Pick validated high-confidence signals from the scanner
-            const valid = result.signals.filter(s => s.status === 'ACTIVE' && s.confidenceScore >= 65);
+            // Pick validated high-confidence signals from the scanner meeting strict qualification hurdles (score >= 75)
+            const valid = result.signals.filter(
+              (s) => s.status === 'ACTIVE' && (s.score ?? s.confidenceScore) >= 75 && (s.estimatedWinRate ?? 0) > 30 && s.riskRewardRatio >= 2.0
+            );
             
             for (const sig of valid) {
               if (newSignalsDispatched >= remainingAllowance) break;

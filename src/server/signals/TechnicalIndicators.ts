@@ -194,4 +194,368 @@ export class TechnicalIndicators {
       lower: middle - stdDev * stdDevMultiplier,
     };
   }
+
+  /**
+   * Simple Moving Average (SMA)
+   */
+  static calculateSMA(candles: NormalizedCandle[], period: number): number[] {
+    if (candles.length < period) return [];
+
+    const smaValues: number[] = [];
+    for (let i = period - 1; i < candles.length; i++) {
+      const slice = candles.slice(i - period + 1, i + 1);
+      const sum = slice.reduce((acc, c) => acc + c.close, 0);
+      smaValues.push(sum / period);
+    }
+    return smaValues;
+  }
+
+  /**
+   * Zero-Lag Exponential Moving Average (ZLEMA)
+   * Formula: lag = (period - 1) / 2; zldata = close + (close - close[lag]); ZLEMA = EMA(zldata, period)
+   */
+  static calculateZLEMA(candles: NormalizedCandle[], period: number): number[] {
+    const lag = Math.floor((period - 1) / 2);
+    if (candles.length < period + lag) return [];
+
+    // Create zero-lag adjusted series
+    const zlCloses: number[] = [];
+    for (let i = lag; i < candles.length; i++) {
+      const current = candles[i].close;
+      const lagged = candles[i - lag].close;
+      zlCloses.push(current + (current - lagged));
+    }
+
+    if (zlCloses.length < period) return [];
+
+    const k = 2 / (period + 1);
+    const zlemaValues: number[] = [];
+
+    let sum = 0;
+    for (let i = 0; i < period; i++) {
+      sum += zlCloses[i];
+    }
+    let currentZlema = sum / period;
+    zlemaValues.push(currentZlema);
+
+    for (let i = period; i < zlCloses.length; i++) {
+      currentZlema = zlCloses[i] * k + currentZlema * (1 - k);
+      zlemaValues.push(currentZlema);
+    }
+
+    return zlemaValues;
+  }
+
+  /**
+   * Zero-Lag MACD (ZL-MACD)
+   * Fast ZLEMA - Slow ZLEMA, Signal Line = ZLEMA of ZL-MACD line
+   */
+  static calculateZeroLagMACD(
+    candles: NormalizedCandle[],
+    fastPeriod = 12,
+    slowPeriod = 26,
+    signalPeriod = 9
+  ): MACDResult | null {
+    const fastZlema = this.calculateZLEMA(candles, fastPeriod);
+    const slowZlema = this.calculateZLEMA(candles, slowPeriod);
+
+    if (fastZlema.length === 0 || slowZlema.length === 0) return null;
+
+    // Offset alignment
+    const offset = fastZlema.length - slowZlema.length;
+    if (offset < 0) return null;
+
+    const zlMacdLine: number[] = [];
+    for (let i = 0; i < slowZlema.length; i++) {
+      zlMacdLine.push(fastZlema[i + offset] - slowZlema[i]);
+    }
+
+    if (zlMacdLine.length < signalPeriod) return null;
+
+    // Signal line using EMA / smoothing of ZL-MACD line
+    const k = 2 / (signalPeriod + 1);
+    let sum = 0;
+    for (let i = 0; i < signalPeriod; i++) {
+      sum += zlMacdLine[i];
+    }
+    let signalLine = sum / signalPeriod;
+
+    for (let i = signalPeriod; i < zlMacdLine.length; i++) {
+      signalLine = zlMacdLine[i] * k + signalLine * (1 - k);
+    }
+
+    const latestMacd = zlMacdLine[zlMacdLine.length - 1];
+    const histogram = latestMacd - signalLine;
+
+    return {
+      macdLine: latestMacd,
+      signalLine,
+      histogram,
+    };
+  }
+
+  /**
+   * Donchian Channels / Dynamic High-Low Range
+   */
+  static calculateDonchianChannels(
+    candles: NormalizedCandle[],
+    period = 20
+  ): { upper: number; lower: number; middle: number } | null {
+    if (candles.length < period) return null;
+
+    const slice = candles.slice(-period);
+    const upper = Math.max(...slice.map((c) => c.high));
+    const lower = Math.min(...slice.map((c) => c.low));
+    const middle = (upper + lower) / 2;
+
+    return { upper, lower, middle };
+  }
+
+  /**
+   * Order Flow Imbalance & Delta Proxy Metrics
+   * Evaluates buying vs selling volume pressure and bar-by-bar delta
+   */
+  static calculateOrderFlowMetrics(
+    candles: NormalizedCandle[],
+    period = 10
+  ): {
+    buyingPressurePct: number;
+    sellingPressurePct: number;
+    deltaBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+    volumeSurge: boolean;
+    avgVolume: number;
+    latestVolume: number;
+  } {
+    if (candles.length < period) {
+      return {
+        buyingPressurePct: 50,
+        sellingPressurePct: 50,
+        deltaBias: 'NEUTRAL',
+        volumeSurge: false,
+        avgVolume: 0,
+        latestVolume: 0,
+      };
+    }
+
+    const slice = candles.slice(-period);
+    let totalBuyingVolume = 0;
+    let totalSellingVolume = 0;
+    let totalVol = 0;
+
+    for (const c of slice) {
+      const range = c.high - c.low;
+      const vol = c.volume || 1;
+      totalVol += vol;
+
+      if (range > 0) {
+        // Buying pressure factor: where close is relative to the low
+        const buyFactor = (c.close - c.low) / range;
+        const sellFactor = (c.high - c.close) / range;
+        totalBuyingVolume += vol * buyFactor;
+        totalSellingVolume += vol * sellFactor;
+      } else {
+        totalBuyingVolume += vol * 0.5;
+        totalSellingVolume += vol * 0.5;
+      }
+    }
+
+    const totalCalculated = totalBuyingVolume + totalSellingVolume;
+    const buyingPressurePct = totalCalculated > 0 ? (totalBuyingVolume / totalCalculated) * 100 : 50;
+    const sellingPressurePct = totalCalculated > 0 ? (totalSellingVolume / totalCalculated) * 100 : 50;
+
+    let deltaBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL';
+    if (buyingPressurePct >= 55) deltaBias = 'BULLISH';
+    else if (sellingPressurePct >= 55) deltaBias = 'BEARISH';
+
+    const latestVolume = slice[slice.length - 1].volume || 0;
+    const avgVolume = totalVol / period;
+    const volumeSurge = latestVolume > 0 && avgVolume > 0 && latestVolume >= avgVolume * 1.2;
+
+    return {
+      buyingPressurePct: Number(buyingPressurePct.toFixed(1)),
+      sellingPressurePct: Number(sellingPressurePct.toFixed(1)),
+      deltaBias,
+      volumeSurge,
+      avgVolume: Math.round(avgVolume),
+      latestVolume: Math.round(latestVolume),
+    };
+  }
+
+  /**
+   * Volatility Structure & Breakdown Protection Metrics
+   */
+  static calculateVolatilityMetrics(
+    candles: NormalizedCandle[],
+    atrPeriod = 14
+  ): {
+    currentAtr: number;
+    baselineAtr: number;
+    atrRatio: number;
+    isSqueeze: boolean;
+    isHealthyVolatility: boolean;
+    isErratic: boolean;
+    isDeadMarket: boolean;
+    isValidExpansion: boolean;
+  } {
+    if (candles.length < atrPeriod + 10) {
+      return {
+        currentAtr: 0,
+        baselineAtr: 0,
+        atrRatio: 1,
+        isSqueeze: false,
+        isHealthyVolatility: true,
+        isErratic: false,
+        isDeadMarket: false,
+        isValidExpansion: false,
+      };
+    }
+
+    const currentAtr = this.calculateATR(candles, atrPeriod);
+    const baselineAtr = this.calculateATR(candles, Math.min(candles.length - 1, 40));
+
+    const atrRatio = baselineAtr > 0 ? currentAtr / baselineAtr : 1.0;
+    const isSqueeze = atrRatio < 0.65; // ATR compressed below 65% of baseline
+    const isErratic = atrRatio > 2.8; // ATR expanding > 280% (flash erratic breakdown risk)
+    const isHealthyVolatility = atrRatio >= 0.70 && atrRatio <= 2.5;
+
+    return {
+      currentAtr,
+      baselineAtr,
+      atrRatio: Number(atrRatio.toFixed(2)),
+      isSqueeze,
+      isHealthyVolatility,
+      isErratic,
+      isDeadMarket: atrRatio < 0.45,
+      isValidExpansion: atrRatio >= 1.10 && atrRatio <= 2.50,
+    };
+  }
+
+  /**
+   * Calculates the percentage slope of an EMA series over a lookback window.
+   * Positive slope indicates upward trajectory; negative indicates downward.
+   */
+  static calculateEMASlope(emaValues: number[], lookback = 3): number {
+    if (!emaValues || emaValues.length < lookback + 1) return 0;
+    const current = emaValues[emaValues.length - 1];
+    const prev = emaValues[emaValues.length - 1 - lookback];
+    if (prev <= 0) return 0;
+    return ((current - prev) / prev) * 100;
+  }
+
+  /**
+   * Evaluates Price Action Market Structure (Higher Highs / Higher Lows vs Lower Highs / Lower Lows)
+   */
+  static calculateMarketStructure(
+    candles: NormalizedCandle[],
+    lookback = 15
+  ): {
+    structureBias: 'BULLISH' | 'BEARISH' | 'RANGE';
+    higherHighsCount: number;
+    higherLowsCount: number;
+    lowerHighsCount: number;
+    lowerLowsCount: number;
+    swingHigh: number;
+    swingLow: number;
+  } {
+    if (candles.length < 6) {
+      return {
+        structureBias: 'RANGE',
+        higherHighsCount: 0,
+        higherLowsCount: 0,
+        lowerHighsCount: 0,
+        lowerLowsCount: 0,
+        swingHigh: 0,
+        swingLow: 0,
+      };
+    }
+
+    const slice = candles.slice(-Math.min(candles.length, lookback));
+    const highs = slice.map((c) => c.high);
+    const lows = slice.map((c) => c.low);
+
+    const swingHigh = Math.max(...highs);
+    const swingLow = Math.min(...lows);
+
+    let higherHighsCount = 0;
+    let higherLowsCount = 0;
+    let lowerHighsCount = 0;
+    let lowerLowsCount = 0;
+
+    for (let i = 1; i < slice.length; i++) {
+      if (slice[i].high > slice[i - 1].high) higherHighsCount++;
+      else if (slice[i].high < slice[i - 1].high) lowerHighsCount++;
+
+      if (slice[i].low > slice[i - 1].low) higherLowsCount++;
+      else if (slice[i].low < slice[i - 1].low) lowerLowsCount++;
+    }
+
+    let structureBias: 'BULLISH' | 'BEARISH' | 'RANGE' = 'RANGE';
+    if (higherHighsCount > lowerHighsCount && higherLowsCount >= lowerLowsCount) {
+      structureBias = 'BULLISH';
+    } else if (lowerHighsCount > higherHighsCount && lowerLowsCount >= higherLowsCount) {
+      structureBias = 'BEARISH';
+    }
+
+    return {
+      structureBias,
+      higherHighsCount,
+      higherLowsCount,
+      lowerHighsCount,
+      lowerLowsCount,
+      swingHigh,
+      swingLow,
+    };
+  }
+
+  /**
+   * Evaluates recent candlestick wick rejection (absorption & rejection pressure)
+   */
+  static calculateWickRejection(
+    candles: NormalizedCandle[],
+    lookback = 3
+  ): {
+    lowerWickRejectionPct: number; // Bullish wick rejection (buyers absorbing lows)
+    upperWickRejectionPct: number; // Bearish wick rejection (sellers absorbing highs)
+    hasBullishWickAbsorption: boolean;
+    hasBearishWickAbsorption: boolean;
+  } {
+    if (candles.length < lookback) {
+      return {
+        lowerWickRejectionPct: 0,
+        upperWickRejectionPct: 0,
+        hasBullishWickAbsorption: false,
+        hasBearishWickAbsorption: false,
+      };
+    }
+
+    const slice = candles.slice(-lookback);
+    let totalLowerWick = 0;
+    let totalUpperWick = 0;
+    let totalRange = 0;
+
+    for (const c of slice) {
+      const range = c.high - c.low;
+      if (range <= 0) continue;
+      totalRange += range;
+
+      const bodyTop = Math.max(c.open, c.close);
+      const bodyBottom = Math.min(c.open, c.close);
+
+      const upperWick = c.high - bodyTop;
+      const lowerWick = bodyBottom - c.low;
+
+      totalUpperWick += upperWick;
+      totalLowerWick += lowerWick;
+    }
+
+    const lowerWickRejectionPct = totalRange > 0 ? (totalLowerWick / totalRange) * 100 : 0;
+    const upperWickRejectionPct = totalRange > 0 ? (totalUpperWick / totalRange) * 100 : 0;
+
+    return {
+      lowerWickRejectionPct: Number(lowerWickRejectionPct.toFixed(1)),
+      upperWickRejectionPct: Number(upperWickRejectionPct.toFixed(1)),
+      hasBullishWickAbsorption: lowerWickRejectionPct >= 38,
+      hasBearishWickAbsorption: upperWickRejectionPct >= 38,
+    };
+  }
 }

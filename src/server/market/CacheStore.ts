@@ -36,23 +36,33 @@ export class MarketDataCache {
 
     if (!entry) return null;
 
-    if (Date.now() > entry.expiresAt) {
+    const now = Date.now();
+    if (now > entry.expiresAt) {
       this.cache.delete(key);
       return null;
     }
 
     const maxAgeMs = serverConfig.getConfig().marketDataMaxAgeMs;
-    const isFresh = (Date.now() - entry.ticker.receivedAt <= maxAgeMs) && entry.ticker.status === 'OK';
+    const ageMs = now - entry.ticker.receivedAt;
+    const isFresh = (ageMs <= maxAgeMs) && entry.ticker.status === 'OK' && entry.ticker.price > 0;
+
+    if (!isFresh) {
+      this.cache.delete(key);
+      return null;
+    }
 
     return {
       ...entry.ticker,
       source: 'CACHE',
-      isFresh,
-      status: isFresh ? 'OK' : 'STALE',
+      isFresh: true,
+      status: 'OK',
     };
   }
 
   set(provider: string, symbol: string, ticker: NormalizedTicker, ttlMs: number): void {
+    if (ticker.status !== 'OK' || !ticker.price || isNaN(ticker.price) || ticker.price <= 0) {
+      return; // Never cache failed or invalid tickers
+    }
     const key = this.getCacheKey(provider, symbol);
     this.cache.set(key, {
       ticker: {

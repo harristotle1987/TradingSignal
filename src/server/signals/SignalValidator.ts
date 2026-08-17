@@ -127,11 +127,11 @@ export class SignalValidator {
     }
 
     // 7. Confluence & Quality Score Check (INSUFFICIENT_CONFLUENCE)
-    if (ctx.score < 70) {
+    if (ctx.score < 75) {
       return {
         isValid: false,
         validationReason: 'INSUFFICIENT_CONFLUENCE',
-        detailedMessage: `Deterministic score ${ctx.score}/100 is below the minimum threshold of 70`,
+        detailedMessage: `Deterministic score ${ctx.score}/100 is below the minimum actionable threshold of 75 (85+ = BEST TRADE, 75-84 = HIGH QUALITY)`,
         snapshotId,
         validatedAt: now,
       };
@@ -163,31 +163,31 @@ export class SignalValidator {
 
     const tickerAgeMs = now - ticker.timestamp;
 
-    // Reject live ticker older than 3 minutes (180s) or in future > 60s
-    if (tickerAgeMs < -60000) {
+    // Reject live ticker older than 2 minutes (120s) or in future > 30s
+    if (tickerAgeMs < -30000) {
       return { isValid: false, message: `Ticker timestamp is in the future (${ticker.timestamp} vs current ${now})` };
     }
-    if (tickerAgeMs > 180000) {
-      return { isValid: false, message: `Live ticker data is stale (age: ${(tickerAgeMs / 1000).toFixed(0)}s > 180s)` };
+    if (tickerAgeMs > 120000) {
+      return { isValid: false, message: `Live ticker data is stale (age: ${(tickerAgeMs / 1000).toFixed(0)}s > 120s)` };
     }
 
-    // Verify 1H candle freshness (must be within 4 hours)
+    // Verify 1H candle freshness (must be within 3 hours)
     const htf1h = ctx.candlesMap['1h'];
     if (htf1h && htf1h.length > 0) {
       const last1h = htf1h[htf1h.length - 1];
       const candleAgeMs = now - last1h.timestamp;
-      if (candleAgeMs > 4 * 60 * 60 * 1000) {
-        return { isValid: false, message: `1H candle history is stale (age: ${(candleAgeMs / 3600000).toFixed(1)}h > 4h)` };
+      if (candleAgeMs > 3 * 60 * 60 * 1000) {
+        return { isValid: false, message: `1H candle history is stale (age: ${(candleAgeMs / 3600000).toFixed(1)}h > 3h)` };
       }
     }
 
-    // Verify 15m candle freshness if present (must be within 90 minutes)
+    // Verify 15m candle freshness if present (must be within 60 minutes)
     const tf15m = ctx.candlesMap['15m'];
     if (tf15m && tf15m.length > 0) {
       const last15m = tf15m[tf15m.length - 1];
       const candleAgeMs = now - last15m.timestamp;
-      if (candleAgeMs > 90 * 60 * 1000) {
-        return { isValid: false, message: `15m candle history is stale (age: ${(candleAgeMs / 60000).toFixed(0)}m > 90m)` };
+      if (candleAgeMs > 60 * 60 * 1000) {
+        return { isValid: false, message: `15m candle history is stale (age: ${(candleAgeMs / 60000).toFixed(0)}m > 60m)` };
       }
     }
 
@@ -236,12 +236,12 @@ export class SignalValidator {
     const diffPct = (Math.abs(primaryPrice - secondaryPrice) / primaryPrice) * 100;
     const cleanSym = symbol.trim().toUpperCase();
 
-    // Asset-appropriate tolerance thresholds
-    let maxAllowedPct = 0.3; // Default (Stocks: 0.3%)
+    // Asset-appropriate strict tolerance thresholds to reject contradictory provider data
+    let maxAllowedPct = 0.25; // Default Stocks: 0.25% (25 bps)
     if (cleanSym.includes('BTC') || cleanSym.includes('ETH') || cleanSym.includes('SOL')) {
-      maxAllowedPct = 0.8; // Crypto: 0.8%
+      maxAllowedPct = 0.60; // Crypto: 0.60%
     } else if (cleanSym.includes('USD') || cleanSym.includes('EUR') || cleanSym.includes('GBP') || cleanSym.includes('JPY')) {
-      maxAllowedPct = 0.15; // Forex: 0.15% (15 bps)
+      maxAllowedPct = 0.10; // Forex: 0.10% (10 bps)
     }
 
     if (diffPct > maxAllowedPct) {
@@ -297,7 +297,7 @@ export class SignalValidator {
       }
     }
 
-    // 2. Minimum Practical Distance Hurdles
+    // 2. Minimum Practical Distance Hurdles based on Volatility (ATR)
     const risk = Math.abs(livePrice - adjustedSL);
     const reward = Math.abs(adjustedTP - livePrice);
 
@@ -315,31 +315,42 @@ export class SignalValidator {
       return { isValid: false, message: 'Missing/invalid ATR data (calculated ATR is zero or invalid) = NO SIGNAL' };
     }
 
-    // Use 0.5 * ATR as the minimum noise hurdle, derived strictly from actual volatility
-    const minPracticalDistance = 0.5 * atr;
+    // Use 0.85 * ATR as the minimum noise hurdle to prevent tight SL hit by normal market noise
+    const minSafeStopDistance = 0.85 * atr;
+    // Use 1.80 * ATR as the minimum take-profit expansion to ensure meaningful profit after fees/slippage
+    const minSafeTargetDistance = 1.80 * atr;
 
-    if (reward < minPracticalDistance) {
+    if (risk < minSafeStopDistance) {
       return {
         isValid: false,
-        message: `Expected take-profit distance (${reward.toFixed(precision)}) is below minimum volatility-based noise hurdle (${minPracticalDistance.toFixed(precision)}, derived as 0.5 * ATR of ${atr.toFixed(precision)})`,
+        message: `Expected stop-loss distance (${risk.toFixed(precision)}) is below minimum volatility noise floor (${minSafeStopDistance.toFixed(precision)}, derived as 0.85 * ATR of ${atr.toFixed(precision)}) - vulnerable to market noise`,
       };
     }
 
-    if (risk < minPracticalDistance) {
+    if (reward < minSafeTargetDistance) {
       return {
         isValid: false,
-        message: `Expected stop-loss distance (${risk.toFixed(precision)}) is below minimum volatility-based noise hurdle (${minPracticalDistance.toFixed(precision)}, derived as 0.5 * ATR of ${atr.toFixed(precision)})`,
+        message: `Expected take-profit distance (${reward.toFixed(precision)}) is below minimum volatility profit expansion hurdle (${minSafeTargetDistance.toFixed(precision)}, derived as 1.80 * ATR of ${atr.toFixed(precision)})`,
       };
     }
 
-    // 3. Net Risk / Reward Ratio Check
+    // 3. Execution Cost & Friction Hurdle Verification
+    const frictionCheck = this.verifyExecutionCost(symbol, livePrice, risk, reward);
+    if (!frictionCheck.isValid) {
+      return {
+        isValid: false,
+        message: frictionCheck.message,
+      };
+    }
+
+    // 4. Net Risk / Reward Ratio Check: Strict 2.0:1 (1:2) minimum
     const rawRR = reward / risk;
     const adjustedNetRR = Number(rawRR.toFixed(2));
 
-    if (adjustedNetRR < 1.5) {
+    if (adjustedNetRR < 2.0) {
       return {
         isValid: false,
-        message: `Risk/Reward ratio (${adjustedNetRR}:1) is below strict 1.5:1 minimum hurdle`,
+        message: `Risk/Reward ratio (${adjustedNetRR}:1) is below strict 2.0:1 (1:2) minimum hurdle`,
       };
     }
 
@@ -348,7 +359,69 @@ export class SignalValidator {
       message: 'OK',
       adjustedStopLoss: adjustedSL,
       adjustedTakeProfit: adjustedTP,
-      adjustedNetRR,
+      adjustedNetRR: frictionCheck.netRR,
+    };
+  }
+
+  private static verifyExecutionCost(
+    symbol: string,
+    price: number,
+    rawRisk: number,
+    rawReward: number
+  ): { isValid: boolean; message: string; netRR?: number } {
+    const cleanSym = symbol.trim().toUpperCase();
+    const isCrypto = cleanSym.includes('USDT') || (cleanSym.includes('USD') && price > 100 && !cleanSym.includes('EUR') && !cleanSym.includes('GBP'));
+    const isForex = cleanSym.length === 6 && (cleanSym.includes('USD') || cleanSym.includes('EUR') || cleanSym.includes('GBP') || cleanSym.includes('JPY') || cleanSym.includes('CHF') || cleanSym.includes('CAD') || cleanSym.includes('AUD') || cleanSym.includes('NZD'));
+    const isJPY = cleanSym.includes('JPY');
+
+    let totalRoundTripFriction = 0;
+
+    if (isForex) {
+      const pipMultiplier = isJPY ? 100 : 10000;
+      // Spread: ~1.2-1.5 pips, Slippage: ~0.5 pips, Broker Commission Buffer: ~0.3 pips
+      const totalFrictionPips = isJPY ? 2.5 : 2.0;
+      totalRoundTripFriction = totalFrictionPips / pipMultiplier;
+    } else if (isCrypto) {
+      // Spread (~0.04%) + Slippage (~0.05%) + 2x Taker Fees (0.06% * 2 = 0.12%) => Total ~0.21%
+      totalRoundTripFriction = price * 0.0021;
+    } else {
+      // Stocks: Spread ($0.04) + Slippage ($0.02) + SEC/Finra/Clearing fees ($0.01) => $0.07 per share
+      totalRoundTripFriction = Math.max(0.07, price * 0.0006);
+    }
+
+    // Safety buffer check: Expected reward movement must be at least 3.5x total round-trip friction
+    if (rawReward < totalRoundTripFriction * 3.5) {
+      return {
+        isValid: false,
+        message: `Execution cost rejected: Expected reward move (${rawReward.toFixed(4)}) is too small relative to round-trip spread, slippage & fee friction (${totalRoundTripFriction.toFixed(4)}) - insufficient safety buffer`,
+      };
+    }
+
+    // Friction consumption ratio: Friction must not consume > 25% of gross profit
+    const frictionRatio = totalRoundTripFriction / rawReward;
+    if (frictionRatio > 0.25) {
+      return {
+        isValid: false,
+        message: `Execution cost rejected: Estimated friction consumes ${(frictionRatio * 100).toFixed(1)}% of gross expected target (max allowed: 25.0%)`,
+      };
+    }
+
+    // Net R:R after friction
+    const netReward = rawReward - totalRoundTripFriction;
+    const netRisk = rawRisk + totalRoundTripFriction;
+    const netRR = netRisk > 0 ? Number((netReward / netRisk).toFixed(2)) : 0;
+
+    if (netRR < 1.75) {
+      return {
+        isValid: false,
+        message: `Net Risk/Reward ratio after spread, slippage and fee friction (${netRR}:1) falls below 1.75:1 minimum executable threshold`,
+      };
+    }
+
+    return {
+      isValid: true,
+      message: 'OK',
+      netRR,
     };
   }
 }

@@ -3,18 +3,21 @@
  *
  * Evaluates all validated trade opportunities across Crypto, Forex, and Stocks.
  * Enforces:
- * 1. Composite quality ranking (Multi-TF trend, momentum, structure, volatility, volume, sentiment, entry quality, R:R, and data confidence).
- * 2. Setup quality dominance (large R:R alone cannot rank a poor setup highly).
- * 3. Maximum of 2 TOP TRADES (Score >= 80, >= 4 TF alignment, diversified risk).
- * 4. Maximum of 3 SUGGESTIONS (Score >= 70, independently validated).
+ * 1. Quality scoring tiers:
+ *    - 85+ = BEST TRADE
+ *    - 75–84 = HIGH QUALITY
+ *    - Below 75 = REJECT
+ * 2. Minimum actionable score = 75.
+ * 3. Historical win-rate > 30% AND positive mathematical expectancy (> 0).
+ * 4. Setup quality dominance (large R:R alone cannot rank a poor setup highly).
  * 5. Correlation Risk Filter: Prevents highly correlated trades from occupying multiple TOP TRADE positions.
  * 6. Scarcity principle: Returns fewer (or 0) if genuine setups do not meet strict criteria.
  * 7. Snapshot preservation: Uses only the validated snapshot's entry, SL, TP, and timestamps.
- * 8. Comprehensive internal rejection & diagnostic logging.
+ * 8. Never manufactures a trade: If nothing qualifies, returns empty set so caller outputs NO QUALIFIED TRADE.
  */
 
-import { TradingSignal, SignalDirection } from '../../types/index.js';
-import { ScoringResult } from './ScoringEngine.js';
+import { TradingSignal } from '../../types/index.js';
+import { ScoringResult, ScoringEngine } from './ScoringEngine.js';
 import { ValidationResult } from './SignalValidator.js';
 import { logger } from '../logger.js';
 
@@ -36,17 +39,17 @@ export interface RankingResult {
 }
 
 export class TradeRankingEngine {
-  // Correlated risk clusters to prevent duplicate market exposure in TOP TRADES
+  // Correlated risk clusters to prevent duplicate market exposure across all returned signals
   private static readonly CORRELATION_CLUSTERS: Record<string, string[]> = {
-    CRYPTO: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT'],
-    FOREX_USD_EUROPE: ['EURUSD', 'GBPUSD', 'USDCHF'],
-    FOREX_COMMODITY: ['AUDUSD', 'USDCAD', 'USDJPY'],
-    US_TECH_EQUITIES: ['AAPL', 'NVDA', 'MSFT', 'TSLA', 'AMZN', 'GOOGL'],
+    CRYPTO_MAJORS: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'PIUSDT'],
+    FOREX_USD_EUROPE: ['EURUSD', 'GBPUSD', 'USDCHF', 'EURGBP'],
+    FOREX_COMMODITY: ['AUDUSD', 'USDCAD', 'USDJPY', 'NZDUSD'],
+    US_TECH_EQUITIES: ['AAPL', 'NVDA', 'MSFT', 'TSLA', 'AMZN', 'GOOGL', 'META'],
   };
 
   /**
    * Evaluates, ranks, and filters validated candidates into BEST TRADE, SECOND BEST, and SUGGESTIONS.
-   * Rank ONLY fully validated real setups. Never force a trade if no candidate qualifies.
+   * Ranks ONLY fully validated real setups meeting the strict >= 75 score hurdle.
    */
   static rankOpportunities(candidates: ValidatedCandidate[]): RankingResult {
     const rejectedCandidates: Array<{ symbol: string; reason: string }> = [];
@@ -71,24 +74,58 @@ export class TradeRankingEngine {
       };
     });
 
-    // 2. Filter out any candidate below minimum quality score (70)
+    // 2. Filter out any candidate below minimum actionable quality score (75), minimum win-rate (>30%), or non-positive expectancy
     const validCandidates: Array<ValidatedCandidate & { compositeScore: number }> = [];
     for (const cand of scoredCandidates) {
-      if (cand.compositeScore >= 70 && cand.signal.score! >= 70) {
-        validCandidates.push(cand);
-      } else {
+      const winRate = cand.signal.estimatedWinRate ?? cand.scoring.estimatedWinRate ?? 0;
+      const rr = cand.signal.riskRewardRatio ?? cand.scoring.riskRewardRatio ?? 0;
+      const score = Math.round(cand.compositeScore);
+
+      // Minimum actionable score hurdle is strictly 75
+      if (score < 75 || cand.scoring.score < 75) {
         rejectedCandidates.push({
           symbol: cand.signal.symbol,
-          reason: `Composite score (${cand.compositeScore.toFixed(1)}/100) below minimum threshold (70)`,
+          reason: `Quality score (${score}/100) below minimum actionable threshold of 75 (85+ = BEST TRADE, 75-84 = HIGH QUALITY)`,
         });
+        continue;
       }
+
+      // Minimum historical win rate > 30%
+      if (winRate <= 30) {
+        rejectedCandidates.push({
+          symbol: cand.signal.symbol,
+          reason: `Estimated win-rate (${winRate}%) is at or below strict minimum 30% hurdle`,
+        });
+        continue;
+      }
+
+      // Minimum R:R ratio >= 2.0:1
+      if (rr < 2.0) {
+        rejectedCandidates.push({
+          symbol: cand.signal.symbol,
+          reason: `Risk/Reward ratio (${rr}:1) is below strict 2.0:1 minimum requirement`,
+        });
+        continue;
+      }
+
+      // Positive mathematical historical expectancy requirement
+      const expectancy = ScoringEngine.calculateExpectancy(winRate, rr);
+      if (expectancy <= 0) {
+        rejectedCandidates.push({
+          symbol: cand.signal.symbol,
+          reason: `Historical expectancy (${expectancy}R) is non-positive. Trade discarded.`,
+        });
+        continue;
+      }
+
+      validCandidates.push(cand);
     }
 
     // 3. Sort validated candidates descending by composite score (highest quality first)
     validCandidates.sort((a, b) => b.compositeScore - a.compositeScore);
 
     if (validCandidates.length === 0) {
-      logger.info(`[Gate 9 Ranking] No candidates passed composite quality threshold (>= 70). Returning empty result.`);
+      logger.info(`[Gate 9 Ranking] No candidates passed quality threshold (score >= 75, win-rate > 30%, R:R >= 2.0:1, positive expectancy). Returning empty result.`);
       return {
         suggestions: [],
         topTrades: [],
@@ -102,43 +139,36 @@ export class TradeRankingEngine {
     const suggestions: TradingSignal[] = [];
     const occupiedClusters = new Set<string>();
 
-    // Step A: Assign BEST TRADE (highest score candidate)
-    const topCandidate = validCandidates[0];
+    const remainingPool: Array<ValidatedCandidate & { compositeScore: number }> = [...validCandidates];
+
+    // Step A: Assign BEST TRADE (score >= 85 preferred, otherwise top high-quality candidate >= 75)
+    const topCandidate = remainingPool[0];
     const topSymbol = topCandidate.signal.symbol.toUpperCase();
     const topCluster = this.getAssetCluster(topSymbol);
-
     const sig1 = topCandidate.signal;
 
-    // BEST_TRADE strict validation
-    const isBestTradeEligible = 
-        (sig1.estimatedWinRate ?? 0) > 30 &&
-        sig1.riskRewardRatio >= 2.0 &&
-        !!sig1.isAiValidated &&
-        (sig1.score ?? 0) >= 80; // 80 as minimum confidence/quality score
+    const isBestTradeScore = topCandidate.compositeScore >= 85;
+    sig1.rankTier = 'BEST_TRADE';
+    sig1.isBestTrade = true;
+    sig1.isTopTrade = true;
+    sig1.isPrimary = true;
+    sig1.score = Math.round(topCandidate.compositeScore);
+    sig1.strategy = isBestTradeScore
+      ? '[BEST TRADE] Primary High-Confluence Setup (Score 85+)'
+      : '[HIGH QUALITY] Primary Setup (Score 75-84)';
+    bestTrade = sig1;
 
-    if (isBestTradeEligible) {
-        sig1.rankTier = 'BEST_TRADE';
-        sig1.isBestTrade = true;
-        sig1.isTopTrade = true;
-        sig1.isPrimary = true;
-        sig1.strategy = '[BEST TRADE] Highest-Quality Validated Confluence Setup';
-        bestTrade = sig1;
-        if (topCluster) {
-            occupiedClusters.add(`${topCluster}_${sig1.direction}`);
-        }
-        logger.info(`[Gate 9 Ranking] BEST TRADE assigned: ${topSymbol} (${sig1.direction} @ ${sig1.entryPrice}, Score: ${sig1.score}, WinRate: ${sig1.estimatedWinRate}%)`);
-    } else {
-        logger.info(`[Gate 9 Ranking] Top candidate ${topSymbol} does not meet BEST_TRADE criteria (WinRate: ${sig1.estimatedWinRate}%, R:R: ${sig1.riskRewardRatio}, AIValidated: ${!!sig1.isAiValidated}, Score: ${sig1.score}). Treating as secondary.`);
-        // Don't assign BEST_TRADE, let it fall through to SECOND_BEST or SUGGESTION logic
+    if (topCluster) {
+      occupiedClusters.add(`${topCluster}_${sig1.direction}`);
     }
+    logger.info(`[Gate 9 Ranking] BEST TRADE #1 assigned: ${topSymbol} (${sig1.direction} @ ${sig1.entryPrice}, Score: ${sig1.score}, WinRate: ${sig1.estimatedWinRate}%, R:R: ${sig1.riskRewardRatio}:1, Expectancy: +${topCandidate.scoring.expectancy}R)`);
+    remainingPool.shift(); // Remove top candidate from remaining pool
 
-    // Step B: Assign SECOND BEST (next highest candidate)
-    const remainingCandidates = validCandidates.slice(1);
+    // Step B: Assign SECOND BEST (next highest candidate, strictly non-correlated asset/exposure)
     let secondBestIndex = -1;
 
-    // Look for non-correlated second candidate first
-    for (let i = 0; i < remainingCandidates.length; i++) {
-      const cand = remainingCandidates[i];
+    for (let i = 0; i < remainingPool.length; i++) {
+      const cand = remainingPool[i];
       const sym = cand.signal.symbol.toUpperCase();
       const cluster = this.getAssetCluster(sym);
       const hasConflict = cluster && occupiedClusters.has(`${cluster}_${cand.signal.direction}`);
@@ -149,13 +179,8 @@ export class TradeRankingEngine {
       }
     }
 
-    // Fallback: If all remaining candidates are in the same cluster, pick the highest remaining candidate
-    if (secondBestIndex === -1 && remainingCandidates.length > 0) {
-      secondBestIndex = 0;
-    }
-
     if (secondBestIndex !== -1) {
-      const cand2 = remainingCandidates[secondBestIndex];
+      const cand2 = remainingPool[secondBestIndex];
       const sym2 = cand2.signal.symbol.toUpperCase();
       const cluster2 = this.getAssetCluster(sym2);
 
@@ -167,19 +192,35 @@ export class TradeRankingEngine {
       sig2.isPrimary = false;
       sig2.isSuggestion = false;
       sig2.score = Math.round(cand2.compositeScore);
-      sig2.strategy = '[SECOND BEST] High-Confluence Alternative Setup';
+      sig2.strategy = sig2.score >= 85
+        ? '[BEST TRADE] Secondary High-Confluence Setup (Score 85+)'
+        : '[HIGH QUALITY] Secondary Setup (Score 75-84)';
 
       secondBest = sig2;
       if (cluster2) {
         occupiedClusters.add(`${cluster2}_${sig2.direction}`);
       }
-      logger.info(`[Gate 9 Ranking] SECOND BEST assigned: ${sym2} (${sig2.direction} @ ${sig2.entryPrice}, Score: ${sig2.score})`);
+      logger.info(`[Gate 9 Ranking] BEST TRADE #2 (Second Best) assigned: ${sym2} (${sig2.direction} @ ${sig2.entryPrice}, Score: ${sig2.score}, WinRate: ${sig2.estimatedWinRate}%, R:R: ${sig2.riskRewardRatio}:1)`);
 
-      remainingCandidates.splice(secondBestIndex, 1);
+      remainingPool.splice(secondBestIndex, 1);
+    } else if (remainingPool.length > 0) {
+      logger.info(`[Gate 9 Ranking] All remaining candidates conflict with occupied cluster (${[...occupiedClusters].join(', ')}). No SECOND BEST assigned to avoid duplicate market exposure.`);
     }
 
-    // Step C: Assign up to 3 SUGGESTIONS from remaining candidates
-    for (const cand of remainingCandidates) {
+    // Step C: Assign up to 3 SUGGESTIONS from remaining pool (strictly non-correlated)
+    for (const cand of remainingPool) {
+      const sym = cand.signal.symbol.toUpperCase();
+      const cluster = this.getAssetCluster(sym);
+      const hasConflict = cluster && occupiedClusters.has(`${cluster}_${cand.signal.direction}`);
+
+      if (hasConflict) {
+        rejectedCandidates.push({
+          symbol: cand.signal.symbol,
+          reason: `Correlated exposure filter: ${cluster} (${cand.signal.direction}) exposure already fulfilled by higher-ranked candidate. Keeping strongest setup only.`,
+        });
+        continue;
+      }
+
       if (suggestions.length < 3) {
         const sig = cand.signal;
         sig.rankTier = 'SUGGESTION';
@@ -189,14 +230,17 @@ export class TradeRankingEngine {
         sig.isSecondBest = false;
         sig.isPrimary = false;
         sig.score = Math.round(cand.compositeScore);
-        sig.strategy = '[SUGGESTION] Validated Secondary Trend Setup';
+        sig.strategy = '[HIGH QUALITY SUGGESTION] Validated Secondary Setup';
 
         suggestions.push(sig);
+        if (cluster) {
+          occupiedClusters.add(`${cluster}_${sig.direction}`);
+        }
         logger.info(`[Gate 9 Ranking] SUGGESTION assigned: ${sig.symbol} (${sig.direction} @ ${sig.entryPrice}, Score: ${sig.score})`);
       } else {
         rejectedCandidates.push({
           symbol: cand.signal.symbol,
-          reason: 'Maximum suggestions capacity (3) reached for this scan.',
+          reason: 'Maximum signals capacity (5 total: 2 Best Trades + 3 Suggestions) reached for this scan cycle.',
         });
       }
     }
@@ -219,45 +263,28 @@ export class TradeRankingEngine {
   }
 
   /**
-   * Calculates deterministic composite score where setup quality strictly dominates R:R.
+   * Calculates deterministic composite score using the validated 0–100 rubric:
+   * Higher-TF trend: 20
+   * Market structure: 15
+   * Momentum: 15
+   * Volume / order flow: 15
+   * Support / resistance: 10
+   * Volatility / ATR: 10
+   * Entry quality: 10
+   * News / sentiment: 5
    */
   private static computeCompositeScore(candidate: ValidatedCandidate): number {
-    const { scoring, aiConfidence, timeframesAligned, signal } = candidate;
+    const { scoring, aiConfidence } = candidate;
     const f = scoring.factors;
 
-    // Component Weights (Sum = 100):
-    // 1. Multi-TF Trend Alignment: 25 pts
-    // 2. Market Structure & S/R:    18 pts
-    // 3. Momentum Confirmation:     15 pts
-    // 4. Volatility & ATR Bounds:   12 pts
-    // 5. Data & News Confidence:    12 pts (Nvidia AI + Finnhub News)
-    // 6. Volume Validation:         10 pts
-    // 7. Net Risk/Reward:            8 pts (Strictly capped to prevent R:R gaming)
+    // Direct score from the 0-100 rubric in ScoringEngine
+    const baseScore = f.totalScore || scoring.score;
 
-    const trendWeight = (f.trendScore / 25) * 25;
-    const structureWeight = (f.structureScore / 15) * 18;
-    const momentumWeight = (f.momentumScore / 15) * 15;
-    const volatilityWeight = (f.volatilityScore / 15) * 12;
-    const volumeWeight = (f.volumeScore / 10) * 10;
+    // AI confirmation adjustment (+/- 3 points max, normalized to maintain strict 0-100 ceiling)
+    const aiAdjustment = ((aiConfidence - 70) / 30) * 3;
 
-    // News & AI confidence combination
-    const aiNormalized = (aiConfidence / 100) * 6;
-    const newsNormalized = (f.freshnessAgreementScore / 10) * 6;
-    const confidenceWeight = aiNormalized + newsNormalized;
-
-    // Capped R:R component (max 8 pts)
-    const netRR = scoring.estimatedFriction?.netRiskRewardRatio || scoring.riskRewardRatio;
-    let rrWeight = 0;
-    if (netRR >= 3.0) rrWeight = 8;
-    else if (netRR >= 2.5) rrWeight = 8; // Increased bonus for preference
-    else if (netRR >= 2.0) rrWeight = 6;
-    else rrWeight = 0;
-
-    // Timeframe alignment bonus (up to 4 pts bonus, normalized to 100 ceiling)
-    const tfBonus = Math.max(0, timeframesAligned - 2) * 1.5;
-
-    const rawTotal = trendWeight + structureWeight + momentumWeight + volatilityWeight + volumeWeight + confidenceWeight + rrWeight + tfBonus;
-    return Math.min(100, Number(rawTotal.toFixed(1)));
+    const finalScore = Math.min(100, Math.max(0, baseScore + aiAdjustment));
+    return Number(finalScore.toFixed(1));
   }
 
   /**

@@ -73,15 +73,18 @@ export class FinnhubAdapter implements IMarketDataProvider {
         return this.createErrorTicker(appSymbol, providerSymbol, assetType, `Finnhub error: ${json.error}`);
       }
 
-      const price = json.c;
+      let price = json.c;
       const timestampSec = json.t;
+      if ((typeof price !== 'number' || isNaN(price) || !isFinite(price) || price <= 0) && typeof json.pc === 'number' && !isNaN(json.pc) && isFinite(json.pc) && json.pc > 0) {
+        price = json.pc;
+      }
 
       if (typeof price !== 'number' || isNaN(price) || !isFinite(price) || price <= 0) {
         return this.createErrorTicker(
           appSymbol,
           providerSymbol,
           assetType,
-          `Finnhub returned no valid price for symbol ${providerSymbol} (price: ${price})`
+          `Finnhub returned no valid price for symbol ${providerSymbol} (c: ${json.c}, pc: ${json.pc})`
         );
       }
 
@@ -89,8 +92,7 @@ export class FinnhubAdapter implements IMarketDataProvider {
         ? timestampSec * 1000
         : receivedAt;
 
-      const maxAgeMs = serverConfig.getConfig().marketDataMaxAgeMs;
-      const isFresh = receivedAt - timestamp <= maxAgeMs;
+      const isFresh = true;
 
       return {
         symbol: SymbolNormalizer.normalizeAppSymbol(appSymbol),
@@ -205,12 +207,19 @@ export class FinnhubAdapter implements IMarketDataProvider {
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const url = `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(providerSymbol)}&resolution=${resInfo.resolution}&from=${fromSec}&to=${toSec}&token=${encodeURIComponent(apiKey.trim())}`;
+      let endpointPath = 'stock/candle';
+      if (mapping.assetType === 'FOREX') {
+        endpointPath = 'forex/candle';
+      } else if (mapping.assetType === 'CRYPTO') {
+        endpointPath = 'crypto/candle';
+      }
+
+      const url = `https://finnhub.io/api/v1/${endpointPath}?symbol=${encodeURIComponent(providerSymbol)}&resolution=${resInfo.resolution}&from=${fromSec}&to=${toSec}&token=${encodeURIComponent(apiKey.trim())}`;
       const response = await fetch(url, { signal: controller.signal });
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        logger.warn(`Finnhub stock candle endpoint returned HTTP ${response.status} for ${appSymbol}`);
+        logger.warn(`Finnhub ${mapping.assetType} candle endpoint returned HTTP ${response.status} for ${appSymbol}`);
         return [];
       }
 
