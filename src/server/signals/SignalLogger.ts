@@ -294,6 +294,47 @@ export class SignalLogger {
   }
 
   /**
+   * Deletes a single signal log record by ID from memory, disk, and Firestore.
+   */
+  public static async deleteLog(id: string): Promise<boolean> {
+    await this.init();
+
+    let targetKey: string | null = null;
+    if (this.logs.has(id)) {
+      targetKey = id;
+    } else {
+      for (const [key, r] of this.logs.entries()) {
+        if (r.snapshotId === id || r.id === id || key.startsWith(id)) {
+          targetKey = key;
+          break;
+        }
+      }
+    }
+
+    if (!targetKey || !this.logs.has(targetKey)) {
+      logger.warn(`[SignalLogger] Cannot delete log entry: ID ${id} not found.`);
+      return false;
+    }
+
+    this.logs.delete(targetKey);
+    this.flushToDisk();
+
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      firestore
+        .collection(FIRESTORE_COLLECTION)
+        .doc(targetKey)
+        .delete()
+        .catch((err) => {
+          logger.debug(`[SignalLogger] Firestore delete deferred for ${targetKey}:`, { error: String(err) });
+        });
+    }
+
+    logger.info(`[SignalLogger] DELETED INDIVIDUAL SIGNAL LOG RECORD: ${targetKey}`);
+    return true;
+  }
+
+  /**
    * Clears the signal log cache and disk file.
    */
   public static async clearLogs(): Promise<void> {

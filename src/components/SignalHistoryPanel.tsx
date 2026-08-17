@@ -6,7 +6,7 @@
  * Allows traders to review past setups even after they are superseded.
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { SignalHistoryItem } from '../types/index.js';
 import { formatTimeWithZone, DisplayTimeZone } from '../utils/time.js';
 import {
@@ -23,11 +23,14 @@ import {
   Cpu,
   AlertCircle,
   ExternalLink,
+  CheckCircle2,
+  X,
 } from 'lucide-react';
 
 interface SignalHistoryPanelProps {
   history: SignalHistoryItem[];
   onClearHistory: () => void;
+  onDeleteHistoryItem?: (id: string, symbol: string) => void;
   preferredTimeZone: DisplayTimeZone;
   onSelectSymbol?: (symbol: string) => void;
 }
@@ -35,11 +38,27 @@ interface SignalHistoryPanelProps {
 export function SignalHistoryPanel({
   history,
   onClearHistory,
+  onDeleteHistoryItem,
   preferredTimeZone,
   onSelectSymbol,
 }: SignalHistoryPanelProps) {
   const [filter, setFilter] = useState<'ALL' | 'TOP_TRADE' | 'SUGGESTION'>('ALL');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // State for confirmation modals and toast notifications
+  const [itemToDelete, setItemToDelete] = useState<{ id: string; symbol: string } | null>(null);
+  const [confirmClearAll, setConfirmClearAll] = useState<boolean>(false);
+  const [toast, setToast] = useState<{ title: string; message: string } | null>(null);
+
+  // Auto-dismiss toast after 3.5s
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => {
+        setToast(null);
+      }, 3500);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   const filteredHistory = history.filter((item) => {
     if (filter === 'TOP_TRADE') return item.isTopTrade || item.outcomeType === 'TOP_TRADE';
@@ -49,6 +68,28 @@ export function SignalHistoryPanel({
 
   const toggleExpand = (id: string) => {
     setExpandedId((prev) => (prev === id ? null : id));
+  };
+
+  const handleConfirmDeleteSingle = () => {
+    if (itemToDelete) {
+      if (onDeleteHistoryItem) {
+        onDeleteHistoryItem(itemToDelete.id, itemToDelete.symbol);
+      }
+      setToast({
+        title: 'Entry Deleted',
+        message: `Signal history entry for ${itemToDelete.symbol} was deleted successfully.`,
+      });
+      setItemToDelete(null);
+    }
+  };
+
+  const handleConfirmClearAll = () => {
+    onClearHistory();
+    setToast({
+      title: 'History Cleared',
+      message: 'All signal history and audit log entries have been cleared.',
+    });
+    setConfirmClearAll(false);
   };
 
   return (
@@ -114,9 +155,9 @@ export function SignalHistoryPanel({
           {history.length > 0 && (
             <button
               type="button"
-              onClick={onClearHistory}
+              onClick={() => setConfirmClearAll(true)}
               className="p-1.5 rounded-lg bg-slate-950 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-900/60 text-slate-400 hover:text-rose-400 transition"
-              title="Clear Signal History"
+              title="Clear All Signal History"
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
@@ -221,8 +262,8 @@ export function SignalHistoryPanel({
                     ) : null}
                   </div>
 
-                  {/* Center/Right: Numeric Prices & Meta */}
-                  <div className="flex flex-wrap items-center gap-3 text-xs font-mono">
+                  {/* Center/Right: Numeric Prices, Meta & Action Buttons */}
+                  <div className="flex flex-wrap items-center gap-2.5 text-xs font-mono">
                     {item.entryPrice !== undefined && item.entryPrice > 0 ? (
                       <div className="flex flex-wrap items-center gap-2 text-slate-300">
                         <span>
@@ -265,6 +306,16 @@ export function SignalHistoryPanel({
                       title={isExpanded ? 'Hide details' : 'Show details'}
                     >
                       {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                    </button>
+
+                    {/* Individual Item Delete Button */}
+                    <button
+                      type="button"
+                      onClick={() => setItemToDelete({ id: item.id, symbol: item.symbol })}
+                      className="p-1 rounded bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-800/80 transition"
+                      title={`Delete signal history entry for ${item.symbol}`}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
@@ -320,6 +371,99 @@ export function SignalHistoryPanel({
           <p className="text-[11px] text-slate-500 mt-1">
             Scanned setups and generated trading signals will automatically be archived in this local log.
           </p>
+        </div>
+      )}
+
+      {/* Confirmation Modal for Individual Item Delete */}
+      {itemToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-rose-400">
+              <div className="p-2 bg-rose-950/60 border border-rose-800/80 rounded-lg shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-semibold text-white">Delete Signal History Entry?</h4>
+                <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">
+                  Are you sure you want to delete the signal history entry for <strong className="text-white font-mono">{itemToDelete.symbol}</strong>?
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setItemToDelete(null)}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteSingle}
+                className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium shadow-sm transition"
+              >
+                Yes, Delete Entry
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal for Clear All History */}
+      {confirmClearAll && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-rose-400">
+              <div className="p-2 bg-rose-950/60 border border-rose-800/80 rounded-lg shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-semibold text-white">Clear All Signal History?</h4>
+                <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">
+                  Are you sure you want to wipe all <strong className="text-white">{history.length}</strong> signal audit log records?
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setConfirmClearAll(false)}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmClearAll}
+                className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium shadow-sm transition"
+              >
+                Yes, Clear All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Toast Notification */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 max-w-sm w-full bg-slate-900/95 border border-emerald-500/60 shadow-2xl rounded-xl p-4 text-xs font-sans text-white flex items-start justify-between gap-3 backdrop-blur-md animate-in fade-in slide-in-from-bottom-5 duration-300">
+          <div className="flex items-start gap-2.5">
+            <div className="p-1 rounded-full bg-emerald-950 border border-emerald-700 text-emerald-400 shrink-0 mt-0.5">
+              <CheckCircle2 className="w-4 h-4" />
+            </div>
+            <div>
+              <p className="font-semibold text-emerald-300">{toast.title}</p>
+              <p className="text-slate-300 text-[11px] mt-0.5 leading-normal">{toast.message}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition"
+            title="Dismiss Notification"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
     </div>

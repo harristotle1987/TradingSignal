@@ -167,6 +167,15 @@ class ApiClient {
   }
 
   /**
+   * Delete an individual dedicated signal log entry by ID
+   */
+  async deleteSignalLog(id: string): Promise<{ success: boolean; message: string }> {
+    return this.fetchJson<{ success: boolean; message: string }>(`/api/signals/log/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  /**
    * Clear dedicated signal logs
    */
   async clearSignalLogs(): Promise<{ success: boolean; message: string }> {

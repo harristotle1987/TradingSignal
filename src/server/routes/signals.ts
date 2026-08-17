@@ -145,6 +145,38 @@ router.get('/signals/log', async (_req: Request, res: Response) => {
 });
 
 /**
+ * DELETE /api/signals/log/:id
+ * Deletes an individual dedicated signal log entry by ID.
+ */
+router.delete('/signals/log/:id', async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id;
+    const success = await SignalLogger.deleteLog(id);
+    if (success) {
+      res.status(200).json({
+        success: true,
+        message: `Signal log entry ${id} deleted successfully`,
+        timestamp: Date.now(),
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: `Signal log entry ${id} not found`,
+        timestamp: Date.now(),
+      });
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete individual signal log entry',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
  * DELETE /api/signals/log
  * Clears dedicated signal log records.
  */

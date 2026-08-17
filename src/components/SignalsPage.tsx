@@ -187,6 +187,25 @@ export function SignalsPage({ health }: SignalsPageProps) {
     }
   };
 
+  // Individual history item deletion handler
+  const handleDeleteHistoryItem = async (id: string, symbol: string) => {
+    setSignalHistory((prev) => {
+      const updated = prev.filter((item) => item.id !== id && item.snapshotId !== id);
+      try {
+        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updated));
+      } catch (e) {
+        console.warn('Failed to update localStorage signal history:', e);
+      }
+      return updated;
+    });
+
+    try {
+      await api.deleteSignalLog(id);
+    } catch (e) {
+      console.warn(`Failed to delete backend signal log entry ${id}:`, e);
+    }
+  };
+
   // Strict Market Session Manager Frontend State
   const [sessionDetails, setSessionDetails] = useState<{
     symbol: string;
@@ -934,6 +953,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
       <SignalHistoryPanel
         history={signalHistory}
         onClearHistory={handleClearHistory}
+        onDeleteHistoryItem={handleDeleteHistoryItem}
         preferredTimeZone={preferredTimeZone}
         onSelectSymbol={(sym) => {
           setSelectedSymbol(sym);
