@@ -134,6 +134,30 @@ export function Header({
             </button>
           </div>
         </div>
+
+        {/* Mobile Real-Time Clocks - Only visible on screens < lg */}
+        <div className="lg:hidden pb-3 pt-1 flex flex-col items-center justify-center text-[10px] sm:text-xs font-mono border-t border-slate-800/40">
+          <div className="flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 bg-slate-950 px-2.5 py-1.5 rounded-lg border border-slate-800/60 w-full text-center">
+            <span className="flex items-center gap-1 text-[10px] text-slate-500 shrink-0">
+              <Clock className="w-3 h-3 text-emerald-400" />
+              <span>TIME:</span>
+            </span>
+            <span title={`Local User Time (${getLocalTimeZone()})`} className="whitespace-nowrap">
+              <span className="text-slate-500 mr-1">LOC:</span>
+              <span className="text-slate-200 font-semibold">{formatTimeWithZone(now, 'LOCAL')}</span>
+            </span>
+            <span className="text-slate-800 hidden xs:inline">|</span>
+            <span title="Exchange Time (Eastern Time)" className="whitespace-nowrap">
+              <span className="text-slate-500 mr-1">EXCH:</span>
+              <span className="text-emerald-400 font-semibold">{formatTimeWithZone(now, 'EXCHANGE')}</span>
+            </span>
+            <span className="text-slate-800 hidden xs:inline">|</span>
+            <span title="Universal Coordinated Time (UTC)" className="whitespace-nowrap">
+              <span className="text-slate-500 mr-1">UTC:</span>
+              <span className="text-blue-400 font-semibold">{formatTimeWithZone(now, 'UTC')}</span>
+            </span>
+          </div>
+        </div>
       </div>
     </header>
   );

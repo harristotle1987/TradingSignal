@@ -308,10 +308,10 @@ export class MarketDataManager {
       return primaryResult;
     }
 
-    // 3. Primary provider failed: Try legitimate fallback providers if supported
+    // 3. Primary provider busy or unavailable: Try legitimate fallback providers if supported
     if (fallbackProviders.length > 0) {
       const primaryErr = primaryResult.errorMessage || primaryResult.status || 'Unknown error';
-      logger.warn(`[MarketData Price] Primary provider '${primaryProvider}' failed for ${cleanSymbol}: ${primaryErr}. Trying fallback providers: [${fallbackProviders.join(', ')}]`, {
+      logger.info(`[MarketData Price] Routing query for ${cleanSymbol} via fallback providers [${fallbackProviders.join(', ')}] (primary ${primaryProvider} busy or unavailable: ${primaryErr})`, {
         assetClass,
         primaryProvider,
         fallbackProviders,
@@ -347,9 +347,9 @@ export class MarketDataManager {
       }
     }
 
-    // 4. All legitimate providers failed: Return MARKET_DATA_UNAVAILABLE (HTTP 503)
+    // 4. All legitimate providers busy: Return MARKET_DATA_UNAVAILABLE (HTTP 503)
     // Never synthesize, estimate, or return placeholder/stale prices.
-    logger.warn(`[MarketData Price] All legitimate providers failed for ${cleanSymbol}`, {
+    logger.info(`[MarketData Price] Real-time rate for ${cleanSymbol} is currently unavailable from all primary/fallback providers`, {
       assetClass,
       primaryProvider,
       fallbackProvider: fallbackProviders.join(',') || 'none',
@@ -448,7 +448,7 @@ export class MarketDataManager {
             } catch (err: any) {
               const errMsg = String(err);
               quotaManager.recordResponse(primaryProviderId, errMsg.includes('429') || errMsg.includes('rate limit') ? 429 : 500);
-              logger.warn(`Primary provider '${primaryProviderId}' candle fetch failed for ${cleanSymbol} (${timeframe})`, { error: errMsg });
+              logger.info(`Primary provider '${primaryProviderId}' candle fetch unavailable for ${cleanSymbol} (${timeframe}): ${errMsg}`);
               return [];
             }
           });
@@ -476,7 +476,7 @@ export class MarketDataManager {
               } catch (err: any) {
                 const errMsg = String(err);
                 quotaManager.recordResponse(fallbackId, errMsg.includes('429') || errMsg.includes('rate limit') ? 429 : 500);
-                logger.warn(`Fallback provider '${fallbackId}' candle fetch failed for ${cleanSymbol} (${timeframe})`, { error: errMsg });
+                logger.info(`Fallback provider '${fallbackId}' candle fetch unavailable for ${cleanSymbol} (${timeframe}): ${errMsg}`);
                 return [];
               }
             });
@@ -487,7 +487,7 @@ export class MarketDataManager {
         }
       }
 
-      logger.warn(`No real OHLC candle data available for ${cleanSymbol} (${timeframe}) from primary or fallback providers`);
+      logger.info(`No real OHLC candle data currently available for ${cleanSymbol} (${timeframe}) from primary or fallback providers`);
       return [];
     });
   }

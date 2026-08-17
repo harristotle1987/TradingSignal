@@ -17,7 +17,7 @@ export class QuotaManager {
   
   // Configured limits
   private providerQuotas: Record<string, ProviderQuota> = {
-    twelvedata: { maxPerMinute: 8, lowThreshold: 8 },
+    twelvedata: { maxPerMinute: 5, lowThreshold: 3 },
     finnhub: { maxPerMinute: 30, lowThreshold: 28 },
     bitget: { maxPerMinute: 120, lowThreshold: 100 },
   };
@@ -56,14 +56,14 @@ export class QuotaManager {
     if (quota) {
       // Exceeds absolute maximum limit
       if (logs.length >= quota.maxPerMinute) {
-        logger.warn(`Request blocked: Minute quota limit (${quota.maxPerMinute}/min) reached for ${providerId}`, { count: logs.length });
+        logger.info(`Request blocked: Minute quota limit (${quota.maxPerMinute}/min) reached for ${providerId}`, { count: logs.length });
         return false;
       }
 
       // Quota is low: reject non-critical requests
       if (logs.length >= quota.lowThreshold) {
         if (!critical) {
-          logger.warn(`Request blocked: Low quota threshold reached for non-critical query on ${providerId}`, { count: logs.length });
+          logger.info(`Request blocked: Low quota threshold reached for non-critical query on ${providerId}`, { count: logs.length });
           return false;
         } else {
           logger.info(`Low quota threshold active, allowing critical request for ${providerId}`, { count: logs.length });
@@ -113,7 +113,7 @@ export class QuotaManager {
       const unlockTime = now + backoffDuration;
 
       this.lockedUntil.set(cleanProvider, unlockTime);
-      logger.warn(`Provider ${providerId} returned HTTP 429. Exponential backoff triggered`, {
+      logger.info(`Provider ${providerId} returned HTTP 429. Exponential backoff active`, {
         consecutiveRateLimits: currentCount,
         cooldownMs: backoffDuration,
         lockedUntil: new Date(unlockTime).toISOString(),
