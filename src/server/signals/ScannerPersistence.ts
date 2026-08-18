@@ -244,12 +244,16 @@ export class ScannerPersistence {
       }
 
       const remote = snapshot.data() as DailyCapState;
+      const remoteLastScan = typeof remote.lastScanTime === 'number' && remote.lastScanTime > 0
+        ? remote.lastScanTime
+        : (this.localData.capState.lastScanTime || 0);
+
       if (remote.date !== today) {
         const resetState: DailyCapState = {
           date: today,
           dailySignalCount: 0,
           dailySignalCap: remote.dailySignalCap || defaultCap,
-          lastScanTime: remote.lastScanTime || Date.now(),
+          lastScanTime: remoteLastScan,
         };
         await docRef.set(resetState);
         this.localData.capState = resetState;
@@ -262,7 +266,7 @@ export class ScannerPersistence {
         date: today,
         dailySignalCount: Math.max(this.localData.capState.dailySignalCount, remote.dailySignalCount || 0),
         dailySignalCap: remote.dailySignalCap || defaultCap,
-        lastScanTime: remote.lastScanTime || this.localData.capState.lastScanTime,
+        lastScanTime: remoteLastScan,
       };
       this.saveLocalData();
       return this.localData.capState;
@@ -767,19 +771,22 @@ export class ScannerPersistence {
   }
 
   /**
-   * Updates last scan time.
+   * Updates last scan time in local disk persistence and Firestore.
    */
-  static updateLastScanTime(timestamp = Date.now()): void {
+  static async updateLastScanTime(timestamp = Date.now()): Promise<void> {
     this.init();
     this.localData.capState.lastScanTime = timestamp;
     this.saveLocalData();
 
     const firestore = getFirestoreAdmin();
     if (firestore) {
-      firestore
-        .doc(FIRESTORE_CAP_DOC)
-        .set({ lastScanTime: timestamp }, { merge: true })
-        .catch(() => {});
+      try {
+        await firestore
+          .doc(FIRESTORE_CAP_DOC)
+          .set({ lastScanTime: timestamp }, { merge: true });
+      } catch (err) {
+        logger.warn('[ScannerPersistence] Failed to update lastScanTime in Firestore:', { error: String(err) });
+      }
     }
   }
 

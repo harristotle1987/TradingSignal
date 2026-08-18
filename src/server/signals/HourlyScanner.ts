@@ -57,7 +57,7 @@ export interface ScannerSettings {
 
 export interface ManualScanResult {
   success: boolean;
-  status: 'COMPLETED' | 'SCAN_ALREADY_RUNNING' | 'SKIPPED_CAP_REACHED' | 'ERROR';
+  status: 'COMPLETED' | 'SCAN_ALREADY_RUNNING' | 'SKIPPED_CAP_REACHED' | 'SKIPPED_NOT_DUE' | 'ERROR';
   message: string;
   timestamp: number;
   lastScanTime: number;
@@ -135,9 +135,83 @@ export class HourlyScannerService {
   }
 
   /**
-   * Manually triggers a scan execution.
+   * Manually triggers a scan execution (e.g. from UI admin actions).
    */
   async triggerManualScan(isExternal = false): Promise<ManualScanResult> {
+    return await this.executeIntelligentScan(isExternal);
+  }
+
+  /**
+   * Enforces user's configured Automated Signal Interval (15m, 30m, 45m, 60m) before running an automated scan.
+   * Called by POST /api/scanner/trigger (Vercel external cron).
+   *
+   * Behavior:
+   * 1. Fetches current settings & persisted capState (including lastScanTime from Firestore/disk).
+   * 2. Checks if automated scanning is enabled in settings.
+   * 3. Calculates time elapsed since lastScanTime.
+   * 4. If time elapsed < configured interval, returns successful SKIPPED_NOT_DUE response without running scan or clearing cache.
+   * 5. If interval has elapsed, clears marketCache and executes scan cycle.
+   */
+  async triggerAutomatedScan(isExternal = true): Promise<ManualScanResult> {
+    const settings = ScannerPersistence.getSettings();
+    const capState = await ScannerPersistence.getCapState(5);
+    const now = Date.now();
+
+    if (!settings.enabled) {
+      logger.info('[Hourly Scanner] External trigger received but automated scanner is disabled in settings. Skipping scan.');
+      return {
+        success: true,
+        status: 'SKIPPED_NOT_DUE',
+        message: 'Automated scanner is currently disabled in settings.',
+        timestamp: now,
+        lastScanTime: capState.lastScanTime,
+        candidatesEvaluated: 0,
+        acceptedSignalsCount: 0,
+        acceptedSignals: [],
+        signalsFound: 0,
+        qualifiedSetups: [],
+        rejectedCount: 0,
+        rejectionReasons: ['Automated scanner is disabled in settings.'],
+        capState,
+      };
+    }
+
+    const validIntervals = [15, 30, 45, 60];
+    const intervalMinutes = validIntervals.includes(Number(settings.intervalMinutes))
+      ? Number(settings.intervalMinutes)
+      : 30;
+    const intervalMs = intervalMinutes * 60 * 1000;
+    const timeElapsed = now - capState.lastScanTime;
+
+    // Enforce configured interval: minimum time that must elapse between automated evaluations
+    if (capState.lastScanTime > 0 && timeElapsed < intervalMs) {
+      const nextDueTime = capState.lastScanTime + intervalMs;
+      const timeRemainingMs = Math.max(0, nextDueTime - now);
+      const minutesRemaining = Math.ceil(timeRemainingMs / (60 * 1000));
+
+      logger.info(`[Hourly Scanner] External trigger skipped: minimum interval (${intervalMinutes}m) not due. Time elapsed: ${Math.floor(timeElapsed / (60 * 1000))}m. Next scan due in ${minutesRemaining}m.`);
+
+      return {
+        success: true,
+        status: 'SKIPPED_NOT_DUE',
+        message: `Automated scan skipped: configured interval of ${intervalMinutes} minutes has not elapsed since last evaluation. Next scan due in ${minutesRemaining} minute(s).`,
+        timestamp: now,
+        lastScanTime: capState.lastScanTime,
+        candidatesEvaluated: 0,
+        acceptedSignalsCount: 0,
+        acceptedSignals: [],
+        signalsFound: 0,
+        qualifiedSetups: [],
+        rejectedCount: 0,
+        rejectionReasons: [`Interval not due. Configured: ${intervalMinutes}m. Time elapsed: ${Math.floor(timeElapsed / 60000)}m.`],
+        capState,
+      };
+    }
+
+    // Interval IS due: selectively clear expired cache entries and ticker quotes before scan cycle
+    const { marketCache } = await import('../market/CacheStore.js');
+    marketCache.clearExpired();
+    marketCache.clearTickers();
     return await this.executeIntelligentScan(isExternal);
   }
 
@@ -178,6 +252,9 @@ export class HourlyScannerService {
 
     this.isScanning = true;
     const scanStartTime = Date.now();
+    // Persist scanStartTime immediately upon acquiring lock to prevent race conditions
+    await ScannerPersistence.updateLastScanTime(scanStartTime);
+
     logger.info('================================================================');
     logger.info('[Hourly Intelligent Scanner] Initiating Multi-Asset Scan Cycle...');
     logger.info('================================================================');
@@ -197,7 +274,7 @@ export class HourlyScannerService {
 
       if (currentDailyCount >= dailyCap) {
         logger.info(`[Hourly Scanner] Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Scanning skipped to preserve portfolio limits.`);
-        ScannerPersistence.updateLastScanTime(scanStartTime);
+        await ScannerPersistence.updateLastScanTime(scanStartTime);
         return {
           success: true,
           status: 'SKIPPED_CAP_REACHED',
@@ -574,7 +651,7 @@ export class HourlyScannerService {
       }
 
       // 10. Update last scan timestamp
-      ScannerPersistence.updateLastScanTime(Date.now());
+      await ScannerPersistence.updateLastScanTime(Date.now());
 
       const finalCapState = await ScannerPersistence.getCapState(5);
       logger.info(`================================================================`);

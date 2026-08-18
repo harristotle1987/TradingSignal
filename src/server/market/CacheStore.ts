@@ -175,6 +175,31 @@ export class MarketDataCache {
     return fetchPromise;
   }
 
+  /**
+   * Clears live ticker quotes cache while keeping HTF candles intact.
+   */
+  clearTickers(): void {
+    this.cache.clear();
+    this.pendingRequests.clear();
+  }
+
+  /**
+   * Clears expired ticker and candle cache entries based on their individual TTLs.
+   */
+  clearExpired(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.cache.entries()) {
+      if (now > entry.expiresAt) {
+        this.cache.delete(key);
+      }
+    }
+    for (const [key, entry] of this.candleCache.entries()) {
+      if (now > entry.expiresAt) {
+        this.candleCache.delete(key);
+      }
+    }
+  }
+
   clear(): void {
     this.cache.clear();
     this.candleCache.clear();

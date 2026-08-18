@@ -677,7 +677,7 @@ export function SettingsPage({
                   />
                 </div>
                 <p className="text-[10px] text-slate-400 leading-relaxed">
-                  Strict safety ceiling limit to prevent over-trading. Max 5 high-conviction background signals per rolling 24 hours.
+                  Strict safety ceiling limit to prevent over-trading. Maximum automated signals per UTC day.
                 </p>
               </div>
 

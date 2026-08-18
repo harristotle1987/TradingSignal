@@ -108,17 +108,14 @@ router.post('/scanner/trigger', async (req: Request, res: Response) => {
   logger.info('EXTERNAL_HOURLY_SCAN_STARTED');
 
   try {
-    // 2. Clear marketCache to force fresh market data retrieval
-    marketCache.clear();
-
-    // 3. Trigger manual scan with isExternal = true to suppress default notifyOnNoTrade notifications
-    const result = await hourlyScanner.triggerManualScan(true);
+    // Trigger automated scan enforcing configured interval (15m, 30m, 45m, 60m)
+    const result = await hourlyScanner.triggerAutomatedScan(true);
 
     let statusLog = '';
     if (result.status === 'COMPLETED') {
       logger.info('EXTERNAL_HOURLY_SCAN_COMPLETED');
       statusLog = 'EXTERNAL_HOURLY_SCAN_COMPLETED';
-    } else if (result.status === 'SKIPPED_CAP_REACHED' || result.status === 'SCAN_ALREADY_RUNNING') {
+    } else if (result.status === 'SKIPPED_CAP_REACHED' || result.status === 'SCAN_ALREADY_RUNNING' || result.status === 'SKIPPED_NOT_DUE') {
       logger.info('EXTERNAL_HOURLY_SCAN_SKIPPED');
       statusLog = 'EXTERNAL_HOURLY_SCAN_SKIPPED';
     } else {
