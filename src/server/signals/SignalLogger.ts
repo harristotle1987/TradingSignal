@@ -32,7 +32,7 @@ import { TradingSignal } from '../../types/index.js';
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { logger } from '../logger.js';
 
-export type SignalLogStatus = 'ACTIVE' | 'TP HIT' | 'SL HIT' | 'EXPIRED' | 'INVALIDATED';
+export type SignalLogStatus = 'ACTIVE' | 'TP HIT' | 'SL HIT' | 'EXPIRED' | 'INVALIDATED' | 'TP1 HIT' | 'TP2 HIT' | 'TP3 HIT';
 
 export interface SignalLogRecord {
   id: string;
@@ -44,6 +44,9 @@ export interface SignalLogRecord {
   entryPrice: number;
   stopLoss: number;
   takeProfit: number;
+  tp1?: number;
+  tp2?: number;
+  tp3?: number;
   riskRewardRatio: number;
   score: number;
   confidenceScore: number;
@@ -214,6 +217,9 @@ export class SignalLogger {
       entryPrice: signal.entryPrice,
       stopLoss: signal.stopLoss,
       takeProfit: signal.takeProfit,
+      tp1: signal.tp1,
+      tp2: signal.tp2,
+      tp3: signal.tp3,
       riskRewardRatio: Number(signal.riskRewardRatio?.toFixed(2) || 2.0),
       score: signal.score || 0,
       confidenceScore: signal.confidenceScore || 0,
@@ -270,6 +276,51 @@ export class SignalLogger {
     this.syncToFirestore(record);
 
     logger.info(`[SignalLogger] UPDATED SIGNAL LOG STATUS: ${record.symbol} -> ${status}`);
+    return true;
+  }
+
+  /**
+   * Updates the take-profit targets and risk-reward ratio of an existing signal in the Signal Log.
+   */
+  public static async updateTps(
+    signalId: string,
+    tp1: number,
+    tp2: number,
+    tp3: number,
+    takeProfit: number,
+    riskRewardRatio: number
+  ): Promise<boolean> {
+    await this.init();
+
+    let record = this.logs.get(signalId);
+
+    // Search by snapshotId or exact id if not found by key
+    if (!record) {
+      for (const r of this.logs.values()) {
+        if (r.snapshotId === signalId || r.id === signalId || r.id.startsWith(signalId)) {
+          record = r;
+          break;
+        }
+      }
+    }
+
+    if (!record) {
+      logger.warn(`[SignalLogger] Cannot update TPs: signal ${signalId} not found in Signal Log.`);
+      return false;
+    }
+
+    record.tp1 = tp1;
+    record.tp2 = tp2;
+    record.tp3 = tp3;
+    record.takeProfit = takeProfit;
+    record.riskRewardRatio = riskRewardRatio;
+    record.updatedAt = Date.now();
+
+    this.logs.set(record.id, record);
+    this.flushToDisk();
+    this.syncToFirestore(record);
+
+    logger.info(`[SignalLogger] UPDATED SIGNAL LOG TPs for ${record.symbol}: T1: ${tp1}, T2: ${tp2}, T3: ${tp3}`);
     return true;
   }
 

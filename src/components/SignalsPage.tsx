@@ -100,6 +100,9 @@ export function SignalsPage({ health }: SignalsPageProps) {
               entryPrice: sig.entryPrice,
               stopLoss: sig.stopLoss,
               takeProfit: sig.takeProfit,
+              tp1: sig.tp1,
+              tp2: sig.tp2,
+              tp3: sig.tp3,
               riskRewardRatio: sig.riskRewardRatio,
               score: sig.score,
               confidenceScore: sig.confidenceScore,
@@ -146,6 +149,9 @@ export function SignalsPage({ health }: SignalsPageProps) {
           entryPrice: log.entryPrice,
           stopLoss: log.stopLoss,
           takeProfit: log.takeProfit,
+          tp1: log.tp1,
+          tp2: log.tp2,
+          tp3: log.tp3,
           riskRewardRatio: log.riskRewardRatio,
           score: log.score,
           confidenceScore: log.confidenceScore,
@@ -840,15 +846,21 @@ export function SignalsPage({ health }: SignalsPageProps) {
                     </span>
                   </div>
                   <div>
-                    <span className="text-slate-400 text-[10px] block">TAKE PROFIT (Target)</span>
-                    <span className="text-emerald-400 font-bold text-sm">
-                      {signal.takeProfit}
-                      {signal.targetDistance !== undefined && signal.pipPointUnit && (
-                        <span className="text-[10px] ml-1 font-normal opacity-70 text-emerald-300">
-                          (+{signal.targetDistance} {signal.pipPointUnit})
-                        </span>
-                      )}
-                    </span>
+                    <span className="text-slate-400 text-[10px] block mb-0.5">TAKE PROFIT (TP1 / TP2 / TP3)</span>
+                    <div className="flex flex-col gap-0.5 mt-1 bg-emerald-950/20 px-2 py-1 rounded border border-emerald-950/40">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-emerald-500/90">
+                        <span>TP1 (Conservative):</span>
+                        <span>{signal.tp1 || signal.takeProfit}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] font-bold text-emerald-400">
+                        <span>TP2 (Main Target):</span>
+                        <span>{signal.tp2 || signal.takeProfit}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] font-bold text-emerald-300">
+                        <span>TP3 (Extended):</span>
+                        <span>{signal.tp3 || signal.takeProfit}</span>
+                      </div>
+                    </div>
                   </div>
                   <div>
                     <span className="text-slate-400 text-[10px] block">RISK / REWARD (NET)</span>

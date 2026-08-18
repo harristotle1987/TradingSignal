@@ -130,6 +130,9 @@ export interface TradingSignal {
   confidenceScore: number;
   stopLoss: number;
   takeProfit: number;
+  tp1?: number;
+  tp2?: number;
+  tp3?: number;
   riskRewardRatio: number;
   timestamp: number;
   validatedAt: number;
@@ -193,6 +196,9 @@ export interface SignalLogRecord {
   entryPrice: number;
   stopLoss: number;
   takeProfit: number;
+  tp1?: number;
+  tp2?: number;
+  tp3?: number;
   riskRewardRatio: number;
   score: number;
   confidenceScore: number;
@@ -216,6 +222,9 @@ export interface SignalHistoryItem {
   entryPrice?: number;
   stopLoss?: number;
   takeProfit?: number;
+  tp1?: number;
+  tp2?: number;
+  tp3?: number;
   riskRewardRatio?: number;
   score?: number;
   confidenceScore?: number;

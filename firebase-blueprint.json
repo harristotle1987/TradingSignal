@@ -1,0 +1,72 @@
+{
+  "entities": {
+    "PersistedSentSignal": {
+      "title": "PersistedSentSignal",
+      "description": "Represents a generated trading signal with dynamic Multi-TP levels stored in Firestore",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique signal ID" },
+        "snapshotId": { "type": "string" },
+        "symbol": { "type": "string" },
+        "direction": { "type": "string", "enum": ["BUY", "SELL"] },
+        "entryPrice": { "type": "number" },
+        "stopLoss": { "type": "number" },
+        "takeProfit": { "type": "number" },
+        "tp1": { "type": "number" },
+        "tp2": { "type": "number" },
+        "tp3": { "type": "number" },
+        "riskRewardRatio": { "type": "number" },
+        "score": { "type": "number" },
+        "rankTier": { "type": "string", "enum": ["BEST_TRADE", "SECOND_BEST", "SUGGESTION"] },
+        "strategy": { "type": "string" },
+        "timeframe": { "type": "string" },
+        "dataSource": { "type": "string" },
+        "status": { "type": "string", "enum": ["ACTIVE", "TP1_HIT", "TP2_HIT", "TP3_HIT", "SL_HIT", "EXPIRED", "COMPLETED", "SUPERSEDED"] },
+        "timestamp": { "type": "number" },
+        "notificationSent": { "type": "boolean" },
+        "notificationTimestamp": { "type": "number" },
+        "date": { "type": "string" },
+        "estimatedWinRate": { "type": "number" },
+        "aiAssessment": { "type": "string" }
+      },
+      "required": ["id", "symbol", "direction", "entryPrice", "stopLoss", "takeProfit", "status", "timestamp"]
+    },
+    "SignalOutcomeRecord": {
+      "title": "SignalOutcomeRecord",
+      "description": "Represents the historical tracking record of a signal's price outcome progression",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Matches the unique signal ID" },
+        "symbol": { "type": "string" },
+        "direction": { "type": "string", "enum": ["BUY", "SELL"] },
+        "provider": { "type": "string" },
+        "entryPrice": { "type": "number" },
+        "stopLoss": { "type": "number" },
+        "takeProfit": { "type": "number" },
+        "tp1": { "type": "number" },
+        "tp2": { "type": "number" },
+        "tp3": { "type": "number" },
+        "tp1HitTimestamp": { "type": "number" },
+        "tp2HitTimestamp": { "type": "number" },
+        "tp3HitTimestamp": { "type": "number" },
+        "slHitTimestamp": { "type": "number" },
+        "expiredTimestamp": { "type": "number" },
+        "finalOutcome": { "type": "string", "enum": ["TP1_HIT", "TP2_HIT", "TP3_HIT", "SL_HIT", "EXPIRED"] },
+        "status": { "type": "string", "enum": ["ACTIVE", "TP1_HIT", "TP2_HIT", "TP3_HIT", "SL_HIT", "EXPIRED"] },
+        "timestamp": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "symbol", "direction", "provider", "entryPrice", "stopLoss", "tp1", "tp2", "tp3", "status", "timestamp", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/scanner_sent_signals/{signalId}": {
+      "schema": "PersistedSentSignal",
+      "description": "Durable record of generated signals"
+    },
+    "/signal_outcome_logs/{signalId}": {
+      "schema": "SignalOutcomeRecord",
+      "description": "Durable outcome history log of signals"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /scanner_sent_signals/{signalId} {
+      allow read: if isSignedIn();
+      allow write: if false; // Only server-admin writes allowed
+    }
+
+    match /signal_outcome_logs/{signalId} {
+      allow read: if isSignedIn();
+      allow write: if false; // Only server-admin writes allowed
+    }
+  }
+}

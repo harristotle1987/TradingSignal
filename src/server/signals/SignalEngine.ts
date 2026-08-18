@@ -53,7 +53,7 @@ const STOCK_UNIVERSE = [
 ];
 
 export class SignalEngine {
-  private activeSignals = new Map<string, TradingSignal>();
+  public activeSignals = new Map<string, TradingSignal>();
   private readonly DUPLICATE_COOLDOWN_MS = 8 * 60 * 1000; // 8 minutes duplicate cooldown
 
   /**
@@ -511,6 +511,9 @@ export class SignalEngine {
           entryPrice: baselinePrice,
           stopLoss: scoring.stopLoss,
           takeProfit: scoring.takeProfit,
+          tp1: scoring.tp1,
+          tp2: scoring.tp2,
+          tp3: scoring.tp3,
           riskRewardRatio: scoring.riskRewardRatio,
           score: scoring.score,
           candlesMap,
@@ -678,6 +681,29 @@ export class SignalEngine {
         const targetDistance = Number((Math.abs(finalTP - finalEntry) * multiplier).toFixed(1));
         const stopDistance = Number((Math.abs(finalEntry - finalSL) * multiplier).toFixed(1));
 
+        const priceShift = finalEntry - baselinePrice;
+        const rawTp1 = scoring.tp1 !== undefined ? scoring.tp1 + priceShift : finalTP;
+        const rawTp2 = scoring.tp2 !== undefined ? scoring.tp2 + priceShift : finalTP;
+        const rawTp3 = scoring.tp3 !== undefined ? scoring.tp3 + priceShift : finalTP;
+
+        const atr = scoring.technicalMetrics?.atr || 0;
+        const tpEnforced = SignalValidator.validateAndEnforceTps(
+          scoring.direction,
+          finalEntry,
+          finalSL,
+          rawTp1,
+          rawTp2,
+          rawTp3,
+          atr,
+          precision
+        );
+
+        const safeTp1 = tpEnforced.tp1;
+        const safeTp2 = tpEnforced.tp2;
+        const safeTp3 = tpEnforced.tp3;
+        const safeTakeProfit = tpEnforced.takeProfit;
+        const safeRR = tpEnforced.riskRewardRatio;
+
         const signal: TradingSignal = {
           id: `sig_${now}_${Math.random().toString(36).substring(2, 7)}`,
           snapshotId: validation.snapshotId,
@@ -691,8 +717,11 @@ export class SignalEngine {
           estimatedWinRate: winRate,
           isAiValidated: aiResult.isAiValidated,
           stopLoss: finalSL,
-          takeProfit: finalTP,
-          riskRewardRatio: finalRR,
+          takeProfit: safeTakeProfit,
+          tp1: safeTp1,
+          tp2: safeTp2,
+          tp3: safeTp3,
+          riskRewardRatio: safeRR,
           targetDistance,
           stopDistance,
           pipPointUnit: scoring.pipPointUnit,
@@ -859,6 +888,29 @@ export class SignalEngine {
         for (const s of persisted) {
           // If active and not expired yet (using same 2-hour threshold)
           if (s.status === 'ACTIVE' && (now - s.timestamp <= 2 * 60 * 60 * 1000)) {
+            // Enforce that we do NOT load any signal with duplicate TPs
+            const tp1 = s.tp1;
+            const tp2 = s.tp2;
+            const tp3 = s.tp3;
+            if (tp1 !== undefined && tp2 !== undefined && tp3 !== undefined) {
+              if (tp1 === tp2 || tp2 === tp3 || tp1 === tp3) {
+                logger.warn(`[SignalEngine] Restored signal ${s.symbol} has duplicate TPs; excluding from active list until repaired.`, { id: s.id, tp1, tp2, tp3 });
+                continue;
+              }
+              // Enforce correct geometry
+              if (s.direction === 'BUY' && (s.entryPrice >= tp1 || tp1 >= tp2 || tp2 >= tp3)) {
+                logger.warn(`[SignalEngine] Restored BUY signal ${s.symbol} has invalid geometry; excluding from active list until repaired.`, { entry: s.entryPrice, tp1, tp2, tp3 });
+                continue;
+              }
+              if (s.direction === 'SELL' && (s.entryPrice <= tp1 || tp1 <= tp2 || tp2 <= tp3)) {
+                logger.warn(`[SignalEngine] Restored SELL signal ${s.symbol} has invalid geometry; excluding from active list until repaired.`, { entry: s.entryPrice, tp1, tp2, tp3 });
+                continue;
+              }
+            } else {
+              logger.warn(`[SignalEngine] Restored signal ${s.symbol} is missing TPs; excluding from active list until repaired.`);
+              continue;
+            }
+
             const sig: TradingSignal = {
               id: s.id,
               snapshotId: s.snapshotId,
@@ -867,6 +919,9 @@ export class SignalEngine {
               entryPrice: s.entryPrice,
               stopLoss: s.stopLoss,
               takeProfit: s.takeProfit,
+              tp1: s.tp1,
+              tp2: s.tp2,
+              tp3: s.tp3,
               riskRewardRatio: s.riskRewardRatio,
               score: s.score,
               confidenceScore: s.score,

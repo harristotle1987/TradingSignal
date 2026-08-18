@@ -7,6 +7,9 @@ import { signalEngine } from '../signals/SignalEngine.js';
 import { hourlyScanner } from '../signals/HourlyScanner.js';
 import { SignalLogger } from '../signals/SignalLogger.js';
 import { SignalAuditStore } from '../signals/SignalAuditStore.js';
+import { SignalOutcomeLogger } from '../signals/SignalOutcomeLogger.js';
+import { SignalLifecycleManager } from '../signals/SignalLifecycleManager.js';
+import { OutcomeTrackerTester } from '../signals/OutcomeTrackerTester.js';
 import { StrategyPerformanceTracker, PERFORMANCE_LEGAL_DISCLAIMER } from '../signals/StrategyPerformanceTracker.js';
 import { WalkForwardEngine } from '../signals/WalkForwardEngine.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
@@ -200,6 +203,78 @@ router.get('/signals/audits', async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       message: 'Failed to retrieve signal audit explanations',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * GET /api/signals/outcomes
+ * Retrieves persistent Signal Outcome logs containing multi-level TP/SL hits and final statuses.
+ */
+router.get('/signals/outcomes', async (req: Request, res: Response) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 100;
+    const outcomes = await SignalOutcomeLogger.getOutcomeLogs(limit);
+    res.status(200).json({
+      success: true,
+      outcomes,
+      count: outcomes.length,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve signal outcome logs',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * DELETE /api/signals/outcomes
+ * Clears persistent Signal Outcome logs.
+ */
+router.delete('/signals/outcomes', async (_req: Request, res: Response) => {
+  try {
+    await SignalOutcomeLogger.clearLogs();
+    res.status(200).json({
+      success: true,
+      message: 'Signal outcome logs cleared successfully',
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to clear signal outcome logs',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/monitor
+ * Triggers immediate, on-demand evaluation of active signals against live prices and candle progression.
+ */
+router.post('/signals/monitor', async (_req: Request, res: Response) => {
+  try {
+    const result = await SignalLifecycleManager.evaluateActiveSignals();
+    res.status(200).json({
+      success: true,
+      message: 'Active signals outcome tracking evaluation executed successfully',
+      result,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Active signals outcome evaluation failed',
       error: msg,
       timestamp: Date.now(),
     });
@@ -416,6 +491,31 @@ router.post('/signals/walk-forward', async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       message: 'Walk-forward evaluation error',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/test-outcome
+ * Executes the complete integration test suite for automated Signal Outcome Tracking.
+ */
+router.post('/signals/test-outcome', async (_req: Request, res: Response) => {
+  try {
+    const report = await OutcomeTrackerTester.runSuite();
+    const httpCode = report.success ? 200 : 500;
+    res.status(httpCode).json({
+      success: report.success,
+      message: report.success ? 'All outcome tracking tests passed successfully' : 'Some outcome tracking tests failed',
+      report,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to run outcome tracking test suite',
       error: msg,
       timestamp: Date.now(),
     });

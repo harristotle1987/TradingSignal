@@ -379,9 +379,16 @@ export function AssetClassScanner({
                     <span className="text-[10px] text-slate-400 block uppercase">Stop Loss</span>
                     <span className="text-base font-bold text-rose-400 mt-0.5 block">{best.stopLoss ? best.stopLoss.toFixed(bestPrec) : '--'}</span>
                   </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
-                    <span className="text-[10px] text-slate-400 block uppercase">Take Profit</span>
-                    <span className="text-base font-bold text-emerald-400 mt-0.5 block">{best.takeProfit ? best.takeProfit.toFixed(bestPrec) : '--'}</span>
+                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 flex flex-col justify-between">
+                    <div>
+                      <span className="text-[10px] text-slate-400 block uppercase">Take Profit</span>
+                      <span className="text-base font-bold text-emerald-400 mt-0.5 block">{best.takeProfit ? best.takeProfit.toFixed(bestPrec) : '--'}</span>
+                    </div>
+                    {best.tp1 !== undefined && (
+                      <div className="text-[9px] text-slate-500 mt-1 border-t border-slate-800/80 pt-1 leading-normal">
+                        T1: {best.tp1.toFixed(bestPrec)} | T3: {best.tp3?.toFixed(bestPrec)}
+                      </div>
+                    )}
                   </div>
                   <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
                     <span className="text-[10px] text-slate-400 block uppercase">R:R Ratio</span>
@@ -457,9 +464,16 @@ export function AssetClassScanner({
                     <span className="text-[10px] text-slate-400 block uppercase">Stop Loss</span>
                     <span className="text-base font-bold text-rose-400 mt-0.5 block">{second.stopLoss ? second.stopLoss.toFixed(secondPrec) : '--'}</span>
                   </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
-                    <span className="text-[10px] text-slate-400 block uppercase">Take Profit</span>
-                    <span className="text-base font-bold text-emerald-400 mt-0.5 block">{second.takeProfit ? second.takeProfit.toFixed(secondPrec) : '--'}</span>
+                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 flex flex-col justify-between">
+                    <div>
+                      <span className="text-[10px] text-slate-400 block uppercase">Take Profit</span>
+                      <span className="text-base font-bold text-emerald-400 mt-0.5 block">{second.takeProfit ? second.takeProfit.toFixed(secondPrec) : '--'}</span>
+                    </div>
+                    {second.tp1 !== undefined && (
+                      <div className="text-[9px] text-slate-500 mt-1 border-t border-slate-800/80 pt-1 leading-normal">
+                        T1: {second.tp1.toFixed(secondPrec)} | T3: {second.tp3?.toFixed(secondPrec)}
+                      </div>
+                    )}
                   </div>
                   <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
                     <span className="text-[10px] text-slate-400 block uppercase">R:R Ratio</span>
@@ -509,6 +523,13 @@ export function AssetClassScanner({
                           <div>SL: <strong className="text-rose-400">{sug.stopLoss ? sug.stopLoss.toFixed(sugPrec) : '--'}</strong></div>
                           <div>TP: <strong className="text-emerald-400">{sug.takeProfit ? sug.takeProfit.toFixed(sugPrec) : '--'}</strong></div>
                         </div>
+                        {sug.tp1 !== undefined && (
+                          <div className="text-[10px] text-slate-500 border-t border-slate-900 pt-1 mt-0.5 flex justify-between">
+                            <span>T1: {sug.tp1.toFixed(sugPrec)}</span>
+                            <span>T2: {sug.tp2?.toFixed(sugPrec)}</span>
+                            <span>T3: {sug.tp3?.toFixed(sugPrec)}</span>
+                          </div>
+                        )}
                       </div>
                     );
                   })}

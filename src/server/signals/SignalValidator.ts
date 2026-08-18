@@ -22,6 +22,9 @@ export interface ValidationContext {
   entryPrice: number;
   stopLoss: number;
   takeProfit: number;
+  tp1?: number;
+  tp2?: number;
+  tp3?: number;
   riskRewardRatio: number;
   score: number;
   candlesMap: Record<string, NormalizedCandle[]>;
@@ -115,7 +118,19 @@ export class SignalValidator {
     }
 
     // 6. SL / TP Sanity, ATR & Geometry Verification (INVALID_SL_TP)
-    const slTpCheck = this.verifySlTpSanity(ctx.symbol, ctx.direction, livePrice, ctx.stopLoss, ctx.takeProfit, ctx.entryPrice, ctx.candlesMap, ctx.score);
+    const slTpCheck = this.verifySlTpSanity(
+      ctx.symbol,
+      ctx.direction,
+      livePrice,
+      ctx.stopLoss,
+      ctx.takeProfit,
+      ctx.entryPrice,
+      ctx.candlesMap,
+      ctx.score,
+      ctx.tp1,
+      ctx.tp2,
+      ctx.tp3
+    );
     if (!slTpCheck.isValid) {
       return {
         isValid: false,
@@ -262,7 +277,10 @@ export class SignalValidator {
     takeProfit: number,
     originalEntry: number,
     candlesMap: Record<string, NormalizedCandle[]>,
-    score: number = 80
+    score: number = 80,
+    tp1?: number,
+    tp2?: number,
+    tp3?: number
   ): { isValid: boolean; message: string; adjustedStopLoss?: number; adjustedTakeProfit?: number; adjustedNetRR?: number } {
     const precision = livePrice < 10 ? 5 : 2;
 
@@ -270,24 +288,51 @@ export class SignalValidator {
     const slDist = Math.abs(originalEntry - stopLoss);
     const tpDist = Math.abs(takeProfit - originalEntry);
 
+    const tp1Dist = tp1 !== undefined ? Math.abs(tp1 - originalEntry) : undefined;
+    const tp2Dist = tp2 !== undefined ? Math.abs(tp2 - originalEntry) : undefined;
+    const tp3Dist = tp3 !== undefined ? Math.abs(tp3 - originalEntry) : undefined;
+
     let adjustedSL: number;
     let adjustedTP: number;
+    let adjustedTp1: number | undefined;
+    let adjustedTp2: number | undefined;
+    let adjustedTp3: number | undefined;
 
     if (direction === 'BUY') {
       adjustedSL = Number((livePrice - slDist).toFixed(precision));
       adjustedTP = Number((livePrice + tpDist).toFixed(precision));
+      adjustedTp1 = tp1Dist !== undefined ? Number((livePrice + tp1Dist).toFixed(precision)) : undefined;
+      adjustedTp2 = tp2Dist !== undefined ? Number((livePrice + tp2Dist).toFixed(precision)) : undefined;
+      adjustedTp3 = tp3Dist !== undefined ? Number((livePrice + tp3Dist).toFixed(precision)) : undefined;
     } else {
       adjustedSL = Number((livePrice + slDist).toFixed(precision));
       adjustedTP = Number((livePrice - tpDist).toFixed(precision));
+      adjustedTp1 = tp1Dist !== undefined ? Number((livePrice - tp1Dist).toFixed(precision)) : undefined;
+      adjustedTp2 = tp2Dist !== undefined ? Number((livePrice - tp2Dist).toFixed(precision)) : undefined;
+      adjustedTp3 = tp3Dist !== undefined ? Number((livePrice - tp3Dist).toFixed(precision)) : undefined;
     }
 
-    // 1. Geometric Side Validation
+    // 1. Geometric Side & Ordering Validation
     if (direction === 'BUY') {
       if (adjustedSL >= livePrice) {
         return { isValid: false, message: `BUY signal stop-loss (${adjustedSL}) must be strictly below entry price (${livePrice})` };
       }
       if (adjustedTP <= livePrice) {
         return { isValid: false, message: `BUY signal take-profit (${adjustedTP}) must be strictly above entry price (${livePrice})` };
+      }
+      if (adjustedTp1 !== undefined && adjustedTp2 !== undefined && adjustedTp3 !== undefined) {
+        if (adjustedTp1 <= livePrice) {
+          return { isValid: false, message: `BUY signal TP1 (${adjustedTp1}) must be strictly above entry price (${livePrice})` };
+        }
+        if (adjustedTp2 <= adjustedTp1) {
+          return { isValid: false, message: `BUY signal TP2 (${adjustedTp2}) must be strictly above TP1 (${adjustedTp1})` };
+        }
+        if (adjustedTp3 <= adjustedTp2) {
+          return { isValid: false, message: `BUY signal TP3 (${adjustedTp3}) must be strictly above TP2 (${adjustedTp2})` };
+        }
+        if (adjustedTp1 === adjustedTp2 || adjustedTp2 === adjustedTp3 || adjustedTp1 === adjustedTp3) {
+          return { isValid: false, message: `Take-profit targets must be distinct: TP1 (${adjustedTp1}), TP2 (${adjustedTp2}), TP3 (${adjustedTp3})` };
+        }
       }
     } else {
       if (adjustedSL <= livePrice) {
@@ -296,11 +341,30 @@ export class SignalValidator {
       if (adjustedTP >= livePrice) {
         return { isValid: false, message: `SELL signal take-profit (${adjustedTP}) must be strictly below entry price (${livePrice})` };
       }
+      if (adjustedTp1 !== undefined && adjustedTp2 !== undefined && adjustedTp3 !== undefined) {
+        if (adjustedTp1 >= livePrice) {
+          return { isValid: false, message: `SELL signal TP1 (${adjustedTp1}) must be strictly below entry price (${livePrice})` };
+        }
+        if (adjustedTp2 >= adjustedTp1) {
+          return { isValid: false, message: `SELL signal TP2 (${adjustedTp2}) must be strictly below TP1 (${adjustedTp1})` };
+        }
+        if (adjustedTp3 >= adjustedTp2) {
+          return { isValid: false, message: `SELL signal TP3 (${adjustedTp3}) must be strictly below TP2 (${adjustedTp2})` };
+        }
+        if (adjustedTp1 === adjustedTp2 || adjustedTp2 === adjustedTp3 || adjustedTp1 === adjustedTp3) {
+          return { isValid: false, message: `Take-profit targets must be distinct: TP1 (${adjustedTp1}), TP2 (${adjustedTp2}), TP3 (${adjustedTp3})` };
+        }
+      }
     }
 
     // 2. Minimum Practical Distance Hurdles based on Volatility (ATR)
     const risk = Math.abs(livePrice - adjustedSL);
-    const reward = Math.abs(adjustedTP - livePrice);
+    
+    // Calculate reward based on actual TP structure (average of the three targets) if available, otherwise fallback to adjustedTP
+    let reward = Math.abs(adjustedTP - livePrice);
+    if (adjustedTp1 !== undefined && adjustedTp2 !== undefined && adjustedTp3 !== undefined) {
+      reward = (Math.abs(adjustedTp1 - livePrice) + Math.abs(adjustedTp2 - livePrice) + Math.abs(adjustedTp3 - livePrice)) / 3;
+    }
 
     if (risk <= 0 || reward <= 0) {
       return { isValid: false, message: 'Stop-loss or take-profit distance is zero/near-zero' };
@@ -328,11 +392,37 @@ export class SignalValidator {
       };
     }
 
-    if (reward < minSafeTargetDistance) {
-      return {
-        isValid: false,
-        message: `Expected take-profit distance (${reward.toFixed(precision)}) is below minimum volatility profit expansion hurdle (${minSafeTargetDistance.toFixed(precision)}, derived as 1.80 * ATR of ${atr.toFixed(precision)})`,
-      };
+    // Verify minimum tradeable distance for each target if present
+    if (adjustedTp1 !== undefined && adjustedTp2 !== undefined && adjustedTp3 !== undefined) {
+      const tp1Dist = Math.abs(adjustedTp1 - livePrice);
+      const tp2Dist = Math.abs(adjustedTp2 - livePrice);
+      const tp3Dist = Math.abs(adjustedTp3 - livePrice);
+
+      if (tp1Dist < minSafeTargetDistance * 0.5) {
+        return {
+          isValid: false,
+          message: `Expected TP1 distance (${tp1Dist.toFixed(precision)}) is below minimum conservative target distance (${(minSafeTargetDistance * 0.5).toFixed(precision)}, derived as 0.5 * 1.80 * ATR)`,
+        };
+      }
+      if (tp2Dist < minSafeTargetDistance) {
+        return {
+          isValid: false,
+          message: `Expected TP2 distance (${tp2Dist.toFixed(precision)}) is below minimum primary target distance (${minSafeTargetDistance.toFixed(precision)}, derived as 1.80 * ATR)`,
+        };
+      }
+      if (tp3Dist < minSafeTargetDistance * 1.5) {
+        return {
+          isValid: false,
+          message: `Expected TP3 distance (${tp3Dist.toFixed(precision)}) is below minimum extended target distance (${(minSafeTargetDistance * 1.5).toFixed(precision)}, derived as 1.5 * 1.80 * ATR)`,
+        };
+      }
+    } else {
+      if (reward < minSafeTargetDistance) {
+        return {
+          isValid: false,
+          message: `Expected take-profit distance (${reward.toFixed(precision)}) is below minimum volatility profit expansion hurdle (${minSafeTargetDistance.toFixed(precision)}, derived as 1.80 * ATR of ${atr.toFixed(precision)})`,
+        };
+      }
     }
 
     // 3. Execution Cost & Friction Hurdle Verification
@@ -469,6 +559,146 @@ export class SignalValidator {
       message: 'OK',
       netRR,
       totalRoundTripFriction,
+    };
+  }
+
+  /**
+   * Validates and enforces distinct, properly ordered, and compliant TP targets.
+   * If any check fails, it recalculates compliant values.
+   */
+  public static validateAndEnforceTps(
+    direction: SignalDirection,
+    entryPrice: number,
+    stopLoss: number,
+    tp1: number,
+    tp2: number,
+    tp3: number,
+    atr: number,
+    precision: number
+  ): { tp1: number; tp2: number; tp3: number; takeProfit: number; riskRewardRatio: number; wasRecalculated: boolean } {
+    const minPrecisionStep = Math.pow(10, -precision);
+    const cleanAtr = atr > 0 ? atr : entryPrice * 0.01;
+    const minSafeTargetDistance = 1.80 * cleanAtr;
+
+    // 1. Check distinctness
+    const isDistinct = tp1 !== tp2 && tp2 !== tp3 && tp1 !== tp3;
+
+    // 2. Check direction ordering
+    let isOrdered = false;
+    if (direction === 'BUY') {
+      isOrdered = entryPrice < tp1 && tp1 < tp2 && tp2 < tp3;
+    } else {
+      isOrdered = entryPrice > tp1 && tp1 > tp2 && tp2 > tp3;
+    }
+
+    // 3. Check distance
+    const tp1Dist = Math.abs(tp1 - entryPrice);
+    const tp2Dist = Math.abs(tp2 - entryPrice);
+    const tp3Dist = Math.abs(tp3 - entryPrice);
+    const satisfiesDistance = tp1Dist >= (minSafeTargetDistance * 0.5) &&
+                              tp2Dist >= minSafeTargetDistance &&
+                              tp3Dist >= (minSafeTargetDistance * 1.5);
+
+    // 4. Check risk/reward
+    const risk = Math.abs(entryPrice - stopLoss);
+    const averageReward = (tp1Dist + tp2Dist + tp3Dist) / 3;
+    const rr = risk > 0 ? averageReward / risk : 0;
+    const satisfiesRR = rr >= 2.0;
+
+    // If valid, return original values
+    if (isDistinct && isOrdered && satisfiesDistance && satisfiesRR) {
+      return {
+        tp1,
+        tp2,
+        tp3,
+        takeProfit: tp2,
+        riskRewardRatio: Number(rr.toFixed(2)),
+        wasRecalculated: false
+      };
+    }
+
+    // Otherwise, RECALCULATE perfectly
+    const spacingStep = cleanAtr * 0.4;
+    const cleanSpacingStep = Math.max(spacingStep, 10 * minPrecisionStep);
+
+    let finalTp1 = tp1;
+    let finalTp2 = tp2;
+    let finalTp3 = tp3;
+
+    if (direction === 'BUY') {
+      // Setup minimum baseline
+      finalTp1 = entryPrice + minSafeTargetDistance * 0.5;
+      finalTp2 = finalTp1 + cleanSpacingStep;
+      finalTp3 = finalTp2 + cleanSpacingStep;
+
+      // Ensure minimum tradeable distance
+      if (finalTp1 - entryPrice < minSafeTargetDistance * 0.5) {
+        finalTp1 = entryPrice + minSafeTargetDistance * 0.5;
+      }
+      if (finalTp2 - entryPrice < minSafeTargetDistance) {
+        finalTp2 = entryPrice + minSafeTargetDistance;
+      }
+      if (finalTp2 < finalTp1 + cleanSpacingStep) {
+        finalTp2 = finalTp1 + cleanSpacingStep;
+      }
+      if (finalTp3 - entryPrice < minSafeTargetDistance * 1.5) {
+        finalTp3 = entryPrice + minSafeTargetDistance * 1.5;
+      }
+      if (finalTp3 < finalTp2 + cleanSpacingStep) {
+        finalTp3 = finalTp2 + cleanSpacingStep;
+      }
+    } else {
+      // Setup minimum baseline
+      finalTp1 = entryPrice - minSafeTargetDistance * 0.5;
+      finalTp2 = finalTp1 - cleanSpacingStep;
+      finalTp3 = finalTp2 - cleanSpacingStep;
+
+      // Ensure minimum tradeable distance
+      if (entryPrice - finalTp1 < minSafeTargetDistance * 0.5) {
+        finalTp1 = entryPrice - minSafeTargetDistance * 0.5;
+      }
+      if (entryPrice - finalTp2 < minSafeTargetDistance) {
+        finalTp2 = entryPrice - minSafeTargetDistance;
+      }
+      if (finalTp2 > finalTp1 - cleanSpacingStep) {
+        finalTp2 = finalTp1 - cleanSpacingStep;
+      }
+      if (entryPrice - finalTp3 < minSafeTargetDistance * 1.5) {
+        finalTp3 = entryPrice - minSafeTargetDistance * 1.5;
+      }
+      if (finalTp3 > finalTp2 - cleanSpacingStep) {
+        finalTp3 = finalTp2 - cleanSpacingStep;
+      }
+    }
+
+    // Recalculate Risk/Reward and scale if needed to meet RR >= 2.0
+    const currentRisk = Math.abs(entryPrice - stopLoss);
+    let currentReward = (Math.abs(finalTp1 - entryPrice) + Math.abs(finalTp2 - entryPrice) + Math.abs(finalTp3 - entryPrice)) / 3;
+    let currentRR = currentRisk > 0 ? currentReward / currentRisk : 0;
+
+    if (currentRR < 2.0 && currentRisk > 0) {
+      const targetReward = currentRisk * 2.1; // scale to 2.1 to have comfortable margin
+      const scaleMultiplier = targetReward / currentReward;
+      if (direction === 'BUY') {
+        finalTp1 = entryPrice + (finalTp1 - entryPrice) * scaleMultiplier;
+        finalTp2 = entryPrice + (finalTp2 - entryPrice) * scaleMultiplier;
+        finalTp3 = entryPrice + (finalTp3 - entryPrice) * scaleMultiplier;
+      } else {
+        finalTp1 = entryPrice - (entryPrice - finalTp1) * scaleMultiplier;
+        finalTp2 = entryPrice - (entryPrice - finalTp2) * scaleMultiplier;
+        finalTp3 = entryPrice - (entryPrice - finalTp3) * scaleMultiplier;
+      }
+      currentReward = (Math.abs(finalTp1 - entryPrice) + Math.abs(finalTp2 - entryPrice) + Math.abs(finalTp3 - entryPrice)) / 3;
+      currentRR = currentRisk > 0 ? currentReward / currentRisk : 0;
+    }
+
+    return {
+      tp1: Number(finalTp1.toFixed(precision)),
+      tp2: Number(finalTp2.toFixed(precision)),
+      tp3: Number(finalTp3.toFixed(precision)),
+      takeProfit: Number(finalTp2.toFixed(precision)),
+      riskRewardRatio: Number(currentRR.toFixed(2)),
+      wasRecalculated: true
     };
   }
 }

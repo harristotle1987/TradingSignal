@@ -270,8 +270,11 @@ export function SignalHistoryPanel({
                           Entry: <strong className="text-white">{item.entryPrice.toFixed(precision)}</strong>
                         </span>
                         {item.takeProfit !== undefined && (
-                          <span className="text-emerald-400">
-                            TP: {item.takeProfit.toFixed(precision)}
+                          <span className="text-emerald-400 flex items-center gap-1.5 flex-wrap">
+                            <span>TPs:</span>
+                            <span className="bg-emerald-950/40 text-emerald-500 px-1 rounded font-medium" title="TP1 (Conservative)">T1:{(item.tp1 ?? item.takeProfit).toFixed(precision)}</span>
+                            <span className="bg-emerald-950/40 text-emerald-400 px-1 rounded font-bold" title="TP2 (Main Target)">T2:{(item.tp2 ?? item.takeProfit).toFixed(precision)}</span>
+                            <span className="bg-emerald-950/40 text-emerald-300 px-1 rounded font-medium" title="TP3 (Extended)">T3:{(item.tp3 ?? item.takeProfit).toFixed(precision)}</span>
                           </span>
                         )}
                         {item.stopLoss !== undefined && (

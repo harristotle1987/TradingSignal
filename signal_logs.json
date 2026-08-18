@@ -1,0 +1,35 @@
+[
+  {
+    "symbol": "INJUSDT",
+    "snapshotId": "snap_1787008003492_INJUSDT_3gfn8",
+    "aiAssessment": "NVIDIA AI Assessment: This setup appears to be a high-confidence, well-confluent short opportunity with a favorable risk-reward ratio, supported by multiple technical indicators and a strong downtrend.",
+    "isBestTrade": true,
+    "riskRewardRatio": 2.16,
+    "takeProfit": 3.8548,
+    "marketType": "Crypto",
+    "entryPrice": 4.054,
+    "score": 88,
+    "timeframe": "Multi-TF Realism Setup",
+    "confidenceScore": 88,
+    "provider": "Bitget Live Feed with Live Price & Sentiment Cross-Validation",
+    "stopLoss": 4.1337,
+    "marketRegime": "TREND",
+    "id": "sig_1787007981546_9srkv",
+    "confluenceReasons": [
+      "Market Regime: TRENDING — TRENDING (DOWNTREND): Bearish hierarchical EMA stack & lower high/low structure",
+      "Strategy Confluence: 5/6 backend strategies aligned for SELL",
+      "Timeframe Hierarchy: 4/4 evaluated timeframes (1h, 4h, 15m, 5m) confirm direction",
+      "Trend Following: Hierarchical EMA 9 < 21 < 50 stack expansion with negative slope across 15m, 1H and higher timeframes",
+      "1H Zero-Lag MACD confirms underlying downward momentum",
+      "Genuine Breakdown: Price (4.054) breaking 1H support with volume and HTF trend expansion",
+      "Order Flow Confirmation: Dominant selling pressure (62.9%) and upper wick absorption confirming setup",
+      "Optimal volatility structure confirmed (ATR ratio: 0.91x within healthy executable bounds)"
+    ],
+    "isTopTrade": true,
+    "direction": "SELL",
+    "status": "ACTIVE",
+    "timestamp": 1787008003492,
+    "strategy": "[Automated BEST TRADE] [BEST TRADE] Primary High-Confluence Setup (Score 85+)",
+    "updatedAt": 1787008032426
+  }
+]

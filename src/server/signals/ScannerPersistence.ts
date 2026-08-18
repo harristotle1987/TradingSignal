@@ -33,13 +33,16 @@ export interface PersistedSentSignal {
   entryPrice: number;
   stopLoss: number;
   takeProfit: number;
+  tp1?: number;
+  tp2?: number;
+  tp3?: number;
   riskRewardRatio: number;
   score: number;
   rankTier: RankTier;
   strategy: string;
   timeframe: string;
   dataSource: string;
-  status: 'ACTIVE' | 'EXPIRED' | 'COMPLETED' | 'SUPERSEDED';
+  status: 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'EXPIRED' | 'COMPLETED' | 'SUPERSEDED';
   timestamp: number;
   notificationSent: boolean;
   notificationTimestamp: number;
@@ -103,7 +106,7 @@ export class ScannerPersistence {
     lockAcquiredAt: 0,
   };
 
-  private static localData: ScannerPersistenceData = {
+  public static localData: ScannerPersistenceData = {
     capState: {
       date: new Date().toISOString().split('T')[0],
       dailySignalCount: 0,
@@ -347,6 +350,9 @@ export class ScannerPersistence {
       entryPrice: signal.entryPrice,
       stopLoss: signal.stopLoss,
       takeProfit: signal.takeProfit,
+      tp1: signal.tp1,
+      tp2: signal.tp2,
+      tp3: signal.tp3,
       riskRewardRatio: signal.riskRewardRatio,
       score: signal.score || signal.confidenceScore || 80,
       rankTier: signal.rankTier || (signal.isBestTrade ? 'BEST_TRADE' : signal.isSecondBest ? 'SECOND_BEST' : 'SUGGESTION'),
@@ -427,15 +433,22 @@ export class ScannerPersistence {
     const today = new Date().toISOString().split('T')[0];
     const now = Date.now();
 
-    const newItems: PersistedRejectedCandidate[] = candidates.map((c) => ({
-      id: `rej_${now}_${Math.random().toString(36).substring(2, 7)}`,
-      symbol: c.symbol,
-      direction: c.direction,
-      score: c.score,
-      reason: c.reason,
-      timestamp: c.timestamp || now,
-      date: today,
-    }));
+    const newItems: PersistedRejectedCandidate[] = candidates.map((c) => {
+      const item: PersistedRejectedCandidate = {
+        id: `rej_${now}_${Math.random().toString(36).substring(2, 7)}`,
+        symbol: c.symbol,
+        reason: c.reason,
+        timestamp: c.timestamp || now,
+        date: today,
+      };
+      if (c.direction !== undefined) {
+        item.direction = c.direction;
+      }
+      if (c.score !== undefined) {
+        item.score = c.score;
+      }
+      return item;
+    });
 
     this.localData.rejectedCandidates.push(...newItems);
     this.saveLocalData();
@@ -557,9 +570,9 @@ export class ScannerPersistence {
   }
 
   /**
-   * Updates status of an existing signal setup (e.g. SUPERSEDED, EXPIRED).
+   * Updates status of an existing signal setup (e.g. SUPERSEDED, EXPIRED, progressive hits).
    */
-  static async updateSignalStatus(signalId: string, status: 'ACTIVE' | 'EXPIRED' | 'COMPLETED' | 'SUPERSEDED'): Promise<void> {
+  static async updateSignalStatus(signalId: string, status: PersistedSentSignal['status']): Promise<void> {
     this.init();
     const target = this.localData.sentSignals.find((s) => s.id === signalId);
     if (target) {
@@ -575,6 +588,136 @@ export class ScannerPersistence {
         logger.warn('[ScannerPersistence] Firestore updateSignalStatus failed:', { error: String(err) });
       }
     }
+  }
+
+  /**
+   * Updates take-profit targets of an existing signal setup.
+   */
+  static async updateSignalTps(
+    signalId: string,
+    signalIdOrSnapshotId: string,
+    tp1: number,
+    tp2: number,
+    tp3: number,
+    takeProfit: number,
+    riskRewardRatio: number
+  ): Promise<void> {
+    this.init();
+    const target = this.localData.sentSignals.find((s) => s.id === signalIdOrSnapshotId || s.snapshotId === signalIdOrSnapshotId);
+    if (target) {
+      target.tp1 = tp1;
+      target.tp2 = tp2;
+      target.tp3 = tp3;
+      target.takeProfit = takeProfit;
+      target.riskRewardRatio = riskRewardRatio;
+      this.saveLocalData();
+    }
+
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      try {
+        await firestore.collection(FIRESTORE_SIGNALS_COL).doc(signalIdOrSnapshotId).update({
+          tp1,
+          tp2,
+          tp3,
+          takeProfit,
+          riskRewardRatio
+        });
+      } catch (err) {
+        // Try querying by snapshotId or checking if signalId matches
+        try {
+          const snapshot = await firestore.collection(FIRESTORE_SIGNALS_COL)
+            .where('snapshotId', '==', signalIdOrSnapshotId)
+            .get();
+          
+          if (!snapshot.empty) {
+            const batch = firestore.batch();
+            snapshot.docs.forEach((doc) => {
+              batch.update(doc.ref, {
+                tp1,
+                tp2,
+                tp3,
+                takeProfit,
+                riskRewardRatio
+              });
+            });
+            await batch.commit();
+          } else {
+            // Also search by id
+            const snapshotById = await firestore.collection(FIRESTORE_SIGNALS_COL)
+              .where('id', '==', signalIdOrSnapshotId)
+              .get();
+            if (!snapshotById.empty) {
+              const batch = firestore.batch();
+              snapshotById.docs.forEach((doc) => {
+                batch.update(doc.ref, {
+                  tp1,
+                  tp2,
+                  tp3,
+                  takeProfit,
+                  riskRewardRatio
+                });
+              });
+              await batch.commit();
+            }
+          }
+        } catch (queryErr) {
+          logger.warn('[ScannerPersistence] Firestore updateSignalTps failed:', { error: String(queryErr) });
+        }
+      }
+    }
+  }
+
+  /**
+   * Retrieves all currently ACTIVE signals from persistence.
+   */
+  static async getActiveSignals(): Promise<PersistedSentSignal[]> {
+    this.init();
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      try {
+        const query = await firestore
+          .collection(FIRESTORE_SIGNALS_COL)
+          .where('status', '==', 'ACTIVE')
+          .get();
+
+        const signals: PersistedSentSignal[] = [];
+        if (!query.empty) {
+          query.forEach((doc) => signals.push(doc.data() as PersistedSentSignal));
+        }
+
+        // Also query other potential non-terminal progressive statuses to ensure active monitoring of progressive levels
+        const activeOrProgressive = ['TP1_HIT', 'TP2_HIT'];
+        for (const stat of activeOrProgressive) {
+          const q = await firestore
+            .collection(FIRESTORE_SIGNALS_COL)
+            .where('status', '==', stat)
+            .get();
+          if (!q.empty) {
+            q.forEach((doc) => signals.push(doc.data() as PersistedSentSignal));
+          }
+        }
+
+        // Merge with local signals
+        const map = new Map<string, PersistedSentSignal>();
+        const localActive = this.localData.sentSignals.filter((s) => 
+          s.status === 'ACTIVE' || s.status === 'TP1_HIT' || s.status === 'TP2_HIT'
+        );
+        for (const s of localActive) {
+          map.set(s.id, s);
+        }
+        for (const s of signals) {
+          map.set(s.id, s);
+        }
+        return Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp);
+      } catch (err) {
+        logger.warn('[ScannerPersistence] Firestore getActiveSignals failed, using local:', { error: String(err) });
+      }
+    }
+
+    return this.localData.sentSignals
+      .filter((s) => s.status === 'ACTIVE' || s.status === 'TP1_HIT' || s.status === 'TP2_HIT')
+      .sort((a, b) => b.timestamp - a.timestamp);
   }
 
   /**

@@ -38,6 +38,9 @@ export interface ScoringResult {
   confluenceReasons: string[];
   stopLoss: number;
   takeProfit: number;
+  tp1?: number;
+  tp2?: number;
+  tp3?: number;
   riskRewardRatio: number;
   estimatedWinRate: number;
   expectancy: number;
@@ -523,49 +526,44 @@ export class ScoringEngine {
 
     let stopLoss = 0;
     let takeProfit = 0;
+    let tp1 = 0;
+    let tp2 = 0;
+    let tp3 = 0;
+
+    const primaryStrategyName = strategyEval.strategyResults?.find(s => s.passed)?.name || 'Multi-Timeframe Trend Confluence';
 
     if (direction === 'BUY') {
       const structuralSl = support15m - atr_15m * 0.4;
       const proposedSl = Math.min(structuralSl, entryPrice - minSafeStopDist);
       stopLoss = Number(proposedSl.toFixed(precision));
-
-      const actualRisk = entryPrice - stopLoss;
-      const targetDist2_5 = actualRisk * 2.5;
-      const targetDist2_0 = actualRisk * 2.0;
-
-      let proposedTp: number;
-      if (majorResistance1h >= entryPrice + targetDist2_5) {
-        proposedTp = majorResistance1h - atr_15m * 0.15;
-      } else if (majorResistance1h >= entryPrice + targetDist2_0) {
-        proposedTp = majorResistance1h - atr_15m * 0.15;
-      } else {
-        const rrMultiplier = totalScore >= 85 ? 2.5 : 2.0;
-        proposedTp = entryPrice + Math.max(profile.minPracticalTargetDistance, actualRisk * rrMultiplier);
-      }
-      takeProfit = Number(proposedTp.toFixed(precision));
     } else {
       const structuralSl = resistance15m + atr_15m * 0.4;
       const proposedSl = Math.max(structuralSl, entryPrice + minSafeStopDist);
       stopLoss = Number(proposedSl.toFixed(precision));
-
-      const actualRisk = stopLoss - entryPrice;
-      const targetDist2_5 = actualRisk * 2.5;
-      const targetDist2_0 = actualRisk * 2.0;
-
-      let proposedTp: number;
-      if (majorSupport1h <= entryPrice - targetDist2_5) {
-        proposedTp = majorSupport1h + atr_15m * 0.15;
-      } else if (majorSupport1h <= entryPrice - targetDist2_0) {
-        proposedTp = majorSupport1h + atr_15m * 0.15;
-      } else {
-        const rrMultiplier = totalScore >= 85 ? 2.5 : 2.0;
-        proposedTp = entryPrice - Math.max(profile.minPracticalTargetDistance, actualRisk * rrMultiplier);
-      }
-      takeProfit = Number(proposedTp.toFixed(precision));
     }
 
+    const tpSetup = ScoringEngine.calculateThreeTakeProfits(
+      direction,
+      entryPrice,
+      stopLoss,
+      atr_15m,
+      support15m,
+      resistance15m,
+      majorSupport1h,
+      majorResistance1h,
+      primaryStrategyName,
+      profile.minPracticalTargetDistance,
+      precision
+    );
+
+    tp1 = tpSetup.tp1;
+    tp2 = tpSetup.tp2;
+    tp3 = tpSetup.tp3;
+    takeProfit = tp2;
+
     const calculatedRisk = Math.abs(entryPrice - stopLoss);
-    const calculatedReward = Math.abs(takeProfit - entryPrice);
+    // Base reward on actual TP structure: average reward of the three distinct targets
+    const calculatedReward = (Math.abs(tp1 - entryPrice) + Math.abs(tp2 - entryPrice) + Math.abs(tp3 - entryPrice)) / 3;
     const rawRR = calculatedRisk > 0 ? Number((calculatedReward / calculatedRisk).toFixed(2)) : 0;
 
     // Minimum R:R ratio is 2.0:1 (1:2)
@@ -654,6 +652,9 @@ export class ScoringEngine {
       confluenceReasons,
       stopLoss,
       takeProfit,
+      tp1,
+      tp2,
+      tp3,
       riskRewardRatio: rawRR,
       estimatedWinRate,
       expectancy,
@@ -685,6 +686,141 @@ export class ScoringEngine {
         ltfMacdHistogram: macd_15m.histogram,
         atr: atr_15m,
       },
+    };
+  }
+
+  public static calculateThreeTakeProfits(
+    direction: SignalDirection,
+    entryPrice: number,
+    stopLoss: number,
+    atr_15m: number,
+    support15m: number,
+    resistance15m: number,
+    majorSupport1h: number,
+    majorResistance1h: number,
+    primaryStrategyName: string,
+    minPracticalTargetDistance: number,
+    precision: number
+  ): { tp1: number; tp2: number; tp3: number } {
+    const risk = Math.abs(entryPrice - stopLoss);
+    
+    // Ensure we have a non-zero ATR and minPracticalTargetDistance
+    const cleanAtr = atr_15m > 0 ? atr_15m : entryPrice * 0.01;
+    const cleanMinDistance = minPracticalTargetDistance > 0 ? minPracticalTargetDistance : cleanAtr * 1.5;
+
+    // Minimum represented unit at this precision
+    const minPrecisionStep = Math.pow(10, -precision);
+    
+    // Spacing step between levels - must be at least 10 units of precision to prevent rounding collisions
+    const minStep = Math.max(cleanAtr * 0.4, 10 * minPrecisionStep, cleanMinDistance * 0.25);
+
+    // Strategy multipliers: conservative (TP1), main (TP2), extended (TP3)
+    let tp1Mult = 1.2;
+    let tp2Mult = 2.2;
+    let tp3Mult = 3.5;
+
+    if (primaryStrategyName.includes('Trend')) {
+      tp1Mult = 1.3; tp2Mult = 2.2; tp3Mult = 3.6;
+    } else if (primaryStrategyName.includes('Breakout')) {
+      tp1Mult = 1.5; tp2Mult = 2.5; tp3Mult = 4.2;
+    } else if (primaryStrategyName.includes('Reversion') || primaryStrategyName.includes('Bollinger')) {
+      tp1Mult = 1.0; tp2Mult = 2.0; tp3Mult = 2.8;
+    } else if (primaryStrategyName.includes('Momentum')) {
+      tp1Mult = 1.25; tp2Mult = 2.15; tp3Mult = 3.4;
+    } else if (primaryStrategyName.includes('Imbalance') || primaryStrategyName.includes('Order Flow')) {
+      tp1Mult = 1.15; tp2Mult = 2.05; tp3Mult = 3.1;
+    } else if (primaryStrategyName.includes('Volatility')) {
+      tp1Mult = 1.2; tp2Mult = 2.1; tp3Mult = 3.2;
+    }
+
+    let tp1 = 0;
+    let tp2 = 0;
+    let tp3 = 0;
+
+    if (direction === 'BUY') {
+      // TP1: conservative
+      let baseTp1 = entryPrice + (cleanAtr * tp1Mult);
+      if (resistance15m > entryPrice) {
+        baseTp1 = 0.5 * baseTp1 + 0.5 * resistance15m;
+      }
+      tp1 = Math.max(baseTp1, entryPrice + cleanMinDistance * 0.5);
+      // Ensure TP1 is strictly above Entry by at least minPrecisionStep
+      if (tp1 < entryPrice + minPrecisionStep) {
+        tp1 = entryPrice + minPrecisionStep;
+      }
+
+      // TP2: primary
+      let baseTp2 = entryPrice + (cleanAtr * tp2Mult);
+      if (majorResistance1h > entryPrice) {
+        baseTp2 = 0.3 * baseTp2 + 0.7 * (majorResistance1h - cleanAtr * 0.15);
+      }
+      tp2 = Math.max(baseTp2, tp1 + minStep);
+
+      // Verify the minimum risk/reward requirement is met for TP2 (primary target)
+      const minRequiredReward = risk * 2.0;
+      if (tp2 < entryPrice + minRequiredReward) {
+        tp2 = entryPrice + minRequiredReward;
+      }
+      // Guarantee TP2 is strictly above TP1 by at least minStep
+      if (tp2 < tp1 + minStep) {
+        tp2 = tp1 + minStep;
+      }
+
+      // TP3: extended
+      let baseTp3 = entryPrice + (cleanAtr * tp3Mult);
+      if (majorResistance1h > entryPrice) {
+        baseTp3 = Math.max(baseTp3, majorResistance1h + cleanAtr * tp3Mult * 0.4);
+      }
+      tp3 = Math.max(baseTp3, tp2 + minStep);
+      // Guarantee TP3 is strictly above TP2 by at least minStep
+      if (tp3 < tp2 + minStep) {
+        tp3 = tp2 + minStep;
+      }
+    } else {
+      // TP1: conservative
+      let baseTp1 = entryPrice - (cleanAtr * tp1Mult);
+      if (support15m < entryPrice) {
+        baseTp1 = 0.5 * baseTp1 + 0.5 * support15m;
+      }
+      tp1 = Math.min(baseTp1, entryPrice - cleanMinDistance * 0.5);
+      // Ensure TP1 is strictly below Entry by at least minPrecisionStep
+      if (tp1 > entryPrice - minPrecisionStep) {
+        tp1 = entryPrice - minPrecisionStep;
+      }
+
+      // TP2: primary
+      let baseTp2 = entryPrice - (cleanAtr * tp2Mult);
+      if (majorSupport1h < entryPrice) {
+        baseTp2 = 0.3 * baseTp2 + 0.7 * (majorSupport1h + cleanAtr * 0.15);
+      }
+      tp2 = Math.min(baseTp2, tp1 - minStep);
+
+      // Verify the minimum risk/reward requirement is met for TP2 (primary target)
+      const minRequiredReward = risk * 2.0;
+      if (tp2 > entryPrice - minRequiredReward) {
+        tp2 = entryPrice - minRequiredReward;
+      }
+      // Guarantee TP2 is strictly below TP1 by at least minStep
+      if (tp2 > tp1 - minStep) {
+        tp2 = tp1 - minStep;
+      }
+
+      // TP3: extended
+      let baseTp3 = entryPrice - (cleanAtr * tp3Mult);
+      if (majorSupport1h < entryPrice) {
+        baseTp3 = Math.min(baseTp3, majorSupport1h - cleanAtr * tp3Mult * 0.4);
+      }
+      tp3 = Math.min(baseTp3, tp2 - minStep);
+      // Guarantee TP3 is strictly below TP2 by at least minStep
+      if (tp3 > tp2 - minStep) {
+        tp3 = tp2 - minStep;
+      }
+    }
+
+    return {
+      tp1: Number(tp1.toFixed(precision)),
+      tp2: Number(tp2.toFixed(precision)),
+      tp3: Number(tp3.toFixed(precision))
     };
   }
 
