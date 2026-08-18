@@ -111,38 +111,37 @@ export function SignalHistoryPanel({
   };
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xl space-y-6">
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 sm:p-5 shadow-md space-y-3.5">
       {/* Header */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-800">
-        <div className="flex items-center gap-3.5 min-w-0">
-          <div className="w-10 h-10 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-center text-emerald-400 shrink-0 shadow-md">
-            <History className="w-5 h-5" />
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2.5 border-b border-slate-800">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-center text-emerald-400 shrink-0 shadow-sm">
+            <History className="w-4 h-4" />
           </div>
           <div className="min-w-0">
-            <div className="flex items-center gap-2.5">
-              <h3 className="text-base sm:text-lg font-bold text-white truncate">Signal History & Alert Log</h3>
-              <span className="text-xs font-mono bg-slate-950 text-emerald-400 px-2.5 py-1 rounded-md border border-slate-800 shrink-0 font-bold">
+            <div className="flex items-center gap-2">
+              <h3 className="text-xs sm:text-sm font-semibold text-white truncate">Signal History & Alert Log</h3>
+              <span className="text-[10px] sm:text-xs font-mono bg-slate-950 text-emerald-400 px-2 py-0.5 rounded border border-slate-800 shrink-0 font-bold">
                 {history.length}/30 Logged
               </span>
             </div>
-            <p className="text-xs sm:text-sm text-slate-400 mt-1 truncate sm:whitespace-normal">
-              Session audit log of the last 30 generated signals, active setups, and scan outcomes
+            <p className="text-[11px] text-slate-400 truncate">
+              Session audit log of generated signals, active setups, and scan outcomes
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
           {/* Timezone Preference Switcher */}
           {onTimeZoneChange && (
-            <div className="flex items-center bg-slate-950 p-1.5 rounded-xl border border-slate-800 text-xs font-mono">
-              <span className="text-slate-400 px-2 flex items-center gap-1.5 hidden sm:flex font-semibold">
-                <Globe className="w-3.5 h-3.5 text-slate-400" />
+            <div className="flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 text-[10px] font-mono">
+              <span className="text-slate-400 px-1 hidden sm:inline font-medium">
                 ZONE:
               </span>
               <button
                 type="button"
                 onClick={() => onTimeZoneChange('LOCAL')}
-                className={`px-2.5 py-1 rounded-lg transition ${
+                className={`px-1.5 py-0.5 rounded transition ${
                   preferredTimeZone === 'LOCAL'
                     ? 'bg-slate-800 text-emerald-400 font-semibold border border-slate-700'
                     : 'text-slate-400 hover:text-slate-200'
@@ -154,7 +153,7 @@ export function SignalHistoryPanel({
               <button
                 type="button"
                 onClick={() => onTimeZoneChange('EXCHANGE')}
-                className={`px-2.5 py-1 rounded-lg transition ${
+                className={`px-1.5 py-0.5 rounded transition ${
                   preferredTimeZone === 'EXCHANGE'
                     ? 'bg-slate-800 text-emerald-400 font-semibold border border-slate-700'
                     : 'text-slate-400 hover:text-slate-200'
@@ -166,7 +165,7 @@ export function SignalHistoryPanel({
               <button
                 type="button"
                 onClick={() => onTimeZoneChange('UTC')}
-                className={`px-2.5 py-1 rounded-lg transition ${
+                className={`px-1.5 py-0.5 rounded transition ${
                   preferredTimeZone === 'UTC'
                     ? 'bg-slate-800 text-emerald-400 font-semibold border border-slate-700'
                     : 'text-slate-400 hover:text-slate-200'
@@ -179,11 +178,11 @@ export function SignalHistoryPanel({
           )}
 
           {/* Filter Chips */}
-          <div className="flex flex-wrap items-center bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-mono gap-1">
+          <div className="flex flex-wrap items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[10px] font-mono gap-0.5">
             <button
               type="button"
               onClick={() => setFilter('ALL')}
-              className={`px-2.5 py-1.5 rounded-lg transition min-h-[32px] cursor-pointer ${
+              className={`px-2 py-0.5 rounded transition cursor-pointer ${
                 filter === 'ALL'
                   ? 'bg-slate-800 text-white font-semibold'
                   : 'text-slate-400 hover:text-slate-200'
@@ -195,7 +194,7 @@ export function SignalHistoryPanel({
               <button
                 type="button"
                 onClick={() => setFilter('ACTIVE')}
-                className={`px-2.5 py-1.5 rounded-lg transition min-h-[32px] cursor-pointer ${
+                className={`px-2 py-0.5 rounded transition cursor-pointer ${
                   filter === 'ACTIVE'
                     ? 'bg-emerald-950 text-emerald-300 font-semibold border border-emerald-800'
                     : 'text-slate-400 hover:text-slate-200'
@@ -207,7 +206,7 @@ export function SignalHistoryPanel({
             <button
               type="button"
               onClick={() => setFilter('TOP_TRADE')}
-              className={`px-2.5 py-1.5 rounded-lg transition min-h-[32px] cursor-pointer ${
+              className={`px-2 py-0.5 rounded transition cursor-pointer ${
                 filter === 'TOP_TRADE'
                   ? 'bg-amber-950 text-amber-300 font-semibold border border-amber-800'
                   : 'text-slate-400 hover:text-slate-200'
@@ -218,7 +217,7 @@ export function SignalHistoryPanel({
             <button
               type="button"
               onClick={() => setFilter('SUGGESTION')}
-              className={`px-2.5 py-1.5 rounded-lg transition min-h-[32px] cursor-pointer ${
+              className={`px-2 py-0.5 rounded transition cursor-pointer ${
                 filter === 'SUGGESTION'
                   ? 'bg-sky-950 text-sky-300 font-semibold border border-sky-800'
                   : 'text-slate-400 hover:text-slate-200'
@@ -230,7 +229,7 @@ export function SignalHistoryPanel({
               <button
                 type="button"
                 onClick={() => setFilter('NO_TRADE')}
-                className={`px-2.5 py-1.5 rounded-lg transition min-h-[32px] cursor-pointer ${
+                className={`px-2 py-0.5 rounded transition cursor-pointer ${
                   filter === 'NO_TRADE'
                     ? 'bg-slate-800 text-slate-300 font-semibold border border-slate-700'
                     : 'text-slate-400 hover:text-slate-200'
@@ -246,10 +245,10 @@ export function SignalHistoryPanel({
             <button
               type="button"
               onClick={() => setConfirmClearAll(true)}
-              className="p-2.5 rounded-xl bg-slate-950 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-900/60 text-slate-400 hover:text-rose-400 transition min-h-[38px] min-w-[38px] flex items-center justify-center cursor-pointer shadow-sm"
+              className="p-1.5 rounded-lg bg-slate-950 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-900/60 text-slate-400 hover:text-rose-400 transition min-h-[28px] min-w-[28px] flex items-center justify-center cursor-pointer shadow-sm"
               title="Clear All Signal History"
             >
-              <Trash2 className="w-4 h-4" />
+              <Trash2 className="w-3.5 h-3.5" />
             </button>
           )}
         </div>
@@ -257,7 +256,7 @@ export function SignalHistoryPanel({
 
       {/* History List */}
       {filteredHistory.length > 0 ? (
-        <div className="space-y-6">
+        <div className="space-y-3">
           {filteredHistory.map((item, idx) => {
             const isExpanded = expandedId === item.id;
             const precision = item.entryPrice && item.entryPrice < 10 ? 5 : 2;
@@ -265,22 +264,22 @@ export function SignalHistoryPanel({
             return (
               <div
                 key={`${item.id}_${idx}`}
-                className="bg-slate-950/95 border border-slate-800/90 hover:border-slate-700 rounded-2xl p-6 sm:p-8 transition shadow-lg space-y-6"
+                className="bg-slate-950/90 border border-slate-800/90 hover:border-slate-700 rounded-xl p-3 sm:p-4 transition shadow-md space-y-3"
               >
                 {/* Header Row: Symbol, Direction, Status & Badges */}
-                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-800/80">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
                   {/* Left: Direction Badge, Symbol Name, Category & Status Tags */}
-                  <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                     {item.direction === 'BUY' ? (
-                      <span className="px-4 py-1.5 rounded-lg bg-emerald-950 text-emerald-400 border border-emerald-800 text-sm font-mono font-bold flex items-center gap-2 shadow-sm">
-                        <TrendingUp className="w-5 h-5" /> BUY
+                      <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 text-[10px] sm:text-xs font-mono font-bold flex items-center gap-1 shadow-sm">
+                        <TrendingUp className="w-3.5 h-3.5" /> BUY
                       </span>
                     ) : item.direction === 'SELL' ? (
-                      <span className="px-4 py-1.5 rounded-lg bg-rose-950 text-rose-400 border border-rose-800 text-sm font-mono font-bold flex items-center gap-2 shadow-sm">
-                        <TrendingDown className="w-5 h-5" /> SELL
+                      <span className="px-2 py-0.5 rounded bg-rose-950 text-rose-400 border border-rose-800 text-[10px] sm:text-xs font-mono font-bold flex items-center gap-1 shadow-sm">
+                        <TrendingDown className="w-3.5 h-3.5" /> SELL
                       </span>
                     ) : (
-                      <span className="px-4 py-1.5 rounded-lg bg-slate-900 text-slate-400 border border-slate-800 text-sm font-mono font-semibold">
+                      <span className="px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-slate-800 text-[10px] sm:text-xs font-mono font-semibold">
                         SCAN
                       </span>
                     )}
@@ -288,34 +287,34 @@ export function SignalHistoryPanel({
                     <button
                       type="button"
                       onClick={() => onSelectSymbol && onSelectSymbol(item.symbol)}
-                      className="text-2xl sm:text-3xl font-black font-mono text-white hover:text-emerald-400 transition flex items-center gap-2 tracking-wide"
+                      className="text-lg sm:text-xl font-bold font-mono text-white hover:text-emerald-400 transition flex items-center gap-1 tracking-wide"
                       title={`Select ${item.symbol}`}
                     >
                       {item.symbol}
-                      {onSelectSymbol && <ExternalLink className="w-4 h-4 opacity-70 text-slate-400" />}
+                      {onSelectSymbol && <ExternalLink className="w-3 h-3 opacity-70 text-slate-400" />}
                     </button>
 
                     {item.timeframe && (
-                      <span className="text-xs font-mono font-bold text-slate-200 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
+                      <span className="text-[10px] sm:text-xs font-mono text-slate-200 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
                         {item.timeframe}
                       </span>
                     )}
 
                     {item.marketType && (
-                      <span className="text-xs font-mono font-bold text-cyan-300 bg-cyan-950/80 px-3 py-1.5 rounded-lg border border-cyan-800">
+                      <span className="text-[10px] sm:text-xs font-mono text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800">
                         {formatLabel(item.marketType)}
                       </span>
                     )}
 
                     {item.marketRegime && (
-                      <span className="text-xs font-mono font-bold text-indigo-300 bg-indigo-950/80 px-3 py-1.5 rounded-lg border border-indigo-800">
+                      <span className="text-[10px] sm:text-xs font-mono text-indigo-300 bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-800">
                         {formatLabel(item.marketRegime)}
                       </span>
                     )}
 
                     {item.signalStatus ? (
                       <span
-                        className={`text-xs font-mono font-bold px-3 py-1.5 rounded-lg border ${
+                        className={`text-[10px] sm:text-xs font-mono font-bold px-2 py-0.5 rounded border ${
                           item.signalStatus === 'ACTIVE'
                             ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
                             : item.signalStatus === 'TP HIT' || item.signalStatus === 'TP2 HIT'
@@ -336,59 +335,50 @@ export function SignalHistoryPanel({
                         {formatStatus(item.signalStatus)}
                       </span>
                     ) : item.isBestTrade || item.rankTier === 'BEST_TRADE' || item.outcomeType === 'BEST_TRADE' ? (
-                      <span className="text-xs font-mono font-bold bg-amber-950/90 text-amber-300 border border-amber-500/80 px-3 py-1.5 rounded-lg">
+                      <span className="text-[10px] sm:text-xs font-mono font-bold bg-amber-950/90 text-amber-300 border border-amber-500/80 px-2 py-0.5 rounded">
                         {formatRankTier('BEST_TRADE', true)}
                       </span>
                     ) : item.isSecondBest || item.rankTier === 'SECOND_BEST' || item.outcomeType === 'SECOND_BEST' ? (
-                      <span className="text-xs font-mono font-bold bg-emerald-950/90 text-emerald-300 border border-emerald-500/80 px-3 py-1.5 rounded-lg">
+                      <span className="text-[10px] sm:text-xs font-mono font-bold bg-emerald-950/90 text-emerald-300 border border-emerald-500/80 px-2 py-0.5 rounded">
                         {formatRankTier('SECOND_BEST', true)}
                       </span>
                     ) : item.isSuggestion || item.rankTier === 'SUGGESTION' || item.outcomeType === 'SUGGESTION' ? (
-                      <span className="text-xs font-mono font-bold bg-sky-950/90 text-sky-300 border border-sky-600/80 px-3 py-1.5 rounded-lg">
+                      <span className="text-[10px] sm:text-xs font-mono font-bold bg-sky-950/90 text-sky-300 border border-sky-600/80 px-2 py-0.5 rounded">
                         {formatRankTier('SUGGESTION', false)}
                       </span>
                     ) : item.isTopTrade ? (
-                      <span className="text-xs font-mono font-bold bg-amber-950/90 text-amber-300 border border-amber-500/80 px-3 py-1.5 rounded-lg">
+                      <span className="text-[10px] sm:text-xs font-mono font-bold bg-amber-950/90 text-amber-300 border border-amber-500/80 px-2 py-0.5 rounded">
                         {formatRankTier('TOP_TRADE', true)}
                       </span>
                     ) : item.outcomeType === 'NO_TRADE_OPPORTUNITY' ? (
-                      <span className="text-xs font-mono bg-slate-900 text-slate-400 border border-slate-800 px-3 py-1.5 rounded-lg">
+                      <span className="text-[10px] sm:text-xs font-mono bg-slate-900 text-slate-400 border border-slate-800 px-2 py-0.5 rounded">
                         {formatLabel('NO_TRADE_OPPORTUNITY')}
                       </span>
                     ) : null}
                   </div>
 
                   {/* Right: Scores & Timestamps */}
-                  <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm font-mono shrink-0">
+                  <div className="flex flex-wrap items-center gap-1.5 text-[10px] sm:text-xs font-mono shrink-0">
                     {item.score !== undefined && (
-                      <span className="text-slate-300 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
+                      <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
                         Score: <strong className="text-blue-400 font-bold">{item.score}/100</strong>
                       </span>
                     )}
 
                     {item.confidenceScore !== undefined && (
-                      <span className="text-slate-300 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
+                      <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
                         Conf: <strong className="text-emerald-400 font-bold">{item.confidenceScore}%</strong>
                       </span>
                     )}
 
                     {item.estimatedWinRate !== undefined && (
-                      <span className="text-slate-300 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
-                        Win Rate: <strong className="text-emerald-400 font-bold">{item.estimatedWinRate.toFixed(1)}%</strong>
+                      <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                        Win: <strong className="text-emerald-400 font-bold">{item.estimatedWinRate.toFixed(1)}%</strong>
                       </span>
                     )}
 
-                    {item.isAiValidated !== undefined && (
-                      <span className="text-slate-300 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
-                        AI:{' '}
-                        <strong className={item.isAiValidated ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
-                          {item.isAiValidated ? "Validated" : "UNAVAILABLE"}
-                        </strong>
-                      </span>
-                    )}
-
-                    <span className="text-slate-300 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800 flex items-center gap-2">
-                      <Clock className="w-4 h-4 text-slate-400" />
+                    <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-slate-400" />
                       {formatTimeWithZone(item.timestamp, preferredTimeZone)}
                     </span>
 
@@ -396,104 +386,104 @@ export function SignalHistoryPanel({
                     <button
                       type="button"
                       onClick={() => toggleExpand(item.id)}
-                      className="p-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition cursor-pointer min-h-[36px] min-w-[36px] flex items-center justify-center shadow-sm"
+                      className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition cursor-pointer min-h-[28px] min-w-[28px] flex items-center justify-center shadow-sm"
                       title={isExpanded ? 'Collapse details' : 'Expand details'}
                     >
-                      {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                      {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                     </button>
 
                     {/* Delete Entry Button */}
                     <button
                       type="button"
                       onClick={() => setItemToDelete({ id: item.id, symbol: item.symbol })}
-                      className="p-2 rounded-lg bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-800/80 transition cursor-pointer min-h-[36px] min-w-[36px] flex items-center justify-center shadow-sm"
+                      className="p-1 rounded bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-800/80 transition cursor-pointer min-h-[28px] min-w-[28px] flex items-center justify-center shadow-sm"
                       title={`Delete entry for ${item.symbol}`}
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
 
-                {/* Main Execution Price & Target Cards Grid - Extremely Spacious & Clear */}
+                {/* Single-Screen View Execution Price & Target Cards Grid */}
                 {item.entryPrice !== undefined && item.entryPrice > 0 ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 font-mono">
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 font-mono">
                     {/* Entry Price Block */}
-                    <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-2 flex flex-col justify-between shadow-md">
+                    <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2.5 sm:p-3 space-y-1 flex flex-col justify-between shadow-sm">
                       <div>
-                        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
-                          EXACT ENTRY PRICE
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block truncate">
+                          EXACT ENTRY
                         </span>
-                        <div className="text-2xl sm:text-3xl font-black text-white tracking-tight mt-1">
+                        <div className="text-base sm:text-xl font-bold text-white tracking-tight mt-0.5 truncate">
                           {item.entryPrice.toFixed(precision)}
                         </div>
                       </div>
-                      <span className="text-xs text-slate-400 block pt-2 border-t border-slate-800/80">
-                        Current market trigger level
+                      <span className="text-[10px] text-slate-400 block pt-1 border-t border-slate-800/80 truncate">
+                        Market trigger
                       </span>
                     </div>
 
                     {/* Stop Loss Block */}
-                    <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-2 flex flex-col justify-between shadow-md">
+                    <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2.5 sm:p-3 space-y-1 flex flex-col justify-between shadow-sm">
                       <div>
-                        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
-                          STOP LOSS (ATR Volatility)
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block truncate">
+                          STOP LOSS (ATR)
                         </span>
-                        <div className="text-2xl sm:text-3xl font-black text-rose-400 tracking-tight mt-1">
+                        <div className="text-base sm:text-xl font-bold text-rose-400 tracking-tight mt-0.5 truncate">
                           {item.stopLoss?.toFixed(precision)}
                         </div>
                       </div>
                       {item.stopDistance !== undefined && item.pipPointUnit ? (
-                        <div className="text-xs font-semibold text-rose-300 pt-2 border-t border-slate-800/80">
-                          Risk Distance: -{item.stopDistance} {item.pipPointUnit}
+                        <div className="text-[10px] font-semibold text-rose-300 pt-1 border-t border-slate-800/80 truncate">
+                          -{item.stopDistance} {item.pipPointUnit}
                         </div>
                       ) : (
-                        <span className="text-xs text-rose-400/80 block pt-2 border-t border-slate-800/80">
-                          Strict risk exit point
+                        <span className="text-[10px] text-rose-400/80 block pt-1 border-t border-slate-800/80 truncate">
+                          Risk exit point
                         </span>
                       )}
                     </div>
 
-                    {/* Take Profit Target Levels Block - Dedicated Spacious Container */}
-                    <div className="bg-slate-900/90 border border-emerald-900/60 rounded-2xl p-5 space-y-3 shadow-md md:col-span-2 xl:col-span-1">
-                      <div className="flex items-center justify-between pb-1 border-b border-emerald-950/80">
-                        <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider block">
+                    {/* Take Profit Target Levels Block - Responsive 3-Col on Mobile */}
+                    <div className="bg-slate-900/90 border border-emerald-900/60 rounded-lg p-2.5 sm:p-3 space-y-1.5 shadow-sm col-span-2 lg:col-span-1">
+                      <div className="flex items-center justify-between pb-0.5 border-b border-emerald-950/80">
+                        <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">
                           TAKE PROFIT TARGETS
                         </span>
-                        <span className="text-[10px] text-emerald-400/80 bg-emerald-950 px-2 py-0.5 rounded font-mono">
+                        <span className="text-[9px] text-emerald-400/80 bg-emerald-950 px-1 py-0.2 rounded font-mono">
                           Multi-Level
                         </span>
                       </div>
                       
-                      <div className="space-y-2 font-mono">
-                        {/* TP1 Row */}
-                        <div className="bg-slate-950/90 border border-emerald-900/50 p-3 rounded-xl flex items-center justify-between gap-3 shadow-sm">
+                      <div className="grid grid-cols-3 lg:grid-cols-1 gap-1 font-mono">
+                        {/* TP1 */}
+                        <div className="bg-slate-950/90 border border-emerald-900/50 p-1 sm:p-1.5 rounded flex flex-col lg:flex-row items-center justify-between gap-0.5 shadow-sm text-center lg:text-left">
                           <div>
-                            <span className="text-xs font-bold text-emerald-400/90 block">TP1</span>
-                            <span className="text-[10px] text-slate-400 block">Conservative</span>
+                            <span className="text-[10px] font-bold text-emerald-400/90 block">TP1</span>
+                            <span className="text-[8px] text-slate-400 hidden sm:block">Conservative</span>
                           </div>
-                          <strong className="text-base sm:text-lg font-black text-emerald-400 tracking-tight">
+                          <strong className="text-xs sm:text-sm font-bold text-emerald-400 tracking-tight">
                             {(item.tp1 ?? item.takeProfit)?.toFixed(precision)}
                           </strong>
                         </div>
 
-                        {/* TP2 Row */}
-                        <div className="bg-slate-950/90 border border-emerald-800/60 p-3 rounded-xl flex items-center justify-between gap-3 shadow-sm">
+                        {/* TP2 */}
+                        <div className="bg-slate-950/90 border border-emerald-800/60 p-1 sm:p-1.5 rounded flex flex-col lg:flex-row items-center justify-between gap-0.5 shadow-sm text-center lg:text-left">
                           <div>
-                            <span className="text-xs font-bold text-emerald-300 block">TP2</span>
-                            <span className="text-[10px] text-slate-400 block">Main Target</span>
+                            <span className="text-[10px] font-bold text-emerald-300 block">TP2</span>
+                            <span className="text-[8px] text-slate-400 hidden sm:block">Main</span>
                           </div>
-                          <strong className="text-base sm:text-lg font-black text-emerald-300 tracking-tight">
+                          <strong className="text-xs sm:text-sm font-bold text-emerald-300 tracking-tight">
                             {(item.tp2 ?? item.takeProfit)?.toFixed(precision)}
                           </strong>
                         </div>
 
-                        {/* TP3 Row */}
-                        <div className="bg-slate-950/90 border border-emerald-700/60 p-3 rounded-xl flex items-center justify-between gap-3 shadow-sm">
+                        {/* TP3 */}
+                        <div className="bg-slate-950/90 border border-emerald-700/60 p-1 sm:p-1.5 rounded flex flex-col lg:flex-row items-center justify-between gap-0.5 shadow-sm text-center lg:text-left">
                           <div>
-                            <span className="text-xs font-bold text-emerald-200 block">TP3</span>
-                            <span className="text-[10px] text-slate-400 block">Extended Trend</span>
+                            <span className="text-[10px] font-bold text-emerald-200 block">TP3</span>
+                            <span className="text-[8px] text-slate-400 hidden sm:block">Extended</span>
                           </div>
-                          <strong className="text-base sm:text-lg font-black text-emerald-200 tracking-tight">
+                          <strong className="text-xs sm:text-sm font-bold text-emerald-200 tracking-tight">
                             {(item.tp3 ?? item.takeProfit)?.toFixed(precision)}
                           </strong>
                         </div>
@@ -501,22 +491,22 @@ export function SignalHistoryPanel({
                     </div>
 
                     {/* Risk/Reward Ratio Block */}
-                    <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-2 flex flex-col justify-between shadow-md">
+                    <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2.5 sm:p-3 space-y-1 flex flex-col justify-between shadow-sm col-span-2 lg:col-span-1">
                       <div>
-                        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
-                          RISK / REWARD RATIO
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block truncate">
+                          RISK / REWARD
                         </span>
-                        <div className="text-2xl sm:text-3xl font-black text-blue-400 tracking-tight mt-1">
+                        <div className="text-base sm:text-xl font-bold text-blue-400 tracking-tight mt-0.5">
                           {item.riskRewardRatio}:1
                         </div>
                       </div>
                       {item.estimatedFriction?.netRiskRewardRatio ? (
-                        <div className="text-xs font-semibold text-sky-300 pt-2 border-t border-slate-800/80">
-                          Net: {item.estimatedFriction.netRiskRewardRatio.toFixed(2)}:1 (Post-Slippage)
+                        <div className="text-[10px] font-semibold text-sky-300 pt-1 border-t border-slate-800/80 truncate">
+                          Net: {item.estimatedFriction.netRiskRewardRatio.toFixed(2)}:1
                         </div>
                       ) : (
-                        <span className="text-xs text-slate-400 block pt-2 border-t border-slate-800/80">
-                          Gross setup expectation
+                        <span className="text-[10px] text-slate-400 block pt-1 border-t border-slate-800/80 truncate">
+                          Gross setup
                         </span>
                       )}
                     </div>
