@@ -53,6 +53,7 @@ export function SettingsPage({
   const [scannerSettings, setScannerSettings] = useState<{
     enabled: boolean;
     notificationsEnabled: boolean;
+    intervalMinutes: number;
     signalsSentTimestamps: number[];
     lastScanTime: number;
     limit: number;
@@ -75,9 +76,14 @@ export function SettingsPage({
     }
   }, []);
 
-  const handleUpdateScanner = async (enabled: boolean, notificationsEnabled: boolean) => {
+  const handleUpdateScanner = async (
+    enabled: boolean,
+    notificationsEnabled: boolean,
+    intervalMinutes?: number
+  ) => {
     try {
-      const res = await api.updateScannerSettings(enabled, notificationsEnabled);
+      const currentInterval = intervalMinutes ?? scannerSettings?.intervalMinutes ?? 30;
+      const res = await api.updateScannerSettings(enabled, notificationsEnabled, false, currentInterval);
       if (res.success) {
         setScannerSettings(res.settings);
         setScannerMessage({ type: 'success', text: 'Scanner configuration updated successfully.' });
@@ -354,7 +360,7 @@ export function SettingsPage({
                 </div>
               </div>
 
-              {envProviders?.nvidia.configured ? (
+              {envProviders?.nvidia?.configured ? (
                 <StatusBadge status="configured" label="Configured" />
               ) : (
                 <StatusBadge status="unconfigured" label="Key Missing" />
@@ -363,7 +369,7 @@ export function SettingsPage({
 
             <div className="mt-3 pt-3 border-t border-slate-800/60 flex items-center justify-between text-[11px] text-slate-400">
               <span>Security Policy: Server-Side Proxied Execution</span>
-              {!envProviders?.nvidia.configured && (
+              {!envProviders?.nvidia?.configured && (
                 <span className="text-amber-400 flex items-center gap-1 font-mono">
                   <AlertTriangle className="w-3 h-3" /> Set NVIDIA_API_KEY in server environment
                 </span>
@@ -386,7 +392,7 @@ export function SettingsPage({
                 </div>
               </div>
 
-              {envProviders?.bitget.configured ? (
+              {envProviders?.bitget?.configured ? (
                 <StatusBadge status="configured" label="Configured" />
               ) : (
                 <StatusBadge status="unconfigured" label="Not Set" />
@@ -407,7 +413,7 @@ export function SettingsPage({
                 </div>
               </div>
 
-              {envProviders?.finnhub.configured ? (
+              {envProviders?.finnhub?.configured ? (
                 <StatusBadge status="configured" label="Configured" />
               ) : (
                 <StatusBadge status="unconfigured" label="Not Set" />
@@ -428,7 +434,7 @@ export function SettingsPage({
                 </div>
               </div>
 
-              {envProviders?.twelvedata.configured ? (
+              {envProviders?.twelvedata?.configured ? (
                 <StatusBadge status="configured" label="Configured" />
               ) : (
                 <StatusBadge status="unconfigured" label="Not Set" />
@@ -576,7 +582,7 @@ export function SettingsPage({
               <div className="space-y-1">
                 <span className="text-xs font-semibold text-white block">Hourly Core Scan</span>
                 <p className="text-[11px] text-slate-400">
-                  Allows the server to fetch prices and evaluate multi-timeframe trends autonomously every hour.
+                  Allows the server to fetch prices and evaluate multi-timeframe trends autonomously.
                 </p>
               </div>
 
@@ -613,6 +619,40 @@ export function SettingsPage({
               >
                 {scannerSettings?.notificationsEnabled ? 'NOTIFY ON' : 'NOTIFY OFF'}
               </button>
+            </div>
+          </div>
+
+          {/* Automated Signal Interval Selection */}
+          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <label htmlFor="automated-signal-interval-select" className="text-xs font-semibold text-white block">
+                Automated Signal Interval
+              </label>
+              <p className="text-[11px] text-slate-400">
+                Minimum time elapsed between automated signal-generation evaluations. Does not force setups if market conditions fail strict confluence filters.
+              </p>
+            </div>
+
+            <div className="shrink-0 min-w-[170px]">
+              <select
+                id="automated-signal-interval-select"
+                value={scannerSettings?.intervalMinutes ?? 30}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10);
+                  handleUpdateScanner(
+                    scannerSettings?.enabled ?? true,
+                    scannerSettings?.notificationsEnabled ?? true,
+                    val
+                  );
+                }}
+                disabled={loadingScanner}
+                className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-emerald-500 cursor-pointer disabled:opacity-50"
+              >
+                <option value={15}>15 minutes</option>
+                <option value={30}>30 minutes</option>
+                <option value={45}>45 minutes</option>
+                <option value={60}>60 minutes (1 hour)</option>
+              </select>
             </div>
           </div>
 
@@ -668,7 +708,9 @@ export function SettingsPage({
                 <span>Next Automated Run: </span>
                 <span className="text-emerald-400">
                   {scannerSettings?.lastScanTime && scannerSettings.lastScanTime > 0
-                    ? new Date(scannerSettings.lastScanTime + 60 * 60 * 1000).toLocaleString()
+                    ? new Date(
+                        scannerSettings.lastScanTime + (scannerSettings.intervalMinutes ?? 30) * 60 * 1000
+                      ).toLocaleString()
                     : 'Pending'}
                 </span>
               </div>

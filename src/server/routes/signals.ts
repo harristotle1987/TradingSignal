@@ -36,8 +36,8 @@ router.get('/scanner/settings', async (_req: Request, res: Response) => {
  * Updates automated hourly scanner configurations (enabled, notifications, notifyOnNoTrade).
  */
 router.post('/scanner/settings', async (req: Request, res: Response) => {
-  const { enabled, notificationsEnabled, notifyOnNoTrade } = req.body || {};
-  hourlyScanner.updateSettings({ enabled, notificationsEnabled, notifyOnNoTrade });
+  const { enabled, notificationsEnabled, notifyOnNoTrade, intervalMinutes } = req.body || {};
+  hourlyScanner.updateSettings({ enabled, notificationsEnabled, notifyOnNoTrade, intervalMinutes });
   const settings = await hourlyScanner.getSettingsAsync();
   res.status(200).json({
     success: true,

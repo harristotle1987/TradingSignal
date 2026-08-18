@@ -174,13 +174,13 @@ export function SignalHistoryPanel({
       {/* History List */}
       {filteredHistory.length > 0 ? (
         <div className="space-y-2.5">
-          {filteredHistory.map((item) => {
+          {filteredHistory.map((item, idx) => {
             const isExpanded = expandedId === item.id;
             const precision = item.entryPrice && item.entryPrice < 10 ? 5 : 2;
 
             return (
               <div
-                key={item.id}
+                key={`${item.id}_${idx}`}
                 className="bg-slate-950 border border-slate-800/90 hover:border-slate-700/80 rounded-lg p-3 transition"
               >
                 {/* Main Row */}

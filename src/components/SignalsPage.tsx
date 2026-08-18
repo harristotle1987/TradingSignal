@@ -257,7 +257,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
     };
   } | null>(null);
 
-  const isNvidiaConfigured = health?.aiProvider.configured ?? false;
+  const isNvidiaConfigured = health?.aiProvider?.configured ?? false;
 
   // Load ticker for selected symbol
   const loadTicker = useCallback(async (sym: string) => {

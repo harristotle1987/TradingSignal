@@ -1,0 +1,32 @@
+{
+  "name": "Trading Signal AI",
+  "short_name": "Signal AI",
+  "description": "Enterprise-grade real-time trading signals, scanning and advanced technical indicator confluences across Crypto, Forex, and Stock markets.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#0b0f19",
+  "background_color": "#0b0f19",
+  "categories": ["finance", "business", "utilities"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

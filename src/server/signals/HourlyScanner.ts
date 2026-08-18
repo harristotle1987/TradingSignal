@@ -50,6 +50,7 @@ export interface ScannerSettings {
   enabled: boolean;
   notificationsEnabled: boolean;
   notifyOnNoTrade: boolean;
+  intervalMinutes: number;
   signalsSentTimestamps: number[];
   lastScanTime: number;
 }
@@ -90,15 +91,15 @@ export class HourlyScannerService {
 
     if (this.timerId) return;
 
-    logger.info('[Hourly Scanner] Starting background service. Monitoring interval: 1 hour.');
+    logger.info('[Hourly Scanner] Starting background service.');
 
     // Quick initial check on startup
     this.checkScheduleAndRun();
 
-    // Check every 60 seconds
+    // Check interval elapsed every 15 seconds
     this.timerId = setInterval(() => {
       this.checkScheduleAndRun();
-    }, 60 * 1000);
+    }, 15 * 1000);
   }
 
   /**
@@ -113,7 +114,7 @@ export class HourlyScannerService {
   }
 
   /**
-   * Checks settings and runs the scanner if 1 hour has elapsed since lastScanTime.
+   * Checks settings and runs the scanner if the configured interval (15, 30, 45, or 60 min) has elapsed since lastScanTime.
    */
   private async checkScheduleAndRun(): Promise<void> {
     const settings = ScannerPersistence.getSettings();
@@ -122,9 +123,13 @@ export class HourlyScannerService {
 
     const capState = await ScannerPersistence.getCapState(5);
     const now = Date.now();
-    const oneHourMs = 60 * 60 * 1000;
+    const validIntervals = [15, 30, 45, 60];
+    const intervalMinutes = validIntervals.includes(Number(settings.intervalMinutes))
+      ? Number(settings.intervalMinutes)
+      : 30;
+    const intervalMs = intervalMinutes * 60 * 1000;
 
-    if (now - capState.lastScanTime >= oneHourMs) {
+    if (now - capState.lastScanTime >= intervalMs) {
       await this.runScan();
     }
   }
@@ -648,6 +653,9 @@ export class HourlyScannerService {
       enabled: settings.enabled,
       notificationsEnabled: settings.notificationsEnabled,
       notifyOnNoTrade: settings.notifyOnNoTrade,
+      intervalMinutes: [15, 30, 45, 60].includes(Number(settings.intervalMinutes))
+        ? Number(settings.intervalMinutes)
+        : 30,
       signalsSentTimestamps: timestamps,
       lastScanTime: capState.lastScanTime,
       limit: capState.dailySignalCap,
@@ -667,6 +675,9 @@ export class HourlyScannerService {
       enabled: settings.enabled,
       notificationsEnabled: settings.notificationsEnabled,
       notifyOnNoTrade: settings.notifyOnNoTrade,
+      intervalMinutes: [15, 30, 45, 60].includes(Number(settings.intervalMinutes))
+        ? Number(settings.intervalMinutes)
+        : 30,
       signalsSentTimestamps: [],
       lastScanTime: 0,
       limit: 5,
@@ -676,7 +687,17 @@ export class HourlyScannerService {
   /**
    * Updates scanner configurations.
    */
-  updateSettings(options: Partial<Pick<ScannerSettings, 'enabled' | 'notificationsEnabled' | 'notifyOnNoTrade'>>): void {
+  updateSettings(
+    options: Partial<Pick<ScannerSettings, 'enabled' | 'notificationsEnabled' | 'notifyOnNoTrade' | 'intervalMinutes'>>
+  ): void {
+    if (options.intervalMinutes !== undefined) {
+      const val = Number(options.intervalMinutes);
+      if (![15, 30, 45, 60].includes(val)) {
+        options.intervalMinutes = 30;
+      } else {
+        options.intervalMinutes = val;
+      }
+    }
     ScannerPersistence.updateSettings(options);
     logger.info('[Hourly Scanner] Scanner settings updated successfully.', { ...options });
   }

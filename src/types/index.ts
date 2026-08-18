@@ -244,4 +244,64 @@ export interface SignalHistoryItem {
   signalStatus?: SignalLogStatus;
 }
 
+export interface MetricSummary {
+  totalTrades: number;
+  wins: number;
+  losses: number;
+  breakevens: number;
+  winRatePct: number;
+  rollingWinRatePct: number;
+  profitFactor: number;
+  totalRealizedR: number;
+  avgR: number;
+  expectancyR: number;
+  maxDrawdownR: number;
+  maxLosingStreak: number;
+  currentStreak: number;
+}
+
+export interface TradeOutcomeRecord {
+  signalId: string;
+  symbol: string;
+  assetClass: 'CRYPTO' | 'FOREX' | 'STOCKS';
+  direction: 'BUY' | 'SELL';
+  strategyId: string;
+  strategyName: string;
+  marketRegime: string;
+  timeframe: string;
+  confidenceScore?: number;
+  confidenceRange?: '70-79' | '80-89' | '90-100';
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit: number;
+  plannedRR: number;
+  outcomeStatus: 'TP_HIT' | 'SL_HIT' | 'EXPIRED' | 'INVALIDATED';
+  realizedRR: number;
+  isWin: boolean;
+  timestamp: number;
+  resolvedAt: number;
+  durationMs: number;
+}
+
+export interface StrategyPerformanceState {
+  version: number;
+  lastUpdated: number;
+  disclaimer: string;
+  overall: MetricSummary;
+  byStrategy: Record<string, MetricSummary>;
+  byAsset: Record<string, MetricSummary>;
+  byAssetClass: Record<string, MetricSummary>;
+  byTimeframe: Record<string, MetricSummary>;
+  byRegime: Record<string, MetricSummary>;
+  byConfidenceRange: Record<string, MetricSummary>;
+  recentTrades: TradeOutcomeRecord[];
+}
+
+export interface PerformanceMetricsResponse {
+  success: boolean;
+  performance: StrategyPerformanceState;
+  disclaimer: string;
+  timestamp: number;
+}
+
 

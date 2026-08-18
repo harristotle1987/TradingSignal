@@ -93,6 +93,7 @@ export interface ScannerPersistenceData {
     enabled: boolean;
     notificationsEnabled: boolean;
     notifyOnNoTrade: boolean;
+    intervalMinutes: number;
   };
 }
 
@@ -131,6 +132,7 @@ export class ScannerPersistence {
       enabled: true,
       notificationsEnabled: true,
       notifyOnNoTrade: false,
+      intervalMinutes: 30,
     },
   };
 
@@ -147,6 +149,7 @@ export class ScannerPersistence {
         const raw = fs.readFileSync(LOCAL_PERSISTENCE_PATH, 'utf-8');
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
+          const parsedInterval = Number(parsed.settings?.intervalMinutes);
           this.localData = {
             capState: parsed.capState || this.localData.capState,
             sentSignals: Array.isArray(parsed.sentSignals) ? parsed.sentSignals : [],
@@ -156,6 +159,7 @@ export class ScannerPersistence {
               enabled: parsed.settings?.enabled ?? true,
               notificationsEnabled: parsed.settings?.notificationsEnabled ?? true,
               notifyOnNoTrade: parsed.settings?.notifyOnNoTrade ?? false,
+              intervalMinutes: [15, 30, 45, 60].includes(parsedInterval) ? parsedInterval : 30,
             },
           };
           logger.info('[ScannerPersistence] Loaded persisted scanner state from disk.');

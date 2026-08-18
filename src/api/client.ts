@@ -10,12 +10,18 @@ import {
   NormalizedTicker,
   SignalGenerationResponse,
   SignalsListResponse,
+  PerformanceMetricsResponse,
 } from '../types/index.js';
 
 class ApiClient {
   private async fetchJson<T>(endpoint: string, options?: RequestInit, retries = 3): Promise<T> {
     try {
-      const baseUrl = (import.meta as any).env?.VITE_API_URL || (typeof window !== 'undefined' ? window.location.origin : '');
+      const isNativeCapacitor = typeof window !== 'undefined' && Boolean((window as any).Capacitor?.isNativePlatform?.());
+      const envApiUrl = (import.meta as any).env?.VITE_API_URL;
+      const windowOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+      const defaultProductionUrl = 'https://trading-signal-chi.vercel.app';
+
+      const baseUrl = envApiUrl || (isNativeCapacitor ? defaultProductionUrl : windowOrigin);
       const fullUrl = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`;
       const response = await fetch(fullUrl, {
         headers: {
@@ -135,11 +141,12 @@ class ApiClient {
   async updateScannerSettings(
     enabled: boolean,
     notificationsEnabled: boolean,
-    notifyOnNoTrade?: boolean
+    notifyOnNoTrade?: boolean,
+    intervalMinutes?: number
   ): Promise<{ success: boolean; settings: any }> {
     return this.fetchJson<{ success: boolean; settings: any }>('/api/scanner/settings', {
       method: 'POST',
-      body: JSON.stringify({ enabled, notificationsEnabled, notifyOnNoTrade }),
+      body: JSON.stringify({ enabled, notificationsEnabled, notifyOnNoTrade, intervalMinutes }),
     });
   }
 
@@ -240,6 +247,13 @@ class ApiClient {
    */
   async getPushStatus(): Promise<{ success: boolean; subscriberCount: number; vapidConfigured: boolean }> {
     return this.fetchJson<{ success: boolean; subscriberCount: number; vapidConfigured: boolean }>('/api/notifications/status');
+  }
+
+  /**
+   * Fetch historical trade performance and analytics metrics
+   */
+  async getPerformanceMetrics(): Promise<PerformanceMetricsResponse> {
+    return this.fetchJson<PerformanceMetricsResponse>('/api/signals/performance');
   }
 }
 

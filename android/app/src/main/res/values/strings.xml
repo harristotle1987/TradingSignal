@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Trading Signal</string>
+    <string name="title_activity_main">Trading Signal</string>
+    <string name="package_name">com.avartah.tradingsignal</string>
+    <string name="custom_url_scheme">com.avartah.tradingsignal</string>
+</resources>
