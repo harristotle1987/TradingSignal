@@ -272,7 +272,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
   const loadSessionDetails = useCallback(async (sym: string) => {
     try {
       const data = await api.getSessionDetails(sym);
-      if (data) {
+      if (data && data.sessionState && data.newYorkTime && typeof data.newYorkTime === 'object') {
         setSessionDetails(data);
       }
     } catch (err) {
@@ -534,7 +534,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
           )}
 
           {/* Exchange Clock details */}
-          {sessionDetails ? (
+          {sessionDetails && sessionDetails.newYorkTime ? (
             <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between">
@@ -543,20 +543,20 @@ export function SignalsPage({ health }: SignalsPageProps) {
                     Exchange Clock (ET)
                   </span>
                   <span className="text-[9px] font-mono bg-emerald-950/60 text-emerald-300 border border-emerald-800/60 px-1.5 py-0.5 rounded">
-                    {sessionDetails.newYorkTime.timeZoneAbbr || 'EDT'}
+                    {sessionDetails.newYorkTime?.timeZoneAbbr || 'EDT'}
                   </span>
                 </div>
                 <div className="text-sm font-mono font-bold text-white tracking-tight mt-1.5">
-                  {sessionDetails.newYorkTime.formatted}
+                  {sessionDetails.newYorkTime?.formatted || 'Active'}
                 </div>
                 <div className="text-[10px] font-mono text-slate-400 mt-1 flex items-center gap-2">
-                  <span title="Universal Coordinated Time">UTC: {sessionDetails.utcTime?.formatted || sessionDetails.formattedUTC}</span>
+                  <span title="Universal Coordinated Time">UTC: {sessionDetails.utcTime?.formatted || sessionDetails.formattedUTC || 'N/A'}</span>
                 </div>
               </div>
               <div className="mt-3 pt-2 border-t border-slate-800/50 flex justify-between text-[11px] font-mono">
                 <div>
                   <span className="text-slate-400 block text-[9px]">CLASSIFICATION</span>
-                  <span className="text-slate-200 uppercase">{sessionDetails.assetClassification}</span>
+                  <span className="text-slate-200 uppercase">{sessionDetails.assetClassification || 'ASSET'}</span>
                 </div>
                 <div className="text-right">
                   <span className="text-slate-400 block text-[9px]">CALENDAR STATUS</span>
@@ -569,7 +569,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
                         : 'text-rose-400'
                     }`}
                   >
-                    {sessionDetails.sessionState}
+                    {sessionDetails.sessionState || 'CLOSED'}
                   </span>
                 </div>
               </div>
@@ -617,10 +617,11 @@ export function SignalsPage({ health }: SignalsPageProps) {
       )}
 
       {/* Top Trade Alert Notification Control Bar */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+      {/* Top Trade Notification Control Bar */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4">
+        <div className="flex items-start gap-3">
           <div
-            className={`w-9 h-9 rounded-lg flex items-center justify-center border ${
+            className={`w-9 h-9 rounded-lg flex items-center justify-center border shrink-0 mt-0.5 ${
               notificationPermission === 'granted'
                 ? 'bg-emerald-950/60 border-emerald-800 text-emerald-400'
                 : notificationPermission === 'denied'
@@ -634,8 +635,8 @@ export function SignalsPage({ health }: SignalsPageProps) {
               <Bell className="w-4 h-4" />
             )}
           </div>
-          <div>
-            <div className="flex items-center gap-2">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5 xs:gap-2">
               <span className="text-xs font-semibold text-white">
                 TOP TRADE Browser Alerts
               </span>
@@ -645,7 +646,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
                 </span>
               ) : notificationPermission === 'denied' ? (
                 <span className="text-[10px] font-mono bg-rose-950 text-rose-400 px-2 py-0.5 rounded border border-rose-800">
-                  BLOCKED IN BROWSER
+                  BLOCKED
                 </span>
               ) : (
                 <span className="text-[10px] font-mono bg-amber-950 text-amber-400 px-2 py-0.5 rounded border border-amber-800">
@@ -653,18 +654,18 @@ export function SignalsPage({ health }: SignalsPageProps) {
                 </span>
               )}
             </div>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              Instant desktop notifications & sound chimes trigger when AI validates a new Gate 9 TOP TRADE.
+            <p className="text-[11px] text-slate-400 mt-0.5 leading-normal">
+              Instant alerts & sound chimes trigger when AI validates a new Gate 9 TOP TRADE.
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 self-start sm:self-auto">
+        <div className="flex flex-wrap items-center gap-2 self-start md:self-auto shrink-0 pt-1 md:pt-0">
           {/* Sound Toggle */}
           <button
             type="button"
             onClick={() => setSoundAlerts((prev) => !prev)}
-            className={`p-2 rounded-lg border text-xs transition-colors flex items-center gap-1.5 ${
+            className={`p-2 rounded-lg border text-xs transition-colors flex items-center gap-1.5 min-h-[38px] cursor-pointer ${
               soundAlerts
                 ? 'bg-slate-950 border-slate-800 text-emerald-400 hover:border-slate-700'
                 : 'bg-slate-950 border-slate-800 text-slate-500 hover:text-slate-400'
@@ -679,7 +680,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
           <button
             type="button"
             onClick={handleSendTestNotification}
-            className="px-3 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs font-mono transition-colors"
+            className="px-3 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs font-mono transition-colors min-h-[38px] cursor-pointer"
           >
             Test Alert
           </button>
@@ -689,9 +690,9 @@ export function SignalsPage({ health }: SignalsPageProps) {
             <button
               type="button"
               onClick={handleRequestNotificationPermission}
-              className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors shadow-sm"
+              className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors shadow-sm min-h-[38px] cursor-pointer"
             >
-              Enable Browser Alerts
+              Enable Alerts
             </button>
           )}
         </div>

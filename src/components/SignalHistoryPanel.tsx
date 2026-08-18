@@ -96,30 +96,30 @@ export function SignalHistoryPanel({
     <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-center text-emerald-400">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-center text-emerald-400 shrink-0">
             <History className="w-4 h-4" />
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold text-white">Signal History & Alert Log</h3>
-              <span className="text-xs font-mono bg-slate-950 text-slate-300 px-2 py-0.5 rounded border border-slate-800">
+              <h3 className="text-xs sm:text-sm font-semibold text-white truncate">Signal History & Alert Log</h3>
+              <span className="text-[10px] sm:text-xs font-mono bg-slate-950 text-slate-300 px-1.5 sm:px-2 py-0.5 rounded border border-slate-800 shrink-0">
                 {history.length}/10 Archived
               </span>
             </div>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Local session audit log of the last 10 generated signals and market scan outcomes
+            <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5 truncate sm:whitespace-normal">
+              Session audit log of the last 10 generated signals and scan outcomes
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
           {/* Filter Chips */}
-          <div className="flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 text-[10px] font-mono">
+          <div className="flex items-center bg-slate-950 p-0.5 xs:p-1 rounded-lg border border-slate-800 text-[10px] font-mono">
             <button
               type="button"
               onClick={() => setFilter('ALL')}
-              className={`px-2 py-0.5 rounded transition ${
+              className={`px-2 py-1 rounded transition min-h-[32px] cursor-pointer ${
                 filter === 'ALL'
                   ? 'bg-slate-800 text-white font-semibold'
                   : 'text-slate-400 hover:text-slate-200'
@@ -130,7 +130,7 @@ export function SignalHistoryPanel({
             <button
               type="button"
               onClick={() => setFilter('TOP_TRADE')}
-              className={`px-2 py-0.5 rounded transition ${
+              className={`px-2 py-1 rounded transition min-h-[32px] cursor-pointer ${
                 filter === 'TOP_TRADE'
                   ? 'bg-amber-950 text-amber-300 font-semibold border border-amber-800'
                   : 'text-slate-400 hover:text-slate-200'
@@ -141,7 +141,7 @@ export function SignalHistoryPanel({
             <button
               type="button"
               onClick={() => setFilter('SUGGESTION')}
-              className={`px-2 py-0.5 rounded transition ${
+              className={`px-2 py-1 rounded transition min-h-[32px] cursor-pointer ${
                 filter === 'SUGGESTION'
                   ? 'bg-sky-950 text-sky-300 font-semibold border border-sky-800'
                   : 'text-slate-400 hover:text-slate-200'
@@ -156,7 +156,7 @@ export function SignalHistoryPanel({
             <button
               type="button"
               onClick={() => setConfirmClearAll(true)}
-              className="p-1.5 rounded-lg bg-slate-950 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-900/60 text-slate-400 hover:text-rose-400 transition"
+              className="p-2 rounded-lg bg-slate-950 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-900/60 text-slate-400 hover:text-rose-400 transition min-h-[36px] min-w-[36px] flex items-center justify-center cursor-pointer"
               title="Clear All Signal History"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -449,20 +449,20 @@ export function SignalHistoryPanel({
 
       {/* Confirmation Toast Notification */}
       {toast && (
-        <div className="fixed bottom-6 right-6 z-50 max-w-sm w-full bg-slate-900/95 border border-emerald-500/60 shadow-2xl rounded-xl p-4 text-xs font-sans text-white flex items-start justify-between gap-3 backdrop-blur-md animate-in fade-in slide-in-from-bottom-5 duration-300">
-          <div className="flex items-start gap-2.5">
+        <div className="fixed bottom-4 left-3 right-3 sm:left-auto sm:right-6 sm:bottom-6 z-50 max-w-[calc(100vw-1.5rem)] sm:max-w-sm w-auto sm:w-full bg-slate-900/95 border border-emerald-500/60 shadow-2xl rounded-xl p-3.5 sm:p-4 text-xs font-sans text-white flex items-start justify-between gap-3 backdrop-blur-md animate-in fade-in slide-in-from-bottom-5 duration-300">
+          <div className="flex items-start gap-2.5 min-w-0">
             <div className="p-1 rounded-full bg-emerald-950 border border-emerald-700 text-emerald-400 shrink-0 mt-0.5">
               <CheckCircle2 className="w-4 h-4" />
             </div>
-            <div>
-              <p className="font-semibold text-emerald-300">{toast.title}</p>
-              <p className="text-slate-300 text-[11px] mt-0.5 leading-normal">{toast.message}</p>
+            <div className="min-w-0">
+              <p className="font-semibold text-emerald-300 truncate">{toast.title}</p>
+              <p className="text-slate-300 text-[11px] mt-0.5 leading-normal break-words">{toast.message}</p>
             </div>
           </div>
           <button
             type="button"
             onClick={() => setToast(null)}
-            className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition"
+            className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition shrink-0 min-h-[28px] min-w-[28px] flex items-center justify-center cursor-pointer"
             title="Dismiss Notification"
           >
             <X className="w-4 h-4" />

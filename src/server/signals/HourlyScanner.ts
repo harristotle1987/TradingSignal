@@ -42,6 +42,7 @@ import {
   PersistedRejectedCandidate,
   PersistedNotification,
 } from './ScannerPersistence.js';
+import { PushNotificationService } from '../notifications/PushNotificationService.js';
 import { logger } from '../logger.js';
 import { TradingSignal, SignalDirection } from '../../types/index.js';
 
@@ -510,6 +511,13 @@ export class HourlyScannerService {
           score,
           rankTier: sig.rankTier,
         });
+
+        // Dispatch Web Push notification to PWA subscribers
+        try {
+          await PushNotificationService.sendSignalNotification(sig);
+        } catch (pushErr) {
+          logger.error(`[Hourly Scanner] Push notification error for ${sig.symbol}:`, { error: String(pushErr) });
+        }
 
         dispatchedCount++;
         logger.info(`[Hourly Scanner] Dispatched setup for ${sig.symbol} [${sig.direction}] (${tierLabel}, Score: ${score}/100). Daily count: ${inc.count}/${inc.cap}`);

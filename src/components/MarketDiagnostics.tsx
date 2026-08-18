@@ -64,9 +64,9 @@ export function MarketDiagnostics() {
               value={symbolInput}
               onChange={(e) => setSymbolInput(e.target.value.toUpperCase())}
               placeholder="e.g. BTCUSDT, EURUSD, AAPL"
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-mono"
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-mono min-h-[38px]"
             />
-            <Search className="w-3.5 h-3.5 text-slate-500 absolute right-3 top-2.5" />
+            <Search className="w-3.5 h-3.5 text-slate-500 absolute right-3 top-3" />
           </div>
         </div>
 
@@ -77,7 +77,7 @@ export function MarketDiagnostics() {
           <select
             value={selectedProvider}
             onChange={(e) => setSelectedProvider(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
+            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono min-h-[38px] cursor-pointer"
           >
             <option value="auto">Auto Select (MarketDataManager)</option>
             <option value="bitget">Bitget Exchange</option>
@@ -90,7 +90,7 @@ export function MarketDiagnostics() {
           <button
             onClick={handleTestFetch}
             disabled={loading || !symbolInput.trim()}
-            className="w-full inline-flex items-center justify-center gap-2 px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors disabled:opacity-50"
+            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors disabled:opacity-50 min-h-[38px] cursor-pointer"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             <span>Fetch Real Price</span>

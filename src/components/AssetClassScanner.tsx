@@ -185,10 +185,10 @@ export function AssetClassScanner({
 
       {/* 3 Clearly Separated Trade Categories: CRYPTO | FOREX | STOCKS */}
       <div>
-        <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5 block">
+        <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 block">
           1. Select Trade Category
         </label>
-        <div className="grid grid-cols-3 gap-2.5 sm:gap-3">
+        <div className="grid grid-cols-3 gap-1.5 xs:gap-2.5 sm:gap-3">
           {(['CRYPTO', 'FOREX', 'STOCKS'] as AssetCategory[]).map((category) => {
             const isSelected = activeCategory === category;
             const catInfo = ASSET_CATEGORIES[category];
@@ -199,18 +199,18 @@ export function AssetClassScanner({
                 key={category}
                 type="button"
                 onClick={() => handleCategoryChange(category)}
-                className={`p-3 sm:p-3.5 rounded-xl border text-center transition-all flex flex-col items-center justify-center gap-1 relative ${
+                className={`p-2 xs:p-3 sm:p-3.5 rounded-xl border text-center transition-all flex flex-col items-center justify-center gap-1 min-h-[44px] cursor-pointer ${
                   isSelected
                     ? 'bg-slate-950 border-emerald-500 text-white shadow-md ring-1 ring-emerald-500/50'
                     : 'bg-slate-950/60 border-slate-800/90 text-slate-400 hover:text-slate-200 hover:border-slate-700'
                 }`}
               >
-                <div className="flex items-center gap-1.5 font-bold font-mono text-xs sm:text-sm tracking-wider">
-                  <Icon className={`w-4 h-4 ${isSelected ? 'text-emerald-400' : 'text-slate-400'}`} />
-                  <span>{catInfo.label}</span>
+                <div className="flex items-center gap-1 xs:gap-1.5 font-bold font-mono text-[11px] xs:text-xs sm:text-sm tracking-wide">
+                  <Icon className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${isSelected ? 'text-emerald-400' : 'text-slate-400'}`} />
+                  <span className="truncate">{catInfo.label}</span>
                 </div>
                 <span
-                  className={`text-[9px] font-mono px-1.5 py-0.5 rounded border ${
+                  className={`text-[8px] xs:text-[9px] font-mono px-1 py-0.2 rounded border whitespace-nowrap ${
                     isSelected
                       ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
                       : 'bg-slate-900 text-slate-400 border-slate-800'
@@ -226,14 +226,14 @@ export function AssetClassScanner({
 
       {/* Selectable Symbols for Active Category */}
       <div>
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex flex-wrap items-center justify-between gap-1 mb-2">
           <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
             2. Select Symbol ({currentCategoryData.label})
           </label>
           <span className="text-[10px] font-mono text-slate-400">{currentCategoryData.description}</span>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+        <div className="grid grid-cols-2 xs:grid-cols-3 md:grid-cols-6 gap-2">
           {currentCategoryData.symbols.map((item) => {
             const isSelected = selectedSymbol === item.symbol;
             return (
@@ -241,7 +241,7 @@ export function AssetClassScanner({
                 key={item.symbol}
                 type="button"
                 onClick={() => onSelectSymbol(item.symbol)}
-                className={`p-2.5 rounded-lg border text-left transition-all ${
+                className={`p-2.5 rounded-lg border text-left transition-all min-h-[44px] cursor-pointer ${
                   isSelected
                     ? 'bg-emerald-950/50 border-emerald-500 text-white font-semibold shadow-sm'
                     : 'bg-slate-950 border-slate-800/80 text-slate-400 hover:text-slate-200 hover:border-slate-700'
@@ -256,18 +256,18 @@ export function AssetClassScanner({
       </div>
 
       {/* Action Bar with Market Session State & Scan Button */}
-      <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+      <div className="pt-1 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         {/* Left: Selected Instrument Meta */}
-        <div className="bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 flex items-center justify-between sm:justify-start gap-4 text-xs font-mono">
+        <div className="bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2.5 flex items-center justify-between sm:justify-start gap-3 xs:gap-4 text-xs font-mono w-full sm:w-auto">
           <div>
             <span className="text-slate-400 text-[10px] block">ACTIVE SYMBOL</span>
             <span className="text-white font-bold">{selectedSymbol}</span>
           </div>
-          <div className="border-l border-slate-800 pl-4">
+          <div className="border-l border-slate-800 pl-3 xs:pl-4">
             <span className="text-slate-400 text-[10px] block">LIVE PRICE</span>
             <span className="text-emerald-400 font-bold">
               {isFetchingPrice ? (
-                <span className="text-slate-400">Loading...</span>
+                <span className="text-slate-400 text-xs">Loading...</span>
               ) : ticker && ticker.price ? (
                 ticker.price.toFixed(precision)
               ) : (
@@ -275,7 +275,7 @@ export function AssetClassScanner({
               )}
             </span>
           </div>
-          <div className="border-l border-slate-800 pl-4 hidden md:block">
+          <div className="border-l border-slate-800 pl-3 xs:pl-4 hidden xs:block">
             <span className="text-slate-400 text-[10px] block">SESSION STATUS</span>
             <span
               className={`font-semibold text-[11px] ${
@@ -286,7 +286,7 @@ export function AssetClassScanner({
                   : 'text-rose-400'
               }`}
             >
-              {sessionState === 'MARKET_OPEN' ? 'OPEN (Active)' : 'MARKET CLOSED'}
+              {sessionState === 'MARKET_OPEN' ? 'OPEN (Active)' : 'CLOSED'}
             </span>
           </div>
         </div>
@@ -296,7 +296,7 @@ export function AssetClassScanner({
           type="button"
           onClick={onScan}
           disabled={isScanning || (isMarketClosed && activeCategory !== 'CRYPTO')}
-          className="py-3 px-6 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold font-mono text-sm rounded-lg shadow-sm transition flex items-center justify-center gap-2 border border-emerald-500/40 cursor-pointer disabled:cursor-not-allowed"
+          className="py-3 px-5 sm:px-6 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold font-mono text-xs sm:text-sm rounded-lg shadow-sm transition flex items-center justify-center gap-2 border border-emerald-500/40 cursor-pointer disabled:cursor-not-allowed min-h-[46px] w-full sm:w-auto"
         >
           {isScanning ? (
             <>
@@ -311,7 +311,7 @@ export function AssetClassScanner({
           ) : (
             <>
               <Search className="w-4 h-4 text-emerald-200" />
-              <span>🔍 SCAN {selectedSymbol}</span>
+              <span>SCAN {selectedSymbol}</span>
             </>
           )}
         </button>

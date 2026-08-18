@@ -197,6 +197,50 @@ class ApiClient {
       method: 'DELETE',
     });
   }
+
+  /**
+   * Get VAPID Public Key for Web Push subscription
+   */
+  async getVapidPublicKey(): Promise<{ success: boolean; publicKey: string }> {
+    return this.fetchJson<{ success: boolean; publicKey: string }>('/api/notifications/vapid-public-key');
+  }
+
+  /**
+   * Subscribe to Web Push Notifications
+   */
+  async subscribePush(subscription: any): Promise<{ success: boolean; message: string; id?: string }> {
+    return this.fetchJson<{ success: boolean; message: string; id?: string }>('/api/notifications/subscribe', {
+      method: 'POST',
+      body: JSON.stringify({ subscription }),
+    });
+  }
+
+  /**
+   * Unsubscribe from Web Push Notifications
+   */
+  async unsubscribePush(endpoint: string): Promise<{ success: boolean; message: string }> {
+    return this.fetchJson<{ success: boolean; message: string }>('/api/notifications/unsubscribe', {
+      method: 'POST',
+      body: JSON.stringify({ endpoint }),
+    });
+  }
+
+  /**
+   * Send test push notification
+   */
+  async sendTestPushNotification(subscription?: any): Promise<{ success: boolean; message: string }> {
+    return this.fetchJson<{ success: boolean; message: string }>('/api/notifications/test', {
+      method: 'POST',
+      body: JSON.stringify({ subscription }),
+    });
+  }
+
+  /**
+   * Get push notification subscription status
+   */
+  async getPushStatus(): Promise<{ success: boolean; subscriberCount: number; vapidConfigured: boolean }> {
+    return this.fetchJson<{ success: boolean; subscriberCount: number; vapidConfigured: boolean }>('/api/notifications/status');
+  }
 }
 
 export const api = new ApiClient();

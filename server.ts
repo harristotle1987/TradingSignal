@@ -17,8 +17,10 @@ import healthRouter from './src/server/routes/health.js';
 import configStatusRouter from './src/server/routes/configStatus.js';
 import marketRouter from './src/server/routes/market.js';
 import signalsRouter from './src/server/routes/signals.js';
+import notificationsRouter from './src/server/routes/notifications.js';
 import { hourlyScanner } from './src/server/signals/HourlyScanner.js';
 import { RepairService } from './src/server/signals/RepairService.js';
+import { PushNotificationService } from './src/server/notifications/PushNotificationService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -52,6 +54,7 @@ export async function createServer() {
   app.use('/api', configStatusRouter);
   app.use('/api', marketRouter);
   app.use('/api', signalsRouter);
+  app.use('/api', notificationsRouter);
 
   // Global Express Error Handler
   app.use(globalErrorHandler);
@@ -91,6 +94,11 @@ if (process.env.VERCEL !== '1' && !process.env.VERCEL_ENV) {
       // Perform startup repair of any active signals with duplicate or invalid TPs
       RepairService.repairActiveSignals().catch((err) => {
         logger.error('[StartupRepair] Failed to run active signals repair:', { error: String(err) });
+      });
+
+      // Initialize Push Notification Service
+      PushNotificationService.init().catch((pushInitErr) => {
+        logger.warn('[Push Notification] Startup initialization warning:', { error: String(pushInitErr) });
       });
 
       try {

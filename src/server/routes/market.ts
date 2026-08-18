@@ -216,7 +216,15 @@ router.post('/market/time', (req: Request, res: Response) => {
       message: timestamp ? 'Simulated system time updated successfully' : 'Resumed real-time tracking',
       timestamp: MarketSessionManager.getCurrentTimestamp(),
       formattedUTC: updatedDate.toISOString(),
-      newYorkTime: ny.formatted
+      newYorkTime: {
+        weekday: ny.weekday,
+        hour: ny.hour,
+        minute: ny.minute,
+        second: ny.second,
+        dateString: ny.dateString,
+        timeZoneAbbr: ny.timeZoneAbbr,
+        formatted: ny.formatted,
+      }
     });
   } catch (err) {
     logger.error('Failed to update simulated system time', { error: String(err) });

@@ -33,12 +33,12 @@ export function Header({
   }, []);
 
   return (
-    <header className="bg-slate-900 text-slate-100 border-b border-slate-800 sticky top-0 z-50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16">
+    <header className="bg-slate-900 text-slate-100 border-b border-slate-800 sticky top-0 z-50 pt-[env(safe-area-inset-top)] w-full max-w-full overflow-x-hidden">
+      <div className="max-w-7xl mx-auto px-3 xs:px-4 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between h-14 sm:h-16 gap-2">
           {/* Logo & App Name */}
-          <div className="flex items-center gap-2 xs:gap-3 shrink">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg overflow-hidden border border-slate-800/80 bg-slate-950 flex items-center justify-center shadow-lg shadow-black/30 shrink-0">
+          <div className="flex items-center gap-2 xs:gap-3 min-w-0 shrink">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg overflow-hidden border border-slate-800/80 bg-slate-950 flex items-center justify-center shadow-md shrink-0">
               <img
                 src={appLogo}
                 alt="Trading Signal System Logo"
@@ -46,47 +46,49 @@ export function Header({
                 referrerPolicy="no-referrer"
               />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 truncate">
               <div className="flex items-center gap-1.5 xs:gap-2">
-                <h1 className="text-xs sm:text-base font-semibold tracking-tight text-white truncate max-w-[95px] xs:max-w-[150px] sm:max-w-none">
-                  Trading Signal System
+                <h1 className="text-xs sm:text-base font-semibold tracking-tight text-white truncate">
+                  Trading Signal AI
                 </h1>
-                <span className="text-[10px] font-mono uppercase bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-slate-700 shrink-0 hidden xs:inline-block">
-                  Gate 1
+                <span className="text-[9px] sm:text-[10px] font-mono uppercase bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-slate-700 shrink-0 hidden xs:inline-block">
+                  PWA
                 </span>
               </div>
-              <p className="text-xs text-slate-400 hidden sm:block">NVIDIA AI Signal Architecture</p>
+              <p className="text-[11px] text-slate-400 hidden sm:block truncate">NVIDIA AI Signal Architecture</p>
             </div>
           </div>
 
-          {/* Navigation Tabs (Exactly SIGNALS & SETTINGS) */}
-          <nav className="flex items-center space-x-0.5 xs:space-x-1 bg-slate-950 p-0.5 xs:p-1 rounded-lg border border-slate-800 shrink-0">
-            <button
-              id="nav-tab-signals"
-              onClick={() => setActiveTab('SIGNALS')}
-              className={`flex items-center gap-1 xs:gap-2 px-2 xs:px-4 py-1.5 rounded-md text-[10px] xs:text-xs font-medium transition-colors ${
-                activeTab === 'SIGNALS'
-                  ? 'bg-slate-800 text-white shadow-sm border border-slate-700'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-              }`}
-            >
-              <Radio className="w-3 h-3 xs:w-3.5 xs:h-3.5" />
-              <span>SIGNALS</span>
-            </button>
+          {/* Navigation Tabs (SIGNALS & SETTINGS) */}
+          <div className="flex items-center gap-1.5 xs:gap-2 shrink-0">
+            <nav className="flex items-center space-x-0.5 xs:space-x-1 bg-slate-950 p-0.5 xs:p-1 rounded-lg border border-slate-800 shrink-0">
+              <button
+                id="nav-tab-signals"
+                onClick={() => setActiveTab('SIGNALS')}
+                className={`flex items-center gap-1 xs:gap-1.5 px-2.5 xs:px-3.5 py-1.5 rounded-md text-[11px] xs:text-xs font-semibold transition-colors min-h-[36px] cursor-pointer ${
+                  activeTab === 'SIGNALS'
+                    ? 'bg-slate-800 text-white shadow-sm border border-slate-700'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                }`}
+              >
+                <Radio className="w-3.5 h-3.5" />
+                <span>SIGNALS</span>
+              </button>
 
-            <button
-              id="nav-tab-settings"
-              onClick={() => setActiveTab('SETTINGS')}
-              className={`flex items-center gap-1 xs:gap-2 px-2 xs:px-4 py-1.5 rounded-md text-[10px] xs:text-xs font-medium transition-colors ${
-                activeTab === 'SETTINGS'
-                  ? 'bg-slate-800 text-white shadow-sm border border-slate-700'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-              }`}
-            >
-              <Settings className="w-3 h-3 xs:w-3.5 xs:h-3.5" />
-              <span>SETTINGS</span>
-            </button>
-          </nav>
+              <button
+                id="nav-tab-settings"
+                onClick={() => setActiveTab('SETTINGS')}
+                className={`flex items-center gap-1 xs:gap-1.5 px-2.5 xs:px-3.5 py-1.5 rounded-md text-[11px] xs:text-xs font-semibold transition-colors min-h-[36px] cursor-pointer ${
+                  activeTab === 'SETTINGS'
+                    ? 'bg-slate-800 text-white shadow-sm border border-slate-700'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                }`}
+              >
+                <Settings className="w-3.5 h-3.5" />
+                <span>SETTINGS</span>
+              </button>
+            </nav>
+          </div>
 
           {/* Real-Time Live Clock & Multi-Timezone Status */}
           <div className="hidden lg:flex items-center gap-2 text-xs font-mono">

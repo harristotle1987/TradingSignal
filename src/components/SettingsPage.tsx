@@ -45,6 +45,10 @@ export function SettingsPage({
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermissionStatus>(
     NotificationService.getPermission()
   );
+  const [isPushSubscribed, setIsPushSubscribed] = useState<boolean>(false);
+  const [pushStatusLoading, setPushStatusLoading] = useState<boolean>(false);
+  const [pushActionMessage, setPushActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [subscriberCount, setSubscriberCount] = useState<number>(0);
   const [soundAlerts, setSoundAlerts] = useState<boolean>(true);
   const [scannerSettings, setScannerSettings] = useState<{
     enabled: boolean;
@@ -112,16 +116,75 @@ export function SettingsPage({
     }
   };
 
-  const handleRequestPermission = async () => {
-    const perm = await NotificationService.requestPermission();
-    setNotificationPermission(perm);
-    if (perm === 'granted') {
-      NotificationService.sendTestAlert();
+  const checkPushSubscription = useCallback(async () => {
+    try {
+      const sub = await NotificationService.getExistingPushSubscription();
+      setIsPushSubscribed(Boolean(sub));
+      setNotificationPermission(NotificationService.getPermission());
+
+      const status = await api.getPushStatus();
+      if (status.success) {
+        setSubscriberCount(status.subscriberCount);
+      }
+    } catch (e) {
+      console.warn('Could not check push status:', e);
+    }
+  }, []);
+
+  const handleSubscribePush = async () => {
+    setPushStatusLoading(true);
+    setPushActionMessage(null);
+    try {
+      const result = await NotificationService.subscribeToPushNotifications();
+      setNotificationPermission(result.status);
+      if (result.success) {
+        setIsPushSubscribed(true);
+        setPushActionMessage({ type: 'success', text: result.message || 'Push notifications subscribed!' });
+        await checkPushSubscription();
+      } else {
+        setPushActionMessage({ type: 'error', text: result.message || 'Subscription failed.' });
+      }
+    } catch (err: any) {
+      setPushActionMessage({ type: 'error', text: err?.message || 'Push subscription error' });
+    } finally {
+      setPushStatusLoading(false);
+      setTimeout(() => setPushActionMessage(null), 5000);
     }
   };
 
-  const handleTestAlert = () => {
-    NotificationService.sendTestAlert();
+  const handleUnsubscribePush = async () => {
+    setPushStatusLoading(true);
+    setPushActionMessage(null);
+    try {
+      const result = await NotificationService.unsubscribeFromPushNotifications();
+      if (result.success) {
+        setIsPushSubscribed(false);
+        setPushActionMessage({ type: 'success', text: 'Push notifications disabled on this device.' });
+        await checkPushSubscription();
+      } else {
+        setPushActionMessage({ type: 'error', text: result.message });
+      }
+    } catch (err: any) {
+      setPushActionMessage({ type: 'error', text: err?.message || 'Unsubscribe error' });
+    } finally {
+      setPushStatusLoading(false);
+      setTimeout(() => setPushActionMessage(null), 5000);
+    }
+  };
+
+  const handleTestAlert = async () => {
+    setPushActionMessage(null);
+    try {
+      const success = await NotificationService.sendTestAlert();
+      if (success) {
+        setPushActionMessage({ type: 'success', text: 'Test alert triggered successfully!' });
+      } else {
+        setPushActionMessage({ type: 'error', text: 'Failed to send test alert. Please check permissions.' });
+      }
+    } catch (err: any) {
+      setPushActionMessage({ type: 'error', text: err?.message || 'Test alert failed' });
+    }
+    setTimeout(() => setPushActionMessage(null), 4000);
   };
 
   const fetchMarketStatus = useCallback(async () => {
@@ -139,7 +202,8 @@ export function SettingsPage({
   useEffect(() => {
     fetchMarketStatus();
     fetchScannerSettings();
-  }, [fetchMarketStatus, fetchScannerSettings]);
+    checkPushSubscription();
+  }, [fetchMarketStatus, fetchScannerSettings, checkPushSubscription]);
 
   const envProviders = configStatus?.providers;
   const activeMarketProviders = marketStatus?.providers;
@@ -374,40 +438,60 @@ export function SettingsPage({
         </div>
       </div>
 
-      {/* Real-Time Browser & Desktop Notifications */}
+      {/* Real-Time Browser & Web Push PWA Notifications */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 pb-4 border-b border-slate-800">
           <div>
             <h3 className="text-sm font-semibold text-white flex items-center gap-2">
               <BellRing className="w-4 h-4 text-emerald-400" />
-              TOP TRADE Instant Browser Alerts
+              PWA Push Notifications & Audio Alerts
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Native desktop notification dispatch when AI validates a new Gate 9 TOP TRADE setup
+              Instant background push notifications for verified Gate 9 TOP TRADEs (even when the app is closed)
             </p>
           </div>
 
           <div className="flex items-center gap-2">
-            {notificationPermission === 'granted' ? (
-              <StatusBadge status="ok" label="BROWSER ALERTS ACTIVE" />
+            {isPushSubscribed ? (
+              <StatusBadge status="ok" label="PUSH SUBSCRIBED" />
+            ) : notificationPermission === 'granted' ? (
+              <StatusBadge status="configured" label="PERMISSION GRANTED" />
             ) : notificationPermission === 'denied' ? (
-              <StatusBadge status="error" label="PERMISSIONS BLOCKED" />
+              <StatusBadge status="error" label="BLOCKED IN BROWSER" />
             ) : (
-              <StatusBadge status="unconfigured" label="PROMPT REQUIRED" />
+              <StatusBadge status="unconfigured" label="ACTION REQUIRED" />
             )}
           </div>
         </div>
 
+        {pushActionMessage && (
+          <div className={`mb-4 p-3 rounded-lg text-xs flex items-center gap-2 ${
+            pushActionMessage.type === 'success' 
+              ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' 
+              : 'bg-red-500/10 border border-red-500/20 text-red-400'
+          }`}>
+            <span className="font-semibold">{pushActionMessage.type === 'success' ? 'Success:' : 'Alert:'}</span>
+            <span>{pushActionMessage.text}</span>
+          </div>
+        )}
+
         <div className="space-y-4">
-          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div className="space-y-1">
-              <span className="text-xs font-semibold text-white block">Desktop & Sound Alert Triggers</span>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                When active, your browser displays immediate notification toasts and plays audio chimes for high-conviction signals without needing to keep the window actively focused.
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-white block">Service Worker Web Push Subscription</span>
+                {subscriberCount > 0 && (
+                  <span className="px-2 py-0.5 text-[10px] font-mono bg-slate-900 border border-slate-700 text-slate-300 rounded">
+                    {subscriberCount} active device{subscriberCount > 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed max-w-2xl">
+                Uses W3C standard Push API with cryptographically signed VAPID envelopes. Only genuinely qualifying BEST TRADEs (Score &ge; 75, R:R &ge; 2.0) are notified.
               </p>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => setSoundAlerts((prev) => !prev)}
@@ -426,16 +510,27 @@ export function SettingsPage({
                 onClick={handleTestAlert}
                 className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-mono transition-colors"
               >
-                Test Alert
+                Test Push
               </button>
 
-              {notificationPermission !== 'granted' && (
+              {isPushSubscribed ? (
                 <button
                   type="button"
-                  onClick={handleRequestPermission}
-                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
+                  disabled={pushStatusLoading}
+                  onClick={handleUnsubscribePush}
+                  className="px-3.5 py-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/50 border border-red-800/50 text-red-300 text-xs font-medium transition-colors disabled:opacity-50"
                 >
-                  Enable Permissions
+                  {pushStatusLoading ? 'Updating...' : 'Disable Push'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={pushStatusLoading}
+                  onClick={handleSubscribePush}
+                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  <Bell className="w-3.5 h-3.5" />
+                  <span>{pushStatusLoading ? 'Connecting...' : 'Enable PWA Push Alerts'}</span>
                 </button>
               )}
             </div>
