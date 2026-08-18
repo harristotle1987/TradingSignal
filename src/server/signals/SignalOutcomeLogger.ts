@@ -19,10 +19,16 @@ export interface SignalOutcomeRecord {
   tp3HitTimestamp?: number;
   slHitTimestamp?: number;
   expiredTimestamp?: number;
-  finalOutcome?: 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'EXPIRED';
-  status: 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'EXPIRED';
+  finalOutcome?: 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'EXPIRED' | 'AMBIGUOUS';
+  status: 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'EXPIRED' | 'AMBIGUOUS';
   timestamp: number; // creation timestamp
   updatedAt: number; // last updated timestamp
+  detectedAt?: number;
+  eventTime?: number;
+  eventSource?: 'HISTORICAL_BACKFILL' | 'LIVE_STREAM' | 'TICK_EVALUATION';
+  timeframeUsed?: string;
+  isRecovered?: boolean;
+  ambiguousDetails?: string;
 }
 
 const LOCAL_OUTCOME_LOG_PATH = path.join(process.cwd(), 'signal_outcome_logs.json');

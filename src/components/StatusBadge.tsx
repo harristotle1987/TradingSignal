@@ -2,12 +2,16 @@
  * Reusable Status Badge Component
  */
 
+import { formatLabel } from '../utils/formatters.js';
+
 interface StatusBadgeProps {
   status: 'active' | 'configured' | 'unconfigured' | 'standby' | 'error' | 'ok';
   label?: string;
 }
 
 export function StatusBadge({ status, label }: StatusBadgeProps) {
+  const formattedLabel = label ? formatLabel(label) : undefined;
+
   const getStyles = () => {
     switch (status) {
       case 'active':
@@ -16,13 +20,13 @@ export function StatusBadge({ status, label }: StatusBadgeProps) {
         return {
           bg: 'bg-emerald-50 text-emerald-800 border-emerald-200',
           dot: 'bg-emerald-500 animate-pulse',
-          defaultText: label || 'Configured',
+          defaultText: formattedLabel || 'Configured',
         };
       case 'standby':
         return {
           bg: 'bg-amber-50 text-amber-800 border-amber-200',
           dot: 'bg-amber-500',
-          defaultText: label || 'Standby',
+          defaultText: formattedLabel || 'Standby',
         };
       case 'unconfigured':
       case 'error':
@@ -30,7 +34,7 @@ export function StatusBadge({ status, label }: StatusBadgeProps) {
         return {
           bg: 'bg-slate-100 text-slate-700 border-slate-300',
           dot: 'bg-slate-400',
-          defaultText: label || 'Not Configured',
+          defaultText: formattedLabel || 'Not Configured',
         };
     }
   };

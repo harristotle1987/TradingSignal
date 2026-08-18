@@ -42,13 +42,24 @@ export interface PersistedSentSignal {
   strategy: string;
   timeframe: string;
   dataSource: string;
-  status: 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'EXPIRED' | 'COMPLETED' | 'SUPERSEDED';
+  status: 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'EXPIRED' | 'COMPLETED' | 'SUPERSEDED' | 'AMBIGUOUS';
   timestamp: number;
   notificationSent: boolean;
   notificationTimestamp: number;
   date: string;
   estimatedWinRate?: number;
   aiAssessment?: string;
+  tp1HitTimestamp?: number;
+  tp2HitTimestamp?: number;
+  tp3HitTimestamp?: number;
+  slHitTimestamp?: number;
+  detectedAt?: number;
+  eventTime?: number;
+  eventSource?: 'HISTORICAL_BACKFILL' | 'LIVE_STREAM' | 'TICK_EVALUATION';
+  timeframeUsed?: string;
+  isRecovered?: boolean;
+  ambiguousDetails?: string;
+  notifiedStates?: string[];
 }
 
 export interface PersistedRejectedCandidate {
@@ -570,20 +581,31 @@ export class ScannerPersistence {
   }
 
   /**
-   * Updates status of an existing signal setup (e.g. SUPERSEDED, EXPIRED, progressive hits).
+   * Updates status and optional metadata of an existing signal setup (e.g. SUPERSEDED, EXPIRED, progressive hits).
    */
-  static async updateSignalStatus(signalId: string, status: PersistedSentSignal['status']): Promise<void> {
+  static async updateSignalStatus(
+    signalId: string,
+    status: PersistedSentSignal['status'],
+    metadata?: Partial<PersistedSentSignal>
+  ): Promise<void> {
     this.init();
     const target = this.localData.sentSignals.find((s) => s.id === signalId);
     if (target) {
       target.status = status;
+      if (metadata) {
+        Object.assign(target, metadata);
+      }
       this.saveLocalData();
     }
 
     const firestore = getFirestoreAdmin();
     if (firestore) {
       try {
-        await firestore.collection(FIRESTORE_SIGNALS_COL).doc(signalId).update({ status });
+        const updatePayload: Record<string, any> = { status };
+        if (metadata) {
+          Object.assign(updatePayload, metadata);
+        }
+        await firestore.collection(FIRESTORE_SIGNALS_COL).doc(signalId).update(updatePayload);
       } catch (err) {
         logger.warn('[ScannerPersistence] Firestore updateSignalStatus failed:', { error: String(err) });
       }

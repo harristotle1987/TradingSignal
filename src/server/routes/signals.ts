@@ -282,6 +282,30 @@ router.post('/signals/monitor', async (_req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/signals/backfill-outcomes
+ * Triggers historical outcome backfill across all ACTIVE and progressive signals.
+ */
+router.post('/signals/backfill-outcomes', async (_req: Request, res: Response) => {
+  try {
+    const result = await SignalLifecycleManager.backfillHistoricalOutcomesForActiveSignals();
+    res.status(200).json({
+      success: true,
+      message: 'Historical outcome backfill executed successfully across active signals',
+      result,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Historical outcome backfill failed',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
  * GET /api/signals/log
  * Retrieves dedicated signal logs separate from application logs.
  */

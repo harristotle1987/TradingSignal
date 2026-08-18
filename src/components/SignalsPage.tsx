@@ -15,6 +15,13 @@ import { NotificationService, NotificationPermissionStatus } from '../utils/noti
 import { SignalHistoryPanel } from './SignalHistoryPanel.js';
 import { AssetClassScanner } from './AssetClassScanner.js';
 import {
+  formatLabel,
+  formatStrategy,
+  formatStatus,
+  formatRankTier,
+  formatProviderName,
+} from '../utils/formatters.js';
+import {
   TrendingUp,
   TrendingDown,
   RefreshCw,
@@ -162,10 +169,10 @@ export function SignalsPage({ health }: SignalsPageProps) {
             : log.status === 'ACTIVE'
             ? 'VALIDATED'
             : 'TOP_TRADE',
-          strategy: log.strategy,
+          strategy: formatStrategy(log.strategy),
           timeframe: log.timeframe || '1h',
-          dataSource: log.provider || log.dataSource,
-          reason: `Market Type: ${log.marketType || 'Asset'} | Provider: ${log.provider || 'Live Feed'} | Regime: ${log.marketRegime || 'TREND'} | Status: ${log.status || 'ACTIVE'} | Score: ${log.score}/100`,
+          dataSource: formatLabel(log.provider || log.dataSource),
+          reason: `Market Type: ${formatLabel(log.marketType || 'Asset')} | Provider: ${formatProviderName(log.provider || 'Live Feed')} | Regime: ${formatLabel(log.marketRegime || 'TREND')} | Status: ${formatStatus(log.status || 'ACTIVE')} | Score: ${log.score}/100`,
           timestamp: log.timestamp || Date.now(),
           marketType: log.marketType,
           marketRegime: log.marketRegime,
@@ -785,19 +792,19 @@ export function SignalsPage({ health }: SignalsPageProps) {
                     </span>
                     {signal.isBestTrade || signal.rankTier === 'BEST_TRADE' ? (
                       <span className="text-[10px] font-bold font-mono bg-amber-950/90 text-amber-300 border border-amber-500/80 px-2.5 py-0.5 rounded shadow-sm flex items-center gap-1">
-                        ★ BEST TRADE
+                        {formatRankTier('BEST_TRADE', true)}
                       </span>
                     ) : signal.isSecondBest || signal.rankTier === 'SECOND_BEST' ? (
                       <span className="text-[10px] font-bold font-mono bg-emerald-950/90 text-emerald-300 border border-emerald-500/80 px-2.5 py-0.5 rounded shadow-sm flex items-center gap-1">
-                        ★ SECOND BEST
+                        {formatRankTier('SECOND_BEST', true)}
                       </span>
                     ) : signal.isSuggestion || signal.rankTier === 'SUGGESTION' ? (
                       <span className="text-[10px] font-bold font-mono bg-sky-950/90 text-sky-300 border border-sky-600/80 px-2 py-0.5 rounded">
-                        SUGGESTION
+                        {formatRankTier('SUGGESTION', false)}
                       </span>
                     ) : signal.isTopTrade ? (
                       <span className="text-[10px] font-bold font-mono bg-amber-950/90 text-amber-300 border border-amber-500/80 px-2.5 py-0.5 rounded shadow-sm flex items-center gap-1">
-                        ★ TOP TRADE
+                        {formatRankTier('TOP_TRADE', true)}
                       </span>
                     ) : null}
                   </div>
@@ -824,7 +831,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
                       </strong>
                     </span>
                     <span className="text-slate-400 bg-slate-950 px-2 py-1 rounded border border-slate-800">
-                      {signal.dataSource}
+                      {formatProviderName(signal.dataSource)}
                     </span>
                   </div>
                 </div>

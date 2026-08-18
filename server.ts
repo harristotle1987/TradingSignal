@@ -20,6 +20,7 @@ import signalsRouter from './src/server/routes/signals.js';
 import notificationsRouter from './src/server/routes/notifications.js';
 import { hourlyScanner } from './src/server/signals/HourlyScanner.js';
 import { RepairService } from './src/server/signals/RepairService.js';
+import { SignalLifecycleManager } from './src/server/signals/SignalLifecycleManager.js';
 import { PushNotificationService } from './src/server/notifications/PushNotificationService.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -94,6 +95,13 @@ if (process.env.VERCEL !== '1' && !process.env.VERCEL_ENV) {
       // Perform startup repair of any active signals with duplicate or invalid TPs
       RepairService.repairActiveSignals().catch((err) => {
         logger.error('[StartupRepair] Failed to run active signals repair:', { error: String(err) });
+      });
+
+      // Perform initial historical outcome backfill across all existing active signals
+      SignalLifecycleManager.backfillHistoricalOutcomesForActiveSignals().then((backfillRes) => {
+        logger.info('[StartupBackfill] Initial active signals outcome backfill completed:', { ...backfillRes });
+      }).catch((err) => {
+        logger.warn('[StartupBackfill] Failed to run initial outcome backfill on startup:', { error: String(err) });
       });
 
       // Initialize Push Notification Service

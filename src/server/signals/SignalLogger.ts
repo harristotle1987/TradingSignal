@@ -32,7 +32,7 @@ import { TradingSignal } from '../../types/index.js';
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { logger } from '../logger.js';
 
-export type SignalLogStatus = 'ACTIVE' | 'TP HIT' | 'SL HIT' | 'EXPIRED' | 'INVALIDATED' | 'TP1 HIT' | 'TP2 HIT' | 'TP3 HIT';
+export type SignalLogStatus = 'ACTIVE' | 'TP HIT' | 'SL HIT' | 'EXPIRED' | 'INVALIDATED' | 'TP1 HIT' | 'TP2 HIT' | 'TP3 HIT' | 'AMBIGUOUS';
 
 export interface SignalLogRecord {
   id: string;

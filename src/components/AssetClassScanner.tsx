@@ -18,6 +18,12 @@ import {
 } from '../types/index.js';
 import { formatTimeWithZone, DisplayTimeZone } from '../utils/time.js';
 import {
+  formatLabel,
+  formatStrategy,
+  formatRankTier,
+  formatProviderName,
+} from '../utils/formatters.js';
+import {
   Search,
   TrendingUp,
   TrendingDown,
@@ -349,11 +355,11 @@ export function AssetClassScanner({
                         {best.symbol}
                       </span>
                       <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800 font-bold">
-                        BEST TRADE
+                        {formatRankTier('BEST_TRADE', false)}
                       </span>
                     </div>
                     <div className="text-xs text-slate-400 font-mono mt-0.5">
-                      {best.strategy}
+                      {formatStrategy(best.strategy)}
                     </div>
                   </div>
 
@@ -434,11 +440,11 @@ export function AssetClassScanner({
                         {second.symbol}
                       </span>
                       <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 font-bold">
-                        SECOND BEST
+                        {formatRankTier('SECOND_BEST', false)}
                       </span>
                     </div>
                     <div className="text-xs text-slate-400 font-mono mt-0.5">
-                      {second.strategy}
+                      {formatStrategy(second.strategy)}
                     </div>
                   </div>
 

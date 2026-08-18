@@ -10,6 +10,12 @@ import { useState, useEffect } from 'react';
 import { SignalHistoryItem } from '../types/index.js';
 import { formatTimeWithZone, DisplayTimeZone } from '../utils/time.js';
 import {
+  formatLabel,
+  formatStrategy,
+  formatStatus,
+  formatRankTier,
+} from '../utils/formatters.js';
+import {
   History,
   TrendingUp,
   TrendingDown,
@@ -213,13 +219,13 @@ export function SignalHistoryPanel({
 
                     {item.marketType && (
                       <span className="text-[10px] font-mono text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800">
-                        {item.marketType}
+                        {formatLabel(item.marketType)}
                       </span>
                     )}
 
                     {item.marketRegime && (
                       <span className="text-[10px] font-mono text-indigo-300 bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-800">
-                        {item.marketRegime}
+                        {formatLabel(item.marketRegime)}
                       </span>
                     )}
 
@@ -228,8 +234,14 @@ export function SignalHistoryPanel({
                         className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border ${
                           item.signalStatus === 'TP HIT'
                             ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
+                            : item.signalStatus === 'TP2 HIT'
+                            ? 'bg-emerald-950 text-emerald-300 border-emerald-600'
+                            : item.signalStatus === 'TP1 HIT'
+                            ? 'bg-teal-950 text-teal-300 border-teal-600'
                             : item.signalStatus === 'SL HIT'
                             ? 'bg-rose-950 text-rose-300 border-rose-500'
+                            : item.signalStatus === 'AMBIGUOUS'
+                            ? 'bg-amber-950 text-amber-300 border-amber-500'
                             : item.signalStatus === 'EXPIRED'
                             ? 'bg-amber-950 text-amber-300 border-amber-600'
                             : item.signalStatus === 'INVALIDATED'
@@ -237,27 +249,27 @@ export function SignalHistoryPanel({
                             : 'bg-blue-950 text-blue-300 border-blue-500'
                         }`}
                       >
-                        {item.signalStatus}
+                        {formatStatus(item.signalStatus)}
                       </span>
                     ) : item.isBestTrade || item.rankTier === 'BEST_TRADE' || item.outcomeType === 'BEST_TRADE' ? (
                       <span className="text-[10px] font-mono font-bold bg-amber-950/90 text-amber-300 border border-amber-500/80 px-2 py-0.5 rounded">
-                        ★ BEST TRADE
+                        {formatRankTier('BEST_TRADE', true)}
                       </span>
                     ) : item.isSecondBest || item.rankTier === 'SECOND_BEST' || item.outcomeType === 'SECOND_BEST' ? (
                       <span className="text-[10px] font-mono font-bold bg-emerald-950/90 text-emerald-300 border border-emerald-500/80 px-2 py-0.5 rounded">
-                        ★ SECOND BEST
+                        {formatRankTier('SECOND_BEST', true)}
                       </span>
                     ) : item.isSuggestion || item.rankTier === 'SUGGESTION' || item.outcomeType === 'SUGGESTION' ? (
                       <span className="text-[10px] font-mono font-bold bg-sky-950/90 text-sky-300 border border-sky-600/80 px-2 py-0.5 rounded">
-                        SUGGESTION
+                        {formatRankTier('SUGGESTION', false)}
                       </span>
                     ) : item.isTopTrade ? (
                       <span className="text-[10px] font-mono font-bold bg-amber-950/90 text-amber-300 border border-amber-500/80 px-2 py-0.5 rounded">
-                        ★ TOP TRADE
+                        {formatRankTier('TOP_TRADE', true)}
                       </span>
                     ) : item.outcomeType === 'NO_TRADE_OPPORTUNITY' ? (
                       <span className="text-[10px] font-mono bg-slate-900 text-slate-400 border border-slate-800 px-2 py-0.5 rounded">
-                        NO VALID SETUP
+                        {formatLabel('NO_TRADE_OPPORTUNITY')}
                       </span>
                     ) : null}
                   </div>
@@ -328,7 +340,7 @@ export function SignalHistoryPanel({
                   <div className="mt-3 pt-3 border-t border-slate-800/80 space-y-2 text-xs">
                     {item.strategy && (
                       <div className="text-slate-300 font-mono text-[11px]">
-                        <span className="text-slate-500">Strategy:</span> {item.strategy}
+                        <span className="text-slate-500">Strategy:</span> {formatStrategy(item.strategy)}
                       </div>
                     )}
 
@@ -350,13 +362,13 @@ export function SignalHistoryPanel({
                       )}
                       {item.dataSource && (
                         <span>
-                          Source: <strong className="text-slate-400">{item.dataSource}</strong>
+                          Source: <strong className="text-slate-400">{formatLabel(item.dataSource)}</strong>
                         </span>
                       )}
                       <span>
                         Status Outcome:{' '}
                         <strong className="text-emerald-400 font-semibold">
-                          {item.outcomeType}
+                          {formatLabel(item.outcomeType)}
                         </strong>
                       </span>
                     </div>

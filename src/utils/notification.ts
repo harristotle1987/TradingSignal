@@ -13,6 +13,7 @@
 
 import { TradingSignal } from '../types/index.js';
 import { api } from '../api/client.js';
+import { formatRankTier, formatLabel } from './formatters.js';
 
 export type NotificationPermissionStatus = 'granted' | 'denied' | 'default' | 'unsupported';
 
@@ -296,7 +297,8 @@ export class NotificationService {
       const formattedSL = signal.stopLoss.toFixed(precision);
       const formattedTP = signal.takeProfit.toFixed(precision);
 
-      const title = `🚨 TOP TRADE: ${signal.symbol} [${signal.direction}]`;
+      const tierLabel = signal.rankTier ? formatRankTier(signal.rankTier, false) : (signal.isBestTrade ? 'BEST TRADE' : 'TOP TRADE');
+      const title = `🚨 ${tierLabel}: ${signal.symbol} [${signal.direction}]`;
       const body = `Live Entry: ${formattedEntry}\nTP: ${formattedTP} | SL: ${formattedSL} (R:R ${signal.riskRewardRatio}:1)\nScore: ${signal.score || signal.confidenceScore}/100`;
 
       const notification = new Notification(title, {

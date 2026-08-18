@@ -4,8 +4,6 @@
     "snapshotId": "snap_1787008003492_INJUSDT_3gfn8",
     "aiAssessment": "NVIDIA AI Assessment: This setup appears to be a high-confidence, well-confluent short opportunity with a favorable risk-reward ratio, supported by multiple technical indicators and a strong downtrend.",
     "isBestTrade": true,
-    "riskRewardRatio": 2.16,
-    "takeProfit": 3.8548,
     "marketType": "Crypto",
     "entryPrice": 4.054,
     "score": 88,
@@ -30,6 +28,11 @@
     "status": "ACTIVE",
     "timestamp": 1787008003492,
     "strategy": "[Automated BEST TRADE] [BEST TRADE] Primary High-Confluence Setup (Score 85+)",
-    "updatedAt": 1787008032426
+    "tp3": 3.80295,
+    "tp2": 3.88663,
+    "riskRewardRatio": 2.1,
+    "takeProfit": 3.88663,
+    "tp1": 3.97032,
+    "updatedAt": 1787057251969
   }
 ]

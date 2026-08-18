@@ -21,8 +21,15 @@
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
 
-    <!-- Service Worker Registration & Version Update Flow -->
+    <!-- Early PWA Install Prompt Capture & Service Worker Registration -->
     <script>
+      window.__deferredPwaPrompt = null;
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        window.__deferredPwaPrompt = e;
+        window.dispatchEvent(new CustomEvent('pwa-prompt-captured'));
+      });
+
       if ('serviceWorker' in navigator) {
         let refreshing = false;
         // Reload page once the new service worker takes control

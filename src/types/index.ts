@@ -184,7 +184,7 @@ export interface SignalsListResponse {
   timestamp: number;
 }
 
-export type SignalLogStatus = 'ACTIVE' | 'TP HIT' | 'SL HIT' | 'EXPIRED' | 'INVALIDATED';
+export type SignalLogStatus = 'ACTIVE' | 'TP HIT' | 'SL HIT' | 'EXPIRED' | 'INVALIDATED' | 'TP1 HIT' | 'TP2 HIT' | 'TP3 HIT' | 'AMBIGUOUS';
 
 export interface SignalLogRecord {
   id: string;

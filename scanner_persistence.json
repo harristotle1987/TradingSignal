@@ -3,7 +3,7 @@
     "date": "2026-08-18",
     "dailySignalCount": 0,
     "dailySignalCap": 5,
-    "lastScanTime": 1787047539263
+    "lastScanTime": 1787054924863
   },
   "sentSignals": [],
   "rejectedCandidates": [
@@ -47,6 +47,48 @@
       "symbol": "STOCKS",
       "reason": "All instruments in the STOCKS universe (AAPL, NVDA, MSFT, TSLA, AMZN, GOOGL, META, LLY, V, UNH, TSM, JPM, NVO, XOM, WMT, MA, AVGO, ASML, JNJ, HD, PG, ADBE, MRK, COST, CVX, AMD, CRM, NFLX, PEP, KO, TMO, BAC, ABT, DIS, NKE, INTC, CMG, ORCL, QCOM, CSCO, IBM, AMGN, SPGI, INTU, GE, AXP, NOW, TXN) are currently outside official exchange trading hours. Forex and Stock markets operate only during active market sessions. Crypto operates 24/7.",
       "timestamp": 1787047539260,
+      "date": "2026-08-18"
+    },
+    {
+      "id": "rej_1787051242523_dfoj7",
+      "symbol": "CRYPTO",
+      "reason": "Multi-asset scan completed across CRYPTO universe (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, DOGEUSDT, DOTUSDT, LTCUSDT, LINKUSDT, AVAXUSDT, POLUSDT, SHIBUSDT, TRXUSDT, UNIUSDT, ATOMUSDT, ETCUSDT, FILUSDT, APTUSDT, SUIUSDT, NEARUSDT, OPUSDT, ARBUSDT, LDOUSDT, HBARUSDT, ICPUSDT, GRTUSDT, SUSDT, INJUSDT, RENDERUSDT, STXUSDT, IMXUSDT, TIAUSDT, SEIUSDT, WIFUSDT, BONKUSDT, FLOKIUSDT, PEPEUSDT, JUPUSDT, PYTHUSDT, DYDXUSDT, AAVEUSDT, FETUSDT, RUNEUSDT, PIUSDT): No setups satisfied all strict confluence, volatility, risk-reward (>= 2:1), win-rate (> 30%), or live price validation hurdles. The system will never create placeholder signals.",
+      "timestamp": 1787051242523,
+      "date": "2026-08-18"
+    },
+    {
+      "id": "rej_1787051242523_3ou6z",
+      "symbol": "FOREX",
+      "reason": "Multi-asset screening completed across FOREX universe (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD, EURGBP, EURJPY, GBPJPY, AUDJPY, EURCAD, AUDCAD, EURAUD, GBPAUD, CHFJPY, CADJPY, GBPCAD, EURCHF, GBPCHF): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
+      "timestamp": 1787051242523,
+      "date": "2026-08-18"
+    },
+    {
+      "id": "rej_1787051242523_fwg9t",
+      "symbol": "STOCKS",
+      "reason": "All instruments in the STOCKS universe (AAPL, NVDA, MSFT, TSLA, AMZN, GOOGL, META, LLY, V, UNH, TSM, JPM, NVO, XOM, WMT, MA, AVGO, ASML, JNJ, HD, PG, ADBE, MRK, COST, CVX, AMD, CRM, NFLX, PEP, KO, TMO, BAC, ABT, DIS, NKE, INTC, CMG, ORCL, QCOM, CSCO, IBM, AMGN, SPGI, INTU, GE, AXP, NOW, TXN) are currently outside official exchange trading hours. Forex and Stock markets operate only during active market sessions. Crypto operates 24/7.",
+      "timestamp": 1787051242523,
+      "date": "2026-08-18"
+    },
+    {
+      "id": "rej_1787054924300_rewdg",
+      "symbol": "CRYPTO",
+      "reason": "Multi-asset scan completed across CRYPTO universe (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, DOGEUSDT, DOTUSDT, LTCUSDT, LINKUSDT, AVAXUSDT, POLUSDT, SHIBUSDT, TRXUSDT, UNIUSDT, ATOMUSDT, ETCUSDT, FILUSDT, APTUSDT, SUIUSDT, NEARUSDT, OPUSDT, ARBUSDT, LDOUSDT, HBARUSDT, ICPUSDT, GRTUSDT, SUSDT, INJUSDT, RENDERUSDT, STXUSDT, IMXUSDT, TIAUSDT, SEIUSDT, WIFUSDT, BONKUSDT, FLOKIUSDT, PEPEUSDT, JUPUSDT, PYTHUSDT, DYDXUSDT, AAVEUSDT, FETUSDT, RUNEUSDT, PIUSDT): No setups satisfied all strict confluence, volatility, risk-reward (>= 2:1), win-rate (> 30%), or live price validation hurdles. The system will never create placeholder signals.",
+      "timestamp": 1787054924300,
+      "date": "2026-08-18"
+    },
+    {
+      "id": "rej_1787054924300_im0mx",
+      "symbol": "FOREX",
+      "reason": "Multi-asset screening completed across FOREX universe (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD, EURGBP, EURJPY, GBPJPY, AUDJPY, EURCAD, AUDCAD, EURAUD, GBPAUD, CHFJPY, CADJPY, GBPCAD, EURCHF, GBPCHF): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
+      "timestamp": 1787054924300,
+      "date": "2026-08-18"
+    },
+    {
+      "id": "rej_1787054924300_ji5jb",
+      "symbol": "STOCKS",
+      "reason": "All instruments in the STOCKS universe (AAPL, NVDA, MSFT, TSLA, AMZN, GOOGL, META, LLY, V, UNH, TSM, JPM, NVO, XOM, WMT, MA, AVGO, ASML, JNJ, HD, PG, ADBE, MRK, COST, CVX, AMD, CRM, NFLX, PEP, KO, TMO, BAC, ABT, DIS, NKE, INTC, CMG, ORCL, QCOM, CSCO, IBM, AMGN, SPGI, INTU, GE, AXP, NOW, TXN) are currently outside official exchange trading hours. Forex and Stock markets operate only during active market sessions. Crypto operates 24/7.",
+      "timestamp": 1787054924300,
       "date": "2026-08-18"
     }
   ],
@@ -268,6 +310,116 @@
       "title": "BTC_DUP [BUY] - TP1 HIT ✅",
       "message": "Conservative Take-Profit level reached for BTC_DUP at 102.",
       "score": 80,
+      "rankTier": "BEST_TRADE",
+      "date": "2026-08-18"
+    },
+    {
+      "id": "notif_1787058399478_g0k8o",
+      "timestamp": 1787058399478,
+      "type": "SETUP_UPDATE",
+      "symbol": "BTCUSDT_TEST_BUY",
+      "title": "BTCUSDT_TEST_BUY [BUY] - TP1 HIT (Recovered / Historical) ✅",
+      "message": "Historically confirmed Conservative Take-Profit level reached for BTCUSDT_TEST_BUY at 102 (Event Time: 13:05:39 UTC, Source: Historical Backfill, Timeframe: 1m).",
+      "score": 90,
+      "rankTier": "BEST_TRADE",
+      "date": "2026-08-18"
+    },
+    {
+      "id": "notif_1787058399654_2ctef",
+      "timestamp": 1787058399654,
+      "type": "HIGH_QUALITY",
+      "symbol": "BTCUSDT_TEST_BUY",
+      "title": "BTCUSDT_TEST_BUY [BUY] - TP2 HIT (Recovered / Historical) ✅",
+      "message": "Historically confirmed Main Take-Profit target achieved for BTCUSDT_TEST_BUY at 105 (Event Time: 13:06:39 UTC, Source: Historical Backfill, Timeframe: 1m).",
+      "score": 90,
+      "rankTier": "BEST_TRADE",
+      "date": "2026-08-18"
+    },
+    {
+      "id": "notif_1787058400223_j3oh6",
+      "timestamp": 1787058400223,
+      "type": "BEST_TRADE",
+      "symbol": "BTCUSDT_TEST_BUY",
+      "title": "BTCUSDT_TEST_BUY [BUY] - TP3 HIT 🏆 FULL TARGET (Recovered / Historical)",
+      "message": "Historically confirmed Extended Take-Profit reached for BTCUSDT_TEST_BUY at 110 (Event Time: 13:07:39 UTC, Source: Historical Backfill, Timeframe: 1m).",
+      "score": 90,
+      "rankTier": "BEST_TRADE",
+      "date": "2026-08-18"
+    },
+    {
+      "id": "notif_1787058401235_5auni",
+      "timestamp": 1787058401235,
+      "type": "NO_TRADE",
+      "symbol": "EURUSD_TEST_SELL",
+      "title": "EURUSD_TEST_SELL [SELL] - STOP LOSS HIT (Recovered / Historical) ❌",
+      "message": "Historically confirmed Stop Loss triggered for EURUSD_TEST_SELL at 1.105 (Event Time: 13:06:41 UTC, Source: Historical Backfill, Timeframe: 1m).",
+      "score": 85,
+      "rankTier": "BEST_TRADE",
+      "date": "2026-08-18"
+    },
+    {
+      "id": "notif_1787058402792_gb0xn",
+      "timestamp": 1787058402792,
+      "type": "SETUP_UPDATE",
+      "symbol": "BTC_DUP",
+      "title": "BTC_DUP [BUY] - TP1 HIT ✅",
+      "message": "Conservative Take-Profit level reached for BTC_DUP at 102.",
+      "score": 80,
+      "rankTier": "BEST_TRADE",
+      "date": "2026-08-18"
+    },
+    {
+      "id": "notif_1787058403484_rero3",
+      "timestamp": 1787058403484,
+      "type": "SETUP_UPDATE",
+      "symbol": "ETHUSDT_BACKFILL_TEST",
+      "title": "ETHUSDT_BACKFILL_TEST [BUY] - TP1 HIT (Recovered / Historical) ✅",
+      "message": "Historically confirmed Conservative Take-Profit level reached for ETHUSDT_BACKFILL_TEST at 3100 (Event Time: 11:16:42 UTC, Source: Historical Backfill, Timeframe: 1m).",
+      "score": 88,
+      "rankTier": "BEST_TRADE",
+      "date": "2026-08-18"
+    },
+    {
+      "id": "notif_1787058403652_qpuay",
+      "timestamp": 1787058403652,
+      "type": "HIGH_QUALITY",
+      "symbol": "ETHUSDT_BACKFILL_TEST",
+      "title": "ETHUSDT_BACKFILL_TEST [BUY] - TP2 HIT (Recovered / Historical) ✅",
+      "message": "Historically confirmed Main Take-Profit target achieved for ETHUSDT_BACKFILL_TEST at 3200 (Event Time: 11:46:42 UTC, Source: Historical Backfill, Timeframe: 1m).",
+      "score": 88,
+      "rankTier": "BEST_TRADE",
+      "date": "2026-08-18"
+    },
+    {
+      "id": "notif_1787058405030_74r7t",
+      "timestamp": 1787058405030,
+      "type": "SETUP_UPDATE",
+      "symbol": "BTC_AMBIGUOUS_TEST",
+      "title": "BTC_AMBIGUOUS_TEST [BUY] - OUTCOME AMBIGUOUS ⚠️",
+      "message": "Both Target and Stop Loss were breached inside the same candle (1m timeframe). Event recorded as AMBIGUOUS without guessing.",
+      "score": 85,
+      "rankTier": "BEST_TRADE",
+      "date": "2026-08-18"
+    },
+    {
+      "id": "notif_1787058405726_xaaf9",
+      "timestamp": 1787058405726,
+      "type": "SETUP_UPDATE",
+      "symbol": "GBPUSD_SELL_HIST",
+      "title": "GBPUSD_SELL_HIST [SELL] - TP1 HIT (Recovered / Historical) ✅",
+      "message": "Historically confirmed Conservative Take-Profit level reached for GBPUSD_SELL_HIST at 1.295 (Event Time: 11:36:45 UTC, Source: Historical Backfill, Timeframe: 1m).",
+      "score": 86,
+      "rankTier": "BEST_TRADE",
+      "date": "2026-08-18"
+    },
+    {
+      "id": "notif_1787058406261_agb34",
+      "timestamp": 1787058406261,
+      "type": "HIGH_QUALITY",
+      "symbol": "GBPUSD_SELL_HIST",
+      "title": "GBPUSD_SELL_HIST [SELL] - TP2 HIT (Recovered / Historical) ✅",
+      "message": "Historically confirmed Main Take-Profit target achieved for GBPUSD_SELL_HIST at 1.29 (Event Time: 12:06:45 UTC, Source: Historical Backfill, Timeframe: 1m).",
+      "score": 86,
       "rankTier": "BEST_TRADE",
       "date": "2026-08-18"
     }
