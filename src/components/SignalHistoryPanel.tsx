@@ -111,38 +111,38 @@ export function SignalHistoryPanel({
   };
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xl space-y-6">
       {/* Header */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-8 h-8 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-center text-emerald-400 shrink-0">
-            <History className="w-4 h-4" />
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+        <div className="flex items-center gap-3.5 min-w-0">
+          <div className="w-10 h-10 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-center text-emerald-400 shrink-0 shadow-md">
+            <History className="w-5 h-5" />
           </div>
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="text-xs sm:text-sm font-semibold text-white truncate">Signal History & Alert Log</h3>
-              <span className="text-[10px] sm:text-xs font-mono bg-slate-950 text-emerald-400 px-1.5 sm:px-2 py-0.5 rounded border border-slate-800 shrink-0 font-bold">
+            <div className="flex items-center gap-2.5">
+              <h3 className="text-base sm:text-lg font-bold text-white truncate">Signal History & Alert Log</h3>
+              <span className="text-xs font-mono bg-slate-950 text-emerald-400 px-2.5 py-1 rounded-md border border-slate-800 shrink-0 font-bold">
                 {history.length}/30 Logged
               </span>
             </div>
-            <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5 truncate sm:whitespace-normal">
+            <p className="text-xs sm:text-sm text-slate-400 mt-1 truncate sm:whitespace-normal">
               Session audit log of the last 30 generated signals, active setups, and scan outcomes
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
           {/* Timezone Preference Switcher */}
           {onTimeZoneChange && (
-            <div className="flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 text-[10px] font-mono">
-              <span className="text-slate-500 px-1.5 flex items-center gap-1 hidden sm:flex">
-                <Globe className="w-3 h-3 text-slate-400" />
+            <div className="flex items-center bg-slate-950 p-1.5 rounded-xl border border-slate-800 text-xs font-mono">
+              <span className="text-slate-400 px-2 flex items-center gap-1.5 hidden sm:flex font-semibold">
+                <Globe className="w-3.5 h-3.5 text-slate-400" />
                 ZONE:
               </span>
               <button
                 type="button"
                 onClick={() => onTimeZoneChange('LOCAL')}
-                className={`px-2 py-0.5 rounded transition ${
+                className={`px-2.5 py-1 rounded-lg transition ${
                   preferredTimeZone === 'LOCAL'
                     ? 'bg-slate-800 text-emerald-400 font-semibold border border-slate-700'
                     : 'text-slate-400 hover:text-slate-200'
@@ -154,7 +154,7 @@ export function SignalHistoryPanel({
               <button
                 type="button"
                 onClick={() => onTimeZoneChange('EXCHANGE')}
-                className={`px-2 py-0.5 rounded transition ${
+                className={`px-2.5 py-1 rounded-lg transition ${
                   preferredTimeZone === 'EXCHANGE'
                     ? 'bg-slate-800 text-emerald-400 font-semibold border border-slate-700'
                     : 'text-slate-400 hover:text-slate-200'
@@ -166,7 +166,7 @@ export function SignalHistoryPanel({
               <button
                 type="button"
                 onClick={() => onTimeZoneChange('UTC')}
-                className={`px-2 py-0.5 rounded transition ${
+                className={`px-2.5 py-1 rounded-lg transition ${
                   preferredTimeZone === 'UTC'
                     ? 'bg-slate-800 text-emerald-400 font-semibold border border-slate-700'
                     : 'text-slate-400 hover:text-slate-200'
@@ -179,11 +179,11 @@ export function SignalHistoryPanel({
           )}
 
           {/* Filter Chips */}
-          <div className="flex flex-wrap items-center bg-slate-950 p-0.5 xs:p-1 rounded-lg border border-slate-800 text-[10px] font-mono gap-1">
+          <div className="flex flex-wrap items-center bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-mono gap-1">
             <button
               type="button"
               onClick={() => setFilter('ALL')}
-              className={`px-2 py-1 rounded transition min-h-[30px] cursor-pointer ${
+              className={`px-2.5 py-1.5 rounded-lg transition min-h-[32px] cursor-pointer ${
                 filter === 'ALL'
                   ? 'bg-slate-800 text-white font-semibold'
                   : 'text-slate-400 hover:text-slate-200'
@@ -195,7 +195,7 @@ export function SignalHistoryPanel({
               <button
                 type="button"
                 onClick={() => setFilter('ACTIVE')}
-                className={`px-2 py-1 rounded transition min-h-[30px] cursor-pointer ${
+                className={`px-2.5 py-1.5 rounded-lg transition min-h-[32px] cursor-pointer ${
                   filter === 'ACTIVE'
                     ? 'bg-emerald-950 text-emerald-300 font-semibold border border-emerald-800'
                     : 'text-slate-400 hover:text-slate-200'
@@ -207,7 +207,7 @@ export function SignalHistoryPanel({
             <button
               type="button"
               onClick={() => setFilter('TOP_TRADE')}
-              className={`px-2 py-1 rounded transition min-h-[30px] cursor-pointer ${
+              className={`px-2.5 py-1.5 rounded-lg transition min-h-[32px] cursor-pointer ${
                 filter === 'TOP_TRADE'
                   ? 'bg-amber-950 text-amber-300 font-semibold border border-amber-800'
                   : 'text-slate-400 hover:text-slate-200'
@@ -218,7 +218,7 @@ export function SignalHistoryPanel({
             <button
               type="button"
               onClick={() => setFilter('SUGGESTION')}
-              className={`px-2 py-1 rounded transition min-h-[30px] cursor-pointer ${
+              className={`px-2.5 py-1.5 rounded-lg transition min-h-[32px] cursor-pointer ${
                 filter === 'SUGGESTION'
                   ? 'bg-sky-950 text-sky-300 font-semibold border border-sky-800'
                   : 'text-slate-400 hover:text-slate-200'
@@ -230,7 +230,7 @@ export function SignalHistoryPanel({
               <button
                 type="button"
                 onClick={() => setFilter('NO_TRADE')}
-                className={`px-2 py-1 rounded transition min-h-[30px] cursor-pointer ${
+                className={`px-2.5 py-1.5 rounded-lg transition min-h-[32px] cursor-pointer ${
                   filter === 'NO_TRADE'
                     ? 'bg-slate-800 text-slate-300 font-semibold border border-slate-700'
                     : 'text-slate-400 hover:text-slate-200'
@@ -246,10 +246,10 @@ export function SignalHistoryPanel({
             <button
               type="button"
               onClick={() => setConfirmClearAll(true)}
-              className="p-2 rounded-lg bg-slate-950 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-900/60 text-slate-400 hover:text-rose-400 transition min-h-[34px] min-w-[34px] flex items-center justify-center cursor-pointer"
+              className="p-2.5 rounded-xl bg-slate-950 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-900/60 text-slate-400 hover:text-rose-400 transition min-h-[38px] min-w-[38px] flex items-center justify-center cursor-pointer shadow-sm"
               title="Clear All Signal History"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Trash2 className="w-4 h-4" />
             </button>
           )}
         </div>
@@ -257,7 +257,7 @@ export function SignalHistoryPanel({
 
       {/* History List */}
       {filteredHistory.length > 0 ? (
-        <div className="space-y-3">
+        <div className="space-y-6">
           {filteredHistory.map((item, idx) => {
             const isExpanded = expandedId === item.id;
             const precision = item.entryPrice && item.entryPrice < 10 ? 5 : 2;
@@ -265,22 +265,22 @@ export function SignalHistoryPanel({
             return (
               <div
                 key={`${item.id}_${idx}`}
-                className="bg-slate-950 border border-slate-800/90 hover:border-slate-700/80 rounded-lg p-3.5 transition space-y-3"
+                className="bg-slate-950/95 border border-slate-800/90 hover:border-slate-700 rounded-2xl p-6 sm:p-8 transition shadow-lg space-y-6"
               >
-                {/* Main Header Row */}
-                <div className="flex flex-wrap items-center justify-between gap-2.5">
-                  {/* Left: Direction, Symbol, Outcome Badge */}
-                  <div className="flex flex-wrap items-center gap-2">
+                {/* Header Row: Symbol, Direction, Status & Badges */}
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-800/80">
+                  {/* Left: Direction Badge, Symbol Name, Category & Status Tags */}
+                  <div className="flex flex-wrap items-center gap-3">
                     {item.direction === 'BUY' ? (
-                      <span className="px-2.5 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 text-xs font-mono font-bold flex items-center gap-1">
-                        <TrendingUp className="w-3.5 h-3.5" /> BUY
+                      <span className="px-4 py-1.5 rounded-lg bg-emerald-950 text-emerald-400 border border-emerald-800 text-sm font-mono font-bold flex items-center gap-2 shadow-sm">
+                        <TrendingUp className="w-5 h-5" /> BUY
                       </span>
                     ) : item.direction === 'SELL' ? (
-                      <span className="px-2.5 py-0.5 rounded bg-rose-950 text-rose-400 border border-rose-800 text-xs font-mono font-bold flex items-center gap-1">
-                        <TrendingDown className="w-3.5 h-3.5" /> SELL
+                      <span className="px-4 py-1.5 rounded-lg bg-rose-950 text-rose-400 border border-rose-800 text-sm font-mono font-bold flex items-center gap-2 shadow-sm">
+                        <TrendingDown className="w-5 h-5" /> SELL
                       </span>
                     ) : (
-                      <span className="px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-slate-800 text-xs font-mono">
+                      <span className="px-4 py-1.5 rounded-lg bg-slate-900 text-slate-400 border border-slate-800 text-sm font-mono font-semibold">
                         SCAN
                       </span>
                     )}
@@ -288,34 +288,34 @@ export function SignalHistoryPanel({
                     <button
                       type="button"
                       onClick={() => onSelectSymbol && onSelectSymbol(item.symbol)}
-                      className="text-sm font-bold font-mono text-white hover:text-emerald-400 transition flex items-center gap-1"
+                      className="text-2xl sm:text-3xl font-black font-mono text-white hover:text-emerald-400 transition flex items-center gap-2 tracking-wide"
                       title={`Select ${item.symbol}`}
                     >
                       {item.symbol}
-                      {onSelectSymbol && <ExternalLink className="w-3 h-3 opacity-60" />}
+                      {onSelectSymbol && <ExternalLink className="w-4 h-4 opacity-70 text-slate-400" />}
                     </button>
 
                     {item.timeframe && (
-                      <span className="text-[11px] font-mono text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                      <span className="text-xs font-mono font-bold text-slate-200 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
                         {item.timeframe}
                       </span>
                     )}
 
                     {item.marketType && (
-                      <span className="text-[10px] font-mono text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800">
+                      <span className="text-xs font-mono font-bold text-cyan-300 bg-cyan-950/80 px-3 py-1.5 rounded-lg border border-cyan-800">
                         {formatLabel(item.marketType)}
                       </span>
                     )}
 
                     {item.marketRegime && (
-                      <span className="text-[10px] font-mono text-indigo-300 bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-800">
+                      <span className="text-xs font-mono font-bold text-indigo-300 bg-indigo-950/80 px-3 py-1.5 rounded-lg border border-indigo-800">
                         {formatLabel(item.marketRegime)}
                       </span>
                     )}
 
                     {item.signalStatus ? (
                       <span
-                        className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border ${
+                        className={`text-xs font-mono font-bold px-3 py-1.5 rounded-lg border ${
                           item.signalStatus === 'ACTIVE'
                             ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
                             : item.signalStatus === 'TP HIT' || item.signalStatus === 'TP2 HIT'
@@ -336,149 +336,213 @@ export function SignalHistoryPanel({
                         {formatStatus(item.signalStatus)}
                       </span>
                     ) : item.isBestTrade || item.rankTier === 'BEST_TRADE' || item.outcomeType === 'BEST_TRADE' ? (
-                      <span className="text-[10px] font-mono font-bold bg-amber-950/90 text-amber-300 border border-amber-500/80 px-2 py-0.5 rounded">
+                      <span className="text-xs font-mono font-bold bg-amber-950/90 text-amber-300 border border-amber-500/80 px-3 py-1.5 rounded-lg">
                         {formatRankTier('BEST_TRADE', true)}
                       </span>
                     ) : item.isSecondBest || item.rankTier === 'SECOND_BEST' || item.outcomeType === 'SECOND_BEST' ? (
-                      <span className="text-[10px] font-mono font-bold bg-emerald-950/90 text-emerald-300 border border-emerald-500/80 px-2 py-0.5 rounded">
+                      <span className="text-xs font-mono font-bold bg-emerald-950/90 text-emerald-300 border border-emerald-500/80 px-3 py-1.5 rounded-lg">
                         {formatRankTier('SECOND_BEST', true)}
                       </span>
                     ) : item.isSuggestion || item.rankTier === 'SUGGESTION' || item.outcomeType === 'SUGGESTION' ? (
-                      <span className="text-[10px] font-mono font-bold bg-sky-950/90 text-sky-300 border border-sky-600/80 px-2 py-0.5 rounded">
+                      <span className="text-xs font-mono font-bold bg-sky-950/90 text-sky-300 border border-sky-600/80 px-3 py-1.5 rounded-lg">
                         {formatRankTier('SUGGESTION', false)}
                       </span>
                     ) : item.isTopTrade ? (
-                      <span className="text-[10px] font-mono font-bold bg-amber-950/90 text-amber-300 border border-amber-500/80 px-2 py-0.5 rounded">
+                      <span className="text-xs font-mono font-bold bg-amber-950/90 text-amber-300 border border-amber-500/80 px-3 py-1.5 rounded-lg">
                         {formatRankTier('TOP_TRADE', true)}
                       </span>
                     ) : item.outcomeType === 'NO_TRADE_OPPORTUNITY' ? (
-                      <span className="text-[10px] font-mono bg-slate-900 text-slate-400 border border-slate-800 px-2 py-0.5 rounded">
+                      <span className="text-xs font-mono bg-slate-900 text-slate-400 border border-slate-800 px-3 py-1.5 rounded-lg">
                         {formatLabel('NO_TRADE_OPPORTUNITY')}
                       </span>
                     ) : null}
                   </div>
 
-                  {/* Center/Right: Numeric Specs & Action Buttons */}
-                  <div className="flex flex-wrap items-center gap-2.5 text-xs font-mono">
+                  {/* Right: Scores & Timestamps */}
+                  <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm font-mono shrink-0">
                     {item.score !== undefined && (
-                      <span className="text-slate-400">
-                        Score: <strong className="text-blue-400">{item.score}/100</strong>
+                      <span className="text-slate-300 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
+                        Score: <strong className="text-blue-400 font-bold">{item.score}/100</strong>
                       </span>
                     )}
 
                     {item.confidenceScore !== undefined && (
-                      <span className="text-slate-400">
-                        Conf: <strong className="text-emerald-400">{item.confidenceScore}%</strong>
+                      <span className="text-slate-300 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
+                        Conf: <strong className="text-emerald-400 font-bold">{item.confidenceScore}%</strong>
                       </span>
                     )}
 
                     {item.estimatedWinRate !== undefined && (
-                      <span className="text-slate-400">
-                        Win Rate: <strong className="text-emerald-400">{item.estimatedWinRate.toFixed(1)}%</strong>
+                      <span className="text-slate-300 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
+                        Win Rate: <strong className="text-emerald-400 font-bold">{item.estimatedWinRate.toFixed(1)}%</strong>
                       </span>
                     )}
 
                     {item.isAiValidated !== undefined && (
-                      <span className="text-slate-400">
+                      <span className="text-slate-300 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
                         AI:{' '}
-                        <strong className={item.isAiValidated ? "text-emerald-400" : "text-amber-400"}>
+                        <strong className={item.isAiValidated ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
                           {item.isAiValidated ? "Validated" : "UNAVAILABLE"}
                         </strong>
                       </span>
                     )}
 
-                    <span className="text-slate-500 text-[11px] flex items-center gap-1">
-                      <Clock className="w-3 h-3 text-slate-500" />
+                    <span className="text-slate-300 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800 flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-slate-400" />
                       {formatTimeWithZone(item.timestamp, preferredTimeZone)}
                     </span>
 
-                    {/* Expand Details Trigger */}
+                    {/* Expand Details Button */}
                     <button
                       type="button"
                       onClick={() => toggleExpand(item.id)}
-                      className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition"
-                      title={isExpanded ? 'Hide details' : 'Show details'}
+                      className="p-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition cursor-pointer min-h-[36px] min-w-[36px] flex items-center justify-center shadow-sm"
+                      title={isExpanded ? 'Collapse details' : 'Expand details'}
                     >
-                      {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                     </button>
 
-                    {/* Individual Item Delete Button */}
+                    {/* Delete Entry Button */}
                     <button
                       type="button"
                       onClick={() => setItemToDelete({ id: item.id, symbol: item.symbol })}
-                      className="p-1 rounded bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-800/80 transition"
-                      title={`Delete signal history entry for ${item.symbol}`}
+                      className="p-2 rounded-lg bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-800/80 transition cursor-pointer min-h-[36px] min-w-[36px] flex items-center justify-center shadow-sm"
+                      title={`Delete entry for ${item.symbol}`}
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
 
-                {/* Pricing & Targets Summary Bar */}
+                {/* Main Execution Price & Target Cards Grid - Extremely Spacious & Clear */}
                 {item.entryPrice !== undefined && item.entryPrice > 0 ? (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-slate-900/90 p-2.5 rounded border border-slate-800/80 font-mono text-xs">
-                    <div>
-                      <span className="text-slate-400 text-[10px] block">ENTRY</span>
-                      <strong className="text-white text-sm">{item.entryPrice.toFixed(precision)}</strong>
-                    </div>
-                    <div>
-                      <span className="text-slate-400 text-[10px] block">STOP LOSS</span>
-                      <span className="text-rose-400 font-bold text-sm">
-                        {item.stopLoss?.toFixed(precision)}
-                        {item.stopDistance !== undefined && item.pipPointUnit && (
-                          <span className="text-[10px] ml-1 font-normal opacity-70 text-rose-300">
-                            (-{item.stopDistance} {item.pipPointUnit})
-                          </span>
-                        )}
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 font-mono">
+                    {/* Entry Price Block */}
+                    <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-2 flex flex-col justify-between shadow-md">
+                      <div>
+                        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                          EXACT ENTRY PRICE
+                        </span>
+                        <div className="text-2xl sm:text-3xl font-black text-white tracking-tight mt-1">
+                          {item.entryPrice.toFixed(precision)}
+                        </div>
+                      </div>
+                      <span className="text-xs text-slate-400 block pt-2 border-t border-slate-800/80">
+                        Current market trigger level
                       </span>
                     </div>
-                    <div>
-                      <span className="text-slate-400 text-[10px] block">TARGETS (TP1/TP2/TP3)</span>
-                      <div className="flex items-center gap-1 text-[11px]">
-                        <span className="text-emerald-500 font-semibold" title="TP1 (Conservative)">
-                          T1:{(item.tp1 ?? item.takeProfit)?.toFixed(precision)}
+
+                    {/* Stop Loss Block */}
+                    <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-2 flex flex-col justify-between shadow-md">
+                      <div>
+                        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                          STOP LOSS (ATR Volatility)
                         </span>
-                        <span className="text-emerald-400 font-bold" title="TP2 (Main Target)">
-                          T2:{(item.tp2 ?? item.takeProfit)?.toFixed(precision)}
+                        <div className="text-2xl sm:text-3xl font-black text-rose-400 tracking-tight mt-1">
+                          {item.stopLoss?.toFixed(precision)}
+                        </div>
+                      </div>
+                      {item.stopDistance !== undefined && item.pipPointUnit ? (
+                        <div className="text-xs font-semibold text-rose-300 pt-2 border-t border-slate-800/80">
+                          Risk Distance: -{item.stopDistance} {item.pipPointUnit}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-rose-400/80 block pt-2 border-t border-slate-800/80">
+                          Strict risk exit point
                         </span>
-                        <span className="text-emerald-300 font-semibold" title="TP3 (Extended)">
-                          T3:{(item.tp3 ?? item.takeProfit)?.toFixed(precision)}
+                      )}
+                    </div>
+
+                    {/* Take Profit Target Levels Block - Dedicated Spacious Container */}
+                    <div className="bg-slate-900/90 border border-emerald-900/60 rounded-2xl p-5 space-y-3 shadow-md md:col-span-2 xl:col-span-1">
+                      <div className="flex items-center justify-between pb-1 border-b border-emerald-950/80">
+                        <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider block">
+                          TAKE PROFIT TARGETS
+                        </span>
+                        <span className="text-[10px] text-emerald-400/80 bg-emerald-950 px-2 py-0.5 rounded font-mono">
+                          Multi-Level
                         </span>
                       </div>
+                      
+                      <div className="space-y-2 font-mono">
+                        {/* TP1 Row */}
+                        <div className="bg-slate-950/90 border border-emerald-900/50 p-3 rounded-xl flex items-center justify-between gap-3 shadow-sm">
+                          <div>
+                            <span className="text-xs font-bold text-emerald-400/90 block">TP1</span>
+                            <span className="text-[10px] text-slate-400 block">Conservative</span>
+                          </div>
+                          <strong className="text-base sm:text-lg font-black text-emerald-400 tracking-tight">
+                            {(item.tp1 ?? item.takeProfit)?.toFixed(precision)}
+                          </strong>
+                        </div>
+
+                        {/* TP2 Row */}
+                        <div className="bg-slate-950/90 border border-emerald-800/60 p-3 rounded-xl flex items-center justify-between gap-3 shadow-sm">
+                          <div>
+                            <span className="text-xs font-bold text-emerald-300 block">TP2</span>
+                            <span className="text-[10px] text-slate-400 block">Main Target</span>
+                          </div>
+                          <strong className="text-base sm:text-lg font-black text-emerald-300 tracking-tight">
+                            {(item.tp2 ?? item.takeProfit)?.toFixed(precision)}
+                          </strong>
+                        </div>
+
+                        {/* TP3 Row */}
+                        <div className="bg-slate-950/90 border border-emerald-700/60 p-3 rounded-xl flex items-center justify-between gap-3 shadow-sm">
+                          <div>
+                            <span className="text-xs font-bold text-emerald-200 block">TP3</span>
+                            <span className="text-[10px] text-slate-400 block">Extended Trend</span>
+                          </div>
+                          <strong className="text-base sm:text-lg font-black text-emerald-200 tracking-tight">
+                            {(item.tp3 ?? item.takeProfit)?.toFixed(precision)}
+                          </strong>
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-slate-400 text-[10px] block">RISK / REWARD</span>
-                      <span className="text-blue-400 font-bold text-sm">
-                        {item.riskRewardRatio}:1
-                        {item.estimatedFriction?.netRiskRewardRatio && (
-                          <span className="text-[10px] ml-1 font-normal opacity-75 text-sky-300">
-                            (Net: {item.estimatedFriction.netRiskRewardRatio.toFixed(2)}:1)
-                          </span>
-                        )}
-                      </span>
+
+                    {/* Risk/Reward Ratio Block */}
+                    <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-2 flex flex-col justify-between shadow-md">
+                      <div>
+                        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                          RISK / REWARD RATIO
+                        </span>
+                        <div className="text-2xl sm:text-3xl font-black text-blue-400 tracking-tight mt-1">
+                          {item.riskRewardRatio}:1
+                        </div>
+                      </div>
+                      {item.estimatedFriction?.netRiskRewardRatio ? (
+                        <div className="text-xs font-semibold text-sky-300 pt-2 border-t border-slate-800/80">
+                          Net: {item.estimatedFriction.netRiskRewardRatio.toFixed(2)}:1 (Post-Slippage)
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-400 block pt-2 border-t border-slate-800/80">
+                          Gross setup expectation
+                        </span>
+                      )}
                     </div>
                   </div>
                 ) : null}
 
                 {/* Expanded Details Drawer */}
                 {isExpanded && (
-                  <div className="pt-2 border-t border-slate-800/80 space-y-2.5 text-xs">
+                  <div className="pt-3 border-t border-slate-800/80 space-y-3 text-xs">
                     {item.strategy && (
-                      <div className="text-slate-300 font-mono text-[11px]">
-                        <span className="text-slate-500">Strategy:</span> {formatStrategy(item.strategy)}
+                      <div className="text-slate-300 font-mono text-xs bg-slate-900/80 border border-slate-800 p-3 rounded-lg flex items-center gap-2">
+                        <span className="text-slate-400 font-semibold uppercase text-[10px]">Strategy:</span>
+                        <span className="text-white font-medium">{formatStrategy(item.strategy)}</span>
                       </div>
                     )}
 
                     {/* Technical Confluence Reasons List */}
                     {item.confluenceReasons && item.confluenceReasons.length > 0 && (
-                      <div className="bg-slate-900/90 border border-slate-800 rounded p-3 space-y-1.5">
-                        <div className="flex items-center gap-1.5 text-emerald-400 font-semibold text-[11px]">
-                          <Layers className="w-3.5 h-3.5 text-emerald-400" />
+                      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-2">
+                        <div className="flex items-center gap-2 text-emerald-400 font-semibold text-xs uppercase tracking-wider">
+                          <Layers className="w-4 h-4 text-emerald-400" />
                           <span>Technical Confluence Rationale</span>
                         </div>
-                        <ul className="space-y-1 pl-1">
+                        <ul className="space-y-1.5 pl-1">
                           {item.confluenceReasons.map((reason, rIdx) => (
-                            <li key={rIdx} className="text-xs text-slate-300 flex items-start gap-2 leading-relaxed">
+                            <li key={rIdx} className="text-xs text-slate-200 flex items-start gap-2.5 leading-relaxed">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5 shrink-0" />
                               <span>{reason}</span>
                             </li>
@@ -489,57 +553,58 @@ export function SignalHistoryPanel({
 
                     {/* NVIDIA AI Risk Evaluation */}
                     {item.aiAssessment && (
-                      <div className="bg-slate-900/90 border border-slate-800 rounded p-3 text-slate-300 text-xs">
-                        <div className="flex items-center gap-1.5 text-cyan-400 font-semibold text-[11px] mb-1">
-                          <Cpu className="w-3.5 h-3.5 text-emerald-400" />
-                          <span className="uppercase tracking-wider">NVIDIA AI Risk Evaluation</span>
+                      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 text-slate-200 space-y-1.5">
+                        <div className="flex items-center gap-2 text-cyan-400 font-semibold text-xs uppercase tracking-wider">
+                          <Cpu className="w-4 h-4 text-emerald-400" />
+                          <span>NVIDIA AI Risk Evaluation</span>
                         </div>
-                        <p className="text-slate-300 leading-relaxed font-sans">{item.aiAssessment}</p>
+                        <p className="text-slate-200 leading-relaxed font-sans text-xs sm:text-sm">{item.aiAssessment}</p>
                       </div>
                     )}
 
                     {/* Evaluation Summary fallback */}
                     {item.reason && !item.aiAssessment && (
-                      <div className="bg-slate-900/90 border border-slate-800 rounded p-2.5 text-slate-300 text-xs">
-                        <div className="flex items-center gap-1.5 text-amber-400 font-semibold text-[11px] mb-1">
-                          <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
+                      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 text-slate-200 space-y-1.5">
+                        <div className="flex items-center gap-2 text-amber-400 font-semibold text-xs uppercase tracking-wider">
+                          <AlertCircle className="w-4 h-4 text-amber-400" />
                           <span>Evaluation Summary</span>
                         </div>
-                        <p className="text-slate-300 leading-relaxed font-sans">{item.reason}</p>
+                        <p className="text-slate-200 leading-relaxed font-sans text-xs">{item.reason}</p>
                       </div>
                     )}
 
                     {/* Friction & Execution Specs */}
                     {item.estimatedFriction && (
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-slate-900/90 p-2.5 rounded border border-slate-800/80 font-mono text-[10px] text-slate-400">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-900/90 p-3.5 rounded-xl border border-slate-800/80 font-mono text-xs text-slate-400">
                         {item.estimatedFriction.spreadPlusSlippage && (
-                          <div className="flex justify-between items-center px-1">
+                          <div className="flex justify-between items-center px-2 py-1 bg-slate-950/60 rounded border border-slate-800/50">
                             <span>Spread & Slippage:</span>
                             <strong className="text-slate-200">{item.estimatedFriction.spreadPlusSlippage}</strong>
                           </div>
                         )}
                         {item.estimatedFriction.frictionToProfitPct !== undefined && (
-                          <div className="flex justify-between items-center px-1 border-t sm:border-t-0 sm:border-l border-slate-800/60 pt-1 sm:pt-0">
+                          <div className="flex justify-between items-center px-2 py-1 bg-slate-950/60 rounded border border-slate-800/50">
                             <span>Friction Cost Ratio:</span>
-                            <strong className="text-amber-300">{item.estimatedFriction.frictionToProfitPct.toFixed(1)}% of profit</strong>
+                            <strong className="text-emerald-400">{item.estimatedFriction.frictionToProfitPct}%</strong>
                           </div>
                         )}
-                        <div className="flex justify-between items-center px-1 border-t sm:border-t-0 sm:border-l border-slate-800/60 pt-1 sm:pt-0">
-                          <span>Execution Noise Filter:</span>
+                        <div className="flex justify-between items-center px-2 py-1 bg-slate-950/60 rounded border border-slate-800/50">
+                          <span>Execution Hurdle:</span>
                           <strong className="text-emerald-400">Passes Gate 9</strong>
                         </div>
                       </div>
                     )}
 
-                    <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono text-slate-500 pt-1">
+                    {/* Metadata Footer in Expanded Drawer */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-400 pt-1 border-t border-slate-800/60">
                       {item.snapshotId && (
                         <span>
-                          Snapshot ID: <strong className="text-slate-400">{item.snapshotId}</strong>
+                          Snapshot ID: <strong className="text-slate-300">{item.snapshotId}</strong>
                         </span>
                       )}
                       {item.dataSource && (
                         <span>
-                          Source: <strong className="text-slate-400">{formatProviderName(item.dataSource)}</strong>
+                          Source: <strong className="text-slate-300">{formatProviderName(item.dataSource)}</strong>
                         </span>
                       )}
                       <span>

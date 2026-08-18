@@ -343,80 +343,86 @@ export function AssetClassScanner({
             const best = scanResult.bestTrade || scanResult.signals!.find(s => s.isBestTrade || s.rankTier === 'BEST_TRADE')!;
             const bestPrec = best.entryPrice < 10 ? 5 : 2;
             return (
-              <div className="bg-slate-950 border-2 border-amber-500/80 rounded-xl p-5 space-y-4 shadow-lg relative overflow-hidden">
-                <div className="absolute top-0 right-0 bg-amber-500 text-slate-950 font-black font-mono text-[10px] px-3 py-1 rounded-bl-lg uppercase tracking-wider">
+              <div className="bg-slate-950 border-2 border-amber-500/80 rounded-xl p-6 sm:p-7 space-y-5 shadow-xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 bg-amber-500 text-slate-950 font-black font-mono text-xs px-4 py-1.5 rounded-bl-xl uppercase tracking-wider shadow-md">
                   ★ 1. BEST TRADE
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-800">
                   <div>
-                    <div className="flex items-center gap-2.5">
-                      <span className="text-xl font-bold font-mono text-white tracking-tight">
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl font-bold font-mono text-white tracking-wide">
                         {best.symbol}
                       </span>
-                      <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800 font-bold">
+                      <span className="text-xs font-mono px-2.5 py-1 rounded-md bg-amber-950 text-amber-300 border border-amber-800 font-bold">
                         {formatRankTier('BEST_TRADE', false)}
                       </span>
                     </div>
-                    <div className="text-xs text-slate-400 font-mono mt-0.5">
+                    <div className="text-xs text-slate-400 font-mono mt-1">
                       {formatStrategy(best.strategy)}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-3">
                     {best.direction === 'BUY' ? (
-                      <span className="px-3 py-1 rounded-lg bg-emerald-950 text-emerald-400 border border-emerald-800 text-sm font-mono font-bold flex items-center gap-1.5 shadow-sm">
-                        <TrendingUp className="w-4 h-4" /> BUY
+                      <span className="px-4 py-1.5 rounded-lg bg-emerald-950 text-emerald-400 border border-emerald-800 text-base font-mono font-bold flex items-center gap-2 shadow-sm">
+                        <TrendingUp className="w-5 h-5" /> BUY
                       </span>
                     ) : (
-                      <span className="px-3 py-1 rounded-lg bg-rose-950 text-rose-400 border border-rose-800 text-sm font-mono font-bold flex items-center gap-1.5 shadow-sm">
-                        <TrendingDown className="w-4 h-4" /> SELL
+                      <span className="px-4 py-1.5 rounded-lg bg-rose-950 text-rose-400 border border-rose-800 text-base font-mono font-bold flex items-center gap-2 shadow-sm">
+                        <TrendingDown className="w-5 h-5" /> SELL
                       </span>
                     )}
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 font-mono">
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
-                    <span className="text-[10px] text-slate-400 block uppercase">Entry Price</span>
-                    <span className="text-base font-bold text-white mt-0.5 block">{best.entryPrice ? best.entryPrice.toFixed(bestPrec) : '--'}</span>
+                {/* Grid of Key Price Metrics */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3.5 font-mono">
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Entry Price</span>
+                    <span className="text-lg font-bold text-white block tracking-tight">{best.entryPrice ? best.entryPrice.toFixed(bestPrec) : '--'}</span>
                   </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
-                    <span className="text-[10px] text-slate-400 block uppercase">Stop Loss</span>
-                    <span className="text-base font-bold text-rose-400 mt-0.5 block">{best.stopLoss ? best.stopLoss.toFixed(bestPrec) : '--'}</span>
+
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Stop Loss</span>
+                    <span className="text-lg font-bold text-rose-400 block tracking-tight">{best.stopLoss ? best.stopLoss.toFixed(bestPrec) : '--'}</span>
                   </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 flex flex-col justify-between">
-                    <div>
-                      <span className="text-[10px] text-slate-400 block uppercase">Take Profit</span>
-                      <span className="text-base font-bold text-emerald-400 mt-0.5 block">{best.takeProfit ? best.takeProfit.toFixed(bestPrec) : '--'}</span>
-                    </div>
+
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1.5">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Take Profit</span>
+                    <span className="text-lg font-bold text-emerald-400 block tracking-tight">{best.takeProfit ? best.takeProfit.toFixed(bestPrec) : '--'}</span>
                     {best.tp1 !== undefined && (
-                      <div className="text-[9px] text-slate-500 mt-1 border-t border-slate-800/80 pt-1 leading-normal">
-                        T1: {best.tp1.toFixed(bestPrec)} | T3: {best.tp3?.toFixed(bestPrec)}
+                      <div className="text-[10px] text-slate-400 border-t border-slate-800/80 pt-1 space-y-0.5">
+                        <div className="flex justify-between"><span>TP1:</span><span className="text-emerald-400 font-bold">{best.tp1.toFixed(bestPrec)}</span></div>
+                        {best.tp2 !== undefined && <div className="flex justify-between"><span>TP2:</span><span className="text-emerald-300 font-bold">{best.tp2.toFixed(bestPrec)}</span></div>}
+                        {best.tp3 !== undefined && <div className="flex justify-between"><span>TP3:</span><span className="text-emerald-200 font-bold">{best.tp3.toFixed(bestPrec)}</span></div>}
                       </div>
                     )}
                   </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
-                    <span className="text-[10px] text-slate-400 block uppercase">R:R Ratio</span>
-                    <span className="text-base font-bold text-blue-400 mt-0.5 block">{best.riskRewardRatio ? `${best.riskRewardRatio}:1` : '--'}</span>
+
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">R:R Ratio</span>
+                    <span className="text-lg font-bold text-blue-400 block tracking-tight">{best.riskRewardRatio ? `${best.riskRewardRatio}:1` : '--'}</span>
                   </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
-                    <span className="text-[10px] text-slate-400 block uppercase">Quality Score</span>
-                    <span className="text-base font-bold text-emerald-400 mt-0.5 block">{best.score !== undefined ? `${best.score}/100` : '--'}</span>
+
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Quality Score</span>
+                    <span className="text-lg font-bold text-emerald-400 block tracking-tight">{best.score !== undefined ? `${best.score}/100` : '--'}</span>
                   </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
-                    <span className="text-[10px] text-slate-400 block uppercase">Confidence</span>
-                    <span className="text-base font-bold text-sky-400 mt-0.5 block">{best.confidenceScore ? `${best.confidenceScore}%` : '--'}</span>
+
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Confidence</span>
+                    <span className="text-lg font-bold text-sky-400 block tracking-tight">{best.confidenceScore ? `${best.confidenceScore}%` : '--'}</span>
                   </div>
                 </div>
 
                 {best.aiAssessment && (
-                  <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-3 text-xs text-slate-300 space-y-1">
-                    <div className="flex items-center gap-1.5 text-amber-400 font-semibold text-[11px]">
-                      <Sparkles className="w-3.5 h-3.5" />
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 text-xs text-slate-200 space-y-1.5">
+                    <div className="flex items-center gap-2 text-amber-400 font-semibold text-xs uppercase tracking-wider">
+                      <Sparkles className="w-4 h-4 text-amber-400" />
                       <span>AI Confluence Assessment</span>
                     </div>
-                    <p className="leading-relaxed font-sans text-slate-200">{best.aiAssessment}</p>
+                    <p className="leading-relaxed font-sans text-xs sm:text-sm text-slate-200">{best.aiAssessment}</p>
                   </div>
                 )}
               </div>
@@ -428,70 +434,76 @@ export function AssetClassScanner({
             const second = scanResult.secondBest || scanResult.signals!.find(s => s.isSecondBest || s.rankTier === 'SECOND_BEST')!;
             const secondPrec = second.entryPrice < 10 ? 5 : 2;
             return (
-              <div className="bg-slate-950 border border-emerald-500/80 rounded-xl p-5 space-y-4 shadow-md relative overflow-hidden">
-                <div className="absolute top-0 right-0 bg-emerald-500 text-slate-950 font-black font-mono text-[10px] px-3 py-1 rounded-bl-lg uppercase tracking-wider">
+              <div className="bg-slate-950 border border-emerald-500/80 rounded-xl p-6 sm:p-7 space-y-5 shadow-lg relative overflow-hidden">
+                <div className="absolute top-0 right-0 bg-emerald-500 text-slate-950 font-black font-mono text-xs px-4 py-1.5 rounded-bl-xl uppercase tracking-wider shadow-md">
                   ★ 2. SECOND BEST
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-800">
                   <div>
-                    <div className="flex items-center gap-2.5">
-                      <span className="text-xl font-bold font-mono text-white tracking-tight">
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl font-bold font-mono text-white tracking-wide">
                         {second.symbol}
                       </span>
-                      <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 font-bold">
+                      <span className="text-xs font-mono px-2.5 py-1 rounded-md bg-emerald-950 text-emerald-300 border border-emerald-800 font-bold">
                         {formatRankTier('SECOND_BEST', false)}
                       </span>
                     </div>
-                    <div className="text-xs text-slate-400 font-mono mt-0.5">
+                    <div className="text-xs text-slate-400 font-mono mt-1">
                       {formatStrategy(second.strategy)}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-3">
                     {second.direction === 'BUY' ? (
-                      <span className="px-3 py-1 rounded-lg bg-emerald-950 text-emerald-400 border border-emerald-800 text-sm font-mono font-bold flex items-center gap-1.5 shadow-sm">
-                        <TrendingUp className="w-4 h-4" /> BUY
+                      <span className="px-4 py-1.5 rounded-lg bg-emerald-950 text-emerald-400 border border-emerald-800 text-base font-mono font-bold flex items-center gap-2 shadow-sm">
+                        <TrendingUp className="w-5 h-5" /> BUY
                       </span>
                     ) : (
-                      <span className="px-3 py-1 rounded-lg bg-rose-950 text-rose-400 border border-rose-800 text-sm font-mono font-bold flex items-center gap-1.5 shadow-sm">
-                        <TrendingDown className="w-4 h-4" /> SELL
+                      <span className="px-4 py-1.5 rounded-lg bg-rose-950 text-rose-400 border border-rose-800 text-base font-mono font-bold flex items-center gap-2 shadow-sm">
+                        <TrendingDown className="w-5 h-5" /> SELL
                       </span>
                     )}
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 font-mono">
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
-                    <span className="text-[10px] text-slate-400 block uppercase">Entry Price</span>
-                    <span className="text-base font-bold text-white mt-0.5 block">{second.entryPrice ? second.entryPrice.toFixed(secondPrec) : '--'}</span>
+                {/* Grid of Key Price Metrics */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3.5 font-mono">
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Entry Price</span>
+                    <span className="text-lg font-bold text-white block tracking-tight">{second.entryPrice ? second.entryPrice.toFixed(secondPrec) : '--'}</span>
                   </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
-                    <span className="text-[10px] text-slate-400 block uppercase">Stop Loss</span>
-                    <span className="text-base font-bold text-rose-400 mt-0.5 block">{second.stopLoss ? second.stopLoss.toFixed(secondPrec) : '--'}</span>
+
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Stop Loss</span>
+                    <span className="text-lg font-bold text-rose-400 block tracking-tight">{second.stopLoss ? second.stopLoss.toFixed(secondPrec) : '--'}</span>
                   </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 flex flex-col justify-between">
-                    <div>
-                      <span className="text-[10px] text-slate-400 block uppercase">Take Profit</span>
-                      <span className="text-base font-bold text-emerald-400 mt-0.5 block">{second.takeProfit ? second.takeProfit.toFixed(secondPrec) : '--'}</span>
-                    </div>
+
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1.5">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Take Profit</span>
+                    <span className="text-lg font-bold text-emerald-400 block tracking-tight">{second.takeProfit ? second.takeProfit.toFixed(secondPrec) : '--'}</span>
                     {second.tp1 !== undefined && (
-                      <div className="text-[9px] text-slate-500 mt-1 border-t border-slate-800/80 pt-1 leading-normal">
-                        T1: {second.tp1.toFixed(secondPrec)} | T3: {second.tp3?.toFixed(secondPrec)}
+                      <div className="text-[10px] text-slate-400 border-t border-slate-800/80 pt-1 space-y-0.5">
+                        <div className="flex justify-between"><span>TP1:</span><span className="text-emerald-400 font-bold">{second.tp1.toFixed(secondPrec)}</span></div>
+                        {second.tp2 !== undefined && <div className="flex justify-between"><span>TP2:</span><span className="text-emerald-300 font-bold">{second.tp2.toFixed(secondPrec)}</span></div>}
+                        {second.tp3 !== undefined && <div className="flex justify-between"><span>TP3:</span><span className="text-emerald-200 font-bold">{second.tp3.toFixed(secondPrec)}</span></div>}
                       </div>
                     )}
                   </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
-                    <span className="text-[10px] text-slate-400 block uppercase">R:R Ratio</span>
-                    <span className="text-base font-bold text-blue-400 mt-0.5 block">{second.riskRewardRatio ? `${second.riskRewardRatio}:1` : '--'}</span>
+
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">R:R Ratio</span>
+                    <span className="text-lg font-bold text-blue-400 block tracking-tight">{second.riskRewardRatio ? `${second.riskRewardRatio}:1` : '--'}</span>
                   </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
-                    <span className="text-[10px] text-slate-400 block uppercase">Quality Score</span>
-                    <span className="text-base font-bold text-emerald-400 mt-0.5 block">{second.score !== undefined ? `${second.score}/100` : '--'}</span>
+
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Quality Score</span>
+                    <span className="text-lg font-bold text-emerald-400 block tracking-tight">{second.score !== undefined ? `${second.score}/100` : '--'}</span>
                   </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
-                    <span className="text-[10px] text-slate-400 block uppercase">Confidence</span>
-                    <span className="text-base font-bold text-sky-400 mt-0.5 block">{second.confidenceScore ? `${second.confidenceScore}%` : '--'}</span>
+
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Confidence</span>
+                    <span className="text-lg font-bold text-sky-400 block tracking-tight">{second.confidenceScore ? `${second.confidenceScore}%` : '--'}</span>
                   </div>
                 </div>
               </div>
@@ -503,37 +515,49 @@ export function AssetClassScanner({
             const sugList = scanResult.suggestions || (scanResult.signals ? scanResult.signals.filter(s => s.isSuggestion || s.rankTier === 'SUGGESTION') : []);
             if (!sugList || sugList.length === 0) return null;
             return (
-              <div className="space-y-2">
-                <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider pt-1">
-                  3. SUGGESTIONS (Up to 3 Additional Validated Setups)
+              <div className="space-y-3 pt-2">
+                <div className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                  <span>3. SUGGESTIONS (Up to 3 Additional Validated Setups)</span>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {sugList.map((sug) => {
                     const sugPrec = sug.entryPrice < 10 ? 5 : 2;
                     return (
-                      <div key={sug.id} className="bg-slate-950 border border-slate-800/90 rounded-lg p-3.5 space-y-2 text-xs font-mono">
-                        <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-bold text-white text-sm">{sug.symbol}</span>
-                            <span className="text-[9px] bg-sky-950 text-sky-300 border border-sky-800 px-1.5 py-0.5 rounded">
+                      <div key={sug.id} className="bg-slate-950 border border-slate-800 rounded-xl p-4 sm:p-5 space-y-3 font-mono shadow-md">
+                        <div className="flex items-center justify-between pb-2.5 border-b border-slate-800">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-white text-base">{sug.symbol}</span>
+                            <span className="text-[10px] bg-sky-950 text-sky-300 border border-sky-800 px-2 py-0.5 rounded font-semibold">
                               SUGGESTION
                             </span>
                           </div>
-                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${sug.direction === 'BUY' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'}`}>
+                          <span className={`text-xs font-bold px-2.5 py-1 rounded-md ${sug.direction === 'BUY' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'}`}>
                             {sug.direction}
                           </span>
                         </div>
-                        <div className="grid grid-cols-2 gap-1.5 text-[11px]">
-                          <div>Entry: <strong className="text-white">{sug.entryPrice ? sug.entryPrice.toFixed(sugPrec) : '--'}</strong></div>
-                          <div>Score: <strong className="text-blue-400">{sug.score}/100</strong></div>
-                          <div>SL: <strong className="text-rose-400">{sug.stopLoss ? sug.stopLoss.toFixed(sugPrec) : '--'}</strong></div>
-                          <div>TP: <strong className="text-emerald-400">{sug.takeProfit ? sug.takeProfit.toFixed(sugPrec) : '--'}</strong></div>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="bg-slate-900/80 p-2 rounded border border-slate-800/80">
+                            <span className="text-[10px] text-slate-400 block uppercase">Entry</span>
+                            <strong className="text-white text-sm">{sug.entryPrice ? sug.entryPrice.toFixed(sugPrec) : '--'}</strong>
+                          </div>
+                          <div className="bg-slate-900/80 p-2 rounded border border-slate-800/80">
+                            <span className="text-[10px] text-slate-400 block uppercase">Score</span>
+                            <strong className="text-blue-400 text-sm">{sug.score}/100</strong>
+                          </div>
+                          <div className="bg-slate-900/80 p-2 rounded border border-slate-800/80">
+                            <span className="text-[10px] text-slate-400 block uppercase">Stop Loss</span>
+                            <strong className="text-rose-400 text-sm">{sug.stopLoss ? sug.stopLoss.toFixed(sugPrec) : '--'}</strong>
+                          </div>
+                          <div className="bg-slate-900/80 p-2 rounded border border-slate-800/80">
+                            <span className="text-[10px] text-slate-400 block uppercase">Take Profit</span>
+                            <strong className="text-emerald-400 text-sm">{sug.takeProfit ? sug.takeProfit.toFixed(sugPrec) : '--'}</strong>
+                          </div>
                         </div>
                         {sug.tp1 !== undefined && (
-                          <div className="text-[10px] text-slate-500 border-t border-slate-900 pt-1 mt-0.5 flex justify-between">
-                            <span>T1: {sug.tp1.toFixed(sugPrec)}</span>
-                            <span>T2: {sug.tp2?.toFixed(sugPrec)}</span>
-                            <span>T3: {sug.tp3?.toFixed(sugPrec)}</span>
+                          <div className="text-xs text-slate-300 bg-slate-900/60 p-2 rounded border border-slate-800/60 space-y-1">
+                            <div className="flex justify-between"><span>TP1 (Conservative):</span><strong className="text-emerald-400">{sug.tp1.toFixed(sugPrec)}</strong></div>
+                            {sug.tp2 !== undefined && <div className="flex justify-between"><span>TP2 (Main Target):</span><strong className="text-emerald-300">{sug.tp2.toFixed(sugPrec)}</strong></div>}
+                            {sug.tp3 !== undefined && <div className="flex justify-between"><span>TP3 (Extended):</span><strong className="text-emerald-200">{sug.tp3.toFixed(sugPrec)}</strong></div>}
                           </div>
                         )}
                       </div>
