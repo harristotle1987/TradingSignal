@@ -62,14 +62,14 @@ export function SignalsPage({ health }: SignalsPageProps) {
   const [soundAlerts, setSoundAlerts] = useState<boolean>(true);
   const isInitialLoad = useRef<boolean>(true);
 
-  // Local State-Based Signal History (Last 10 generated signals/outcomes)
+  // Local State-Based Signal History (Last 30 generated signals/outcomes)
   const HISTORY_STORAGE_KEY = 'trading_signal_history_v1';
   const [signalHistory, setSignalHistory] = useState<SignalHistoryItem[]>(() => {
     try {
       const saved = localStorage.getItem(HISTORY_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed.slice(0, 10);
+        if (Array.isArray(parsed)) return parsed.slice(0, 30);
       }
     } catch (e) {
       console.warn('Failed to load signal history from storage:', e);
@@ -86,7 +86,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
     }
   }, [signalHistory]);
 
-  // Helper to add signals to local history (Max 10, newest first)
+  // Helper to add signals to local history (Max 30, newest first)
   const addSignalsToHistory = useCallback(
     (signals: TradingSignal[], defaultOutcome?: SignalHistoryItem['outcomeType']) => {
       if (!signals || signals.length === 0) return;
@@ -132,12 +132,20 @@ export function SignalsPage({ health }: SignalsPageProps) {
               dataSource: sig.dataSource,
               reason: sig.aiAssessment || (sig.confluenceReasons && sig.confluenceReasons.join('; ')),
               timestamp: sig.validatedAt || sig.timestamp || Date.now(),
+              confluenceReasons: sig.confluenceReasons,
+              aiAssessment: sig.aiAssessment,
+              estimatedWinRate: sig.estimatedWinRate,
+              isAiValidated: sig.isAiValidated,
+              stopDistance: sig.stopDistance,
+              pipPointUnit: sig.pipPointUnit,
+              estimatedFriction: sig.estimatedFriction,
+              signalStatus: sig.status === 'ACTIVE' ? 'ACTIVE' : undefined,
             });
           }
         }
 
         if (newItems.length === 0) return prev;
-        return [...newItems, ...prev].slice(0, 10);
+        return [...newItems, ...prev].slice(0, 30);
       });
     },
     []
@@ -177,8 +185,10 @@ export function SignalsPage({ health }: SignalsPageProps) {
           marketType: log.marketType,
           marketRegime: log.marketRegime,
           signalStatus: log.status,
+          confluenceReasons: log.confluenceReasons,
+          aiAssessment: log.aiAssessment,
         }));
-        setSignalHistory(mappedItems.slice(0, 15));
+        setSignalHistory(mappedItems.slice(0, 30));
       }
     } catch (err) {
       console.warn('Could not load dedicated signal logs from backend:', err);
@@ -705,276 +715,13 @@ export function SignalsPage({ health }: SignalsPageProps) {
         </div>
       </div>
 
-      {/* Active Signals Feed */}
-      <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-            <Zap className="w-4 h-4 text-emerald-400" />
-            Active Validated Trading Signals ({activeSignals.length})
-          </h3>
-
-          <div className="flex items-center gap-2 text-xs font-mono">
-            {/* Timezone Preference Switcher */}
-            <div className="flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 text-[10px]">
-              <span className="text-slate-500 px-1.5 flex items-center gap-1">
-                <Globe className="w-3 h-3 text-slate-400" />
-                ZONE:
-              </span>
-              <button
-                type="button"
-                onClick={() => setPreferredTimeZone('LOCAL')}
-                className={`px-2 py-0.5 rounded transition ${
-                  preferredTimeZone === 'LOCAL'
-                    ? 'bg-slate-800 text-emerald-400 font-semibold border border-slate-700'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-                title={`Local Browser Time (${getLocalTimeZone()})`}
-              >
-                Local
-              </button>
-              <button
-                type="button"
-                onClick={() => setPreferredTimeZone('EXCHANGE')}
-                className={`px-2 py-0.5 rounded transition ${
-                  preferredTimeZone === 'EXCHANGE'
-                    ? 'bg-slate-800 text-emerald-400 font-semibold border border-slate-700'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-                title="Exchange Time (New York / Eastern Time)"
-              >
-                Exchange (ET)
-              </button>
-              <button
-                type="button"
-                onClick={() => setPreferredTimeZone('UTC')}
-                className={`px-2 py-0.5 rounded transition ${
-                  preferredTimeZone === 'UTC'
-                    ? 'bg-slate-800 text-emerald-400 font-semibold border border-slate-700'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-                title="Universal Coordinated Time"
-              >
-                UTC
-              </button>
-            </div>
-
-            <span className="text-xs font-mono text-slate-400 hidden md:inline">
-              Updated: {formatTimeWithZone(Date.now(), preferredTimeZone)}
-            </span>
-          </div>
-        </div>
-
-        {activeSignals.length > 0 ? (
-          <div className="grid grid-cols-1 gap-4">
-            {activeSignals.map((signal) => (
-              <div
-                key={signal.id}
-                className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4 hover:border-slate-700 transition"
-              >
-                {/* Signal Card Top Bar */}
-                <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-800">
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={`px-3 py-1 rounded-md text-xs font-bold font-mono flex items-center gap-1.5 ${
-                        signal.direction === 'BUY'
-                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                          : 'bg-rose-950 text-rose-400 border border-rose-800'
-                      }`}
-                    >
-                      {signal.direction === 'BUY' ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
-                      {signal.direction}
-                    </span>
-                    <span className="text-base font-bold font-mono text-white tracking-wider">
-                      {signal.symbol}
-                    </span>
-                    <span className="text-xs font-mono text-slate-400 bg-slate-950 px-2.5 py-0.5 rounded border border-slate-800">
-                      {signal.timeframe}
-                    </span>
-                    {signal.isBestTrade || signal.rankTier === 'BEST_TRADE' ? (
-                      <span className="text-[10px] font-bold font-mono bg-amber-950/90 text-amber-300 border border-amber-500/80 px-2.5 py-0.5 rounded shadow-sm flex items-center gap-1">
-                        {formatRankTier('BEST_TRADE', true)}
-                      </span>
-                    ) : signal.isSecondBest || signal.rankTier === 'SECOND_BEST' ? (
-                      <span className="text-[10px] font-bold font-mono bg-emerald-950/90 text-emerald-300 border border-emerald-500/80 px-2.5 py-0.5 rounded shadow-sm flex items-center gap-1">
-                        {formatRankTier('SECOND_BEST', true)}
-                      </span>
-                    ) : signal.isSuggestion || signal.rankTier === 'SUGGESTION' ? (
-                      <span className="text-[10px] font-bold font-mono bg-sky-950/90 text-sky-300 border border-sky-600/80 px-2 py-0.5 rounded">
-                        {formatRankTier('SUGGESTION', false)}
-                      </span>
-                    ) : signal.isTopTrade ? (
-                      <span className="text-[10px] font-bold font-mono bg-amber-950/90 text-amber-300 border border-amber-500/80 px-2.5 py-0.5 rounded shadow-sm flex items-center gap-1">
-                        {formatRankTier('TOP_TRADE', true)}
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2 xs:gap-3 text-xs font-mono">
-                    {signal.score !== undefined && (
-                      <span className="text-slate-400">
-                        Score:{' '}
-                        <strong className="text-blue-400 font-bold">{signal.score}/100</strong>
-                      </span>
-                    )}
-                    <span className="text-slate-400">
-                      Confidence:{' '}
-                      <strong className="text-emerald-400 font-bold">{signal.confidenceScore}%</strong>
-                    </span>
-                    <span className="text-slate-400">
-                      Win Rate:{' '}
-                      <strong className="text-emerald-400 font-bold">{signal.estimatedWinRate?.toFixed(1) || 'N/A'}%</strong>
-                    </span>
-                    <span className="text-slate-400">
-                      AI:{' '}
-                      <strong className={signal.isAiValidated ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
-                        {signal.isAiValidated ? "Validated" : "UNAVAILABLE"}
-                      </strong>
-                    </span>
-                    <span className="text-slate-400 bg-slate-950 px-2 py-1 rounded border border-slate-800">
-                      {formatProviderName(signal.dataSource)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Key Numeric Metrics Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950 p-4 rounded-lg border border-slate-800/80 font-mono text-xs">
-                  <div>
-                    <span className="text-slate-400 text-[10px] block">EXACT ENTRY PRICE</span>
-                    <span className="text-white font-bold text-sm">{signal.entryPrice}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 text-[10px] block">STOP LOSS (ATR Volatility)</span>
-                    <span className="text-rose-400 font-bold text-sm">
-                      {signal.stopLoss}
-                      {signal.stopDistance !== undefined && signal.pipPointUnit && (
-                        <span className="text-[10px] ml-1 font-normal opacity-70 text-rose-300">
-                          (-{signal.stopDistance} {signal.pipPointUnit})
-                        </span>
-                      )}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 text-[10px] block mb-0.5">TAKE PROFIT (TP1 / TP2 / TP3)</span>
-                    <div className="flex flex-col gap-0.5 mt-1 bg-emerald-950/20 px-2 py-1 rounded border border-emerald-950/40">
-                      <div className="flex items-center justify-between text-[11px] font-bold text-emerald-500/90">
-                        <span>TP1 (Conservative):</span>
-                        <span>{signal.tp1 || signal.takeProfit}</span>
-                      </div>
-                      <div className="flex items-center justify-between text-[11px] font-bold text-emerald-400">
-                        <span>TP2 (Main Target):</span>
-                        <span>{signal.tp2 || signal.takeProfit}</span>
-                      </div>
-                      <div className="flex items-center justify-between text-[11px] font-bold text-emerald-300">
-                        <span>TP3 (Extended):</span>
-                        <span>{signal.tp3 || signal.takeProfit}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 text-[10px] block">RISK / REWARD (NET)</span>
-                    <span className="text-blue-400 font-bold text-sm">
-                      {signal.riskRewardRatio}:1
-                      {signal.estimatedFriction?.netRiskRewardRatio && (
-                        <span className="text-[10px] ml-1 font-normal opacity-75 text-sky-300">
-                          (Net: {signal.estimatedFriction.netRiskRewardRatio}:1)
-                        </span>
-                      )}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Friction & Execution Realism Specs */}
-                {signal.estimatedFriction && (
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/50 font-mono text-[10px] text-slate-400">
-                    <div className="flex justify-between items-center px-1">
-                      <span>Est. Spread & Slippage:</span>
-                      <strong className="text-slate-200">{signal.estimatedFriction.spreadPlusSlippage}</strong>
-                    </div>
-                    <div className="flex justify-between items-center px-1 border-t sm:border-t-0 sm:border-l border-slate-800/60 pt-1 sm:pt-0">
-                      <span>Friction Cost Ratio:</span>
-                      <strong className="text-emerald-400">{signal.estimatedFriction.frictionToProfitPct}% of profit</strong>
-                    </div>
-                    <div className="flex justify-between items-center px-1 border-t sm:border-t-0 sm:border-l border-slate-800/60 pt-1 sm:pt-0">
-                      <span>Min Hurdle Clearance:</span>
-                      <strong className="text-emerald-400">Passes Noise Filter</strong>
-                    </div>
-                  </div>
-                )}
-
-                {/* Technical Confluence Reasons */}
-                <div className="space-y-1.5">
-                  <span className="text-xs font-semibold text-slate-300 block">
-                    Technical Confluence Rationale:
-                  </span>
-                  <ul className="space-y-1 pl-1">
-                    {signal.confluenceReasons.map((reason, idx) => (
-                      <li key={idx} className="text-xs text-slate-300 flex items-start gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5 shrink-0" />
-                        <span>{reason}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                {/* AI Assessment Rationale Banner */}
-                {signal.aiAssessment && (
-                  <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3 text-xs text-slate-300 flex items-start gap-2.5">
-                    <Cpu className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
-                    <div>
-                      <span className="font-semibold text-white block text-[11px] uppercase tracking-wider mb-0.5">
-                        NVIDIA AI Risk Evaluation
-                      </span>
-                      <p className="text-slate-300 text-xs leading-relaxed">{signal.aiAssessment}</p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Card Footer */}
-                <div className="flex flex-wrap items-center justify-between text-[11px] font-mono text-slate-400 pt-2 border-t border-slate-800/60 gap-2">
-                  <div className="flex items-center gap-3">
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3 text-slate-400" />
-                      Validated: {formatTimeWithZone(signal.validatedAt || signal.timestamp, preferredTimeZone)}
-                    </span>
-                    {signal.snapshotId && (
-                      <span className="text-[10px] bg-slate-950 px-2 py-0.5 rounded border border-slate-800 text-slate-400">
-                        ID: {signal.snapshotId}
-                      </span>
-                    )}
-                  </div>
-                  <span className="text-emerald-400 flex items-center gap-1 font-semibold">
-                    <CheckCircle2 className="w-3 h-3" /> Status: ACTIVE (Gate 9 Ranked)
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          /* Empty State when no setup exists */
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center shadow-sm">
-            <div className="w-12 h-12 bg-slate-950 border border-slate-800 rounded-full flex items-center justify-center mx-auto mb-3 text-slate-500">
-              <Activity className="w-6 h-6 text-slate-400" />
-            </div>
-            <h4 className="text-sm font-semibold text-white mb-1">
-              Awaiting Valid Opportunity Ranking
-            </h4>
-            <p className="text-xs text-slate-400 max-w-md mx-auto mb-4 leading-relaxed">
-              No active signal stored for selected symbol. Click <strong>"Analyze Market & Generate Signal"</strong> above to scan the liquid universe and rank genuine setups.
-            </p>
-            <div className="inline-flex items-center gap-2 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg text-xs font-mono text-slate-400">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Gate 9 Rule: TOP TRADE Selection & Risk Correlation Filter</span>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Signal History & Alert Log (Last 10 Local State Events) */}
+      {/* Consolidated Signal History & Alert Log (30-item Audit Hub) */}
       <SignalHistoryPanel
         history={signalHistory}
         onClearHistory={handleClearHistory}
         onDeleteHistoryItem={handleDeleteHistoryItem}
         preferredTimeZone={preferredTimeZone}
+        onTimeZoneChange={setPreferredTimeZone}
         onSelectSymbol={(sym) => {
           setSelectedSymbol(sym);
           window.scrollTo({ top: 0, behavior: 'smooth' });

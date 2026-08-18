@@ -242,6 +242,19 @@ export interface SignalHistoryItem {
   marketType?: 'Crypto' | 'Forex' | 'Stocks';
   marketRegime?: string;
   signalStatus?: SignalLogStatus;
+  confluenceReasons?: string[];
+  aiAssessment?: string;
+  estimatedWinRate?: number;
+  isAiValidated?: boolean;
+  stopDistance?: number;
+  pipPointUnit?: 'PIPS' | 'POINTS';
+  estimatedFriction?: {
+    spreadPipsOrPoints?: number;
+    spreadPlusSlippage?: string;
+    frictionToProfitPct?: number;
+    feeBufferPct?: number;
+    netRiskRewardRatio?: number;
+  };
 }
 
 export interface MetricSummary {

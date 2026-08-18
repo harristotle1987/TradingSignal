@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { NavigationTab, HealthResponse, ConfigStatusResponse } from './types/index.js';
 import { api } from './api/client.js';
 import { Header } from './components/Header.js';
+import { Footer } from './components/Footer.js';
 import { PwaInstallBanner } from './components/PwaInstallBanner.js';
 import { SignalsPage } from './components/SignalsPage.js';
 import { SettingsPage } from './components/SettingsPage.js';
@@ -53,7 +54,7 @@ export default function App() {
   }, [fetchHealth, fetchConfigStatus]);
 
   return (
-    <div className="min-h-screen min-h-[100dvh] w-full max-w-[100vw] overflow-x-hidden bg-slate-950 text-slate-100 font-sans flex flex-col selection:bg-emerald-500/20 selection:text-emerald-200">
+    <div className="min-h-screen min-h-[100dvh] w-full max-w-[100vw] overflow-x-hidden bg-slate-950 text-slate-100 font-sans flex flex-col selection:bg-emerald-500/20 selection:text-emerald-200 pt-14 sm:pt-16">
       {/* Header with Navigation */}
       <Header
         activeTab={activeTab}
@@ -98,19 +99,8 @@ export default function App() {
         )}
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-slate-900 bg-slate-950 py-5 sm:py-6 text-slate-400 text-xs text-center pb-[max(1.25rem,env(safe-area-inset-bottom))] w-full">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2.5 sm:gap-3">
-          <p className="font-mono text-[10px] sm:text-[11px] text-slate-400">
-            Trading Signal AI &bull; Production PWA
-          </p>
-          <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 text-[10px] sm:text-[11px] font-mono text-slate-500">
-            <span>Server: 0.0.0.0:3000</span>
-            <span className="hidden xs:inline">&bull;</span>
-            <span>NVIDIA AI Architecture</span>
-          </div>
-        </div>
-      </footer>
+      {/* Footer with Digital Clock */}
+      <Footer />
     </div>
   );
 }
