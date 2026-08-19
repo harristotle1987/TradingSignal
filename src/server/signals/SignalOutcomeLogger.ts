@@ -20,8 +20,20 @@ export interface SignalOutcomeRecord {
   slHitTimestamp?: number;
   entryHitTimestamp?: string | null;
   expiredTimestamp?: number;
-  finalOutcome?: 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'EXPIRED' | 'AMBIGUOUS';
-  status: 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'EXPIRED' | 'AMBIGUOUS';
+  finalOutcome?: 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'AMBIGUOUS';
+  status: 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'AMBIGUOUS';
+  tp1Status?: 'PENDING' | 'HIT';
+  tp2Status?: 'PENDING' | 'HIT';
+  tp3Status?: 'PENDING' | 'HIT';
+  slStatus?: 'ACTIVE' | 'HIT';
+  tp1HitAt?: string;
+  tp2HitAt?: string;
+  tp3HitAt?: string;
+  stopLossHitAt?: string;
+  tp1HitPrice?: number;
+  tp2HitPrice?: number;
+  tp3HitPrice?: number;
+  stopLossHitPrice?: number;
   timestamp: number; // creation timestamp
   updatedAt: number; // last updated timestamp
   detectedAt?: number;

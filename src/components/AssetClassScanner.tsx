@@ -11,6 +11,7 @@
  */
 
 import { useState, useMemo } from 'react';
+import { TargetTracker } from './TargetTracker.js';
 import {
   TradingSignal,
   NormalizedTicker,
@@ -406,15 +407,22 @@ export function AssetClassScanner({
                   </div>
 
                   <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
-                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Quality Score</span>
-                    <span className="text-lg font-bold text-emerald-400 block tracking-tight">{best.score !== undefined ? `${best.score}/100` : '--'}</span>
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Target Quality</span>
+                    <span className="text-lg font-bold text-emerald-400 block tracking-tight">
+                      {best.targetQualityScore !== undefined ? `${best.targetQualityScore}/100` : `${best.score || 75}/100`}
+                    </span>
                   </div>
 
                   <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
                     <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Confidence</span>
-                    <span className="text-lg font-bold text-sky-400 block tracking-tight">{best.confidenceScore ? `${best.confidenceScore}%` : '--'}</span>
+                    <span className="text-lg font-bold text-sky-400 block tracking-tight">
+                      {best.confidenceScore ? `${best.confidenceScore}/100` : '--'}
+                    </span>
                   </div>
                 </div>
+
+                {/* Target Tracker Progress Card */}
+                <TargetTracker signal={best} precision={bestPrec} />
 
                 {best.aiAssessment && (
                   <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 text-xs text-slate-200 space-y-1.5">
@@ -497,15 +505,22 @@ export function AssetClassScanner({
                   </div>
 
                   <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
-                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Quality Score</span>
-                    <span className="text-lg font-bold text-emerald-400 block tracking-tight">{second.score !== undefined ? `${second.score}/100` : '--'}</span>
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Target Quality</span>
+                    <span className="text-lg font-bold text-emerald-400 block tracking-tight">
+                      {second.targetQualityScore !== undefined ? `${second.targetQualityScore}/100` : `${second.score || 75}/100`}
+                    </span>
                   </div>
 
                   <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
                     <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Confidence</span>
-                    <span className="text-lg font-bold text-sky-400 block tracking-tight">{second.confidenceScore ? `${second.confidenceScore}%` : '--'}</span>
+                    <span className="text-lg font-bold text-sky-400 block tracking-tight">
+                      {second.confidenceScore ? `${second.confidenceScore}/100` : '--'}
+                    </span>
                   </div>
                 </div>
+
+                {/* Target Tracker Progress Card */}
+                <TargetTracker signal={second} precision={secondPrec} />
               </div>
             );
           })() : null}
@@ -523,7 +538,7 @@ export function AssetClassScanner({
                   {sugList.map((sug) => {
                     const sugPrec = sug.entryPrice < 10 ? 5 : 2;
                     return (
-                      <div key={sug.id} className="bg-slate-950 border border-slate-800 rounded-xl p-4 sm:p-5 space-y-3 font-mono shadow-md">
+                      <div key={sug.id || sug.snapshotId || `${sug.symbol}_${sug.timestamp}`} className="bg-slate-950 border border-slate-800 rounded-xl p-4 sm:p-5 space-y-3 font-mono shadow-md">
                         <div className="flex items-center justify-between pb-2.5 border-b border-slate-800">
                           <div className="flex items-center gap-2">
                             <span className="font-bold text-white text-base">{sug.symbol}</span>
@@ -536,13 +551,15 @@ export function AssetClassScanner({
                           </span>
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="bg-slate-900/80 p-2 rounded border border-slate-800/80">
-                            <span className="text-[10px] text-slate-400 block uppercase">Entry</span>
-                            <strong className="text-white text-sm">{sug.entryPrice ? sug.entryPrice.toFixed(sugPrec) : '--'}</strong>
-                          </div>
-                          <div className="bg-slate-900/80 p-2 rounded border border-slate-800/80">
-                            <span className="text-[10px] text-slate-400 block uppercase">Score</span>
-                            <strong className="text-blue-400 text-sm">{sug.score}/100</strong>
+                          <div className="bg-slate-900/80 p-2 rounded border border-slate-800/80 col-span-2 flex justify-between items-center">
+                            <div>
+                              <span className="text-[10px] text-slate-400 block uppercase">Entry Price</span>
+                              <strong className="text-white text-sm">{sug.entryPrice ? sug.entryPrice.toFixed(sugPrec) : '--'}</strong>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-[10px] text-slate-400 block uppercase">R:R Ratio</span>
+                              <strong className="text-blue-400 text-sm">{sug.riskRewardRatio ? `${sug.riskRewardRatio}:1` : '--'}</strong>
+                            </div>
                           </div>
                           <div className="bg-slate-900/80 p-2 rounded border border-slate-800/80">
                             <span className="text-[10px] text-slate-400 block uppercase">Stop Loss</span>
@@ -552,6 +569,18 @@ export function AssetClassScanner({
                             <span className="text-[10px] text-slate-400 block uppercase">Take Profit</span>
                             <strong className="text-emerald-400 text-sm">{sug.takeProfit ? sug.takeProfit.toFixed(sugPrec) : '--'}</strong>
                           </div>
+                          <div className="bg-slate-900/80 p-2 rounded border border-slate-800/80">
+                            <span className="text-[10px] text-slate-400 block uppercase">Target Quality</span>
+                            <strong className="text-emerald-400 text-sm">
+                              {sug.targetQualityScore !== undefined ? `${sug.targetQualityScore}/100` : `${sug.score || 75}/100`}
+                            </strong>
+                          </div>
+                          <div className="bg-slate-900/80 p-2 rounded border border-slate-800/80">
+                            <span className="text-[10px] text-slate-400 block uppercase">Confidence</span>
+                            <strong className="text-sky-400 text-sm">
+                              {sug.confidenceScore ? `${sug.confidenceScore}/100` : '--'}
+                            </strong>
+                          </div>
                         </div>
                         {sug.tp1 !== undefined && (
                           <div className="text-xs text-slate-300 bg-slate-900/60 p-2 rounded border border-slate-800/60 space-y-1">
@@ -560,6 +589,7 @@ export function AssetClassScanner({
                             {sug.tp3 !== undefined && <div className="flex justify-between"><span>TP3 (Extended):</span><strong className="text-emerald-200">{sug.tp3.toFixed(sugPrec)}</strong></div>}
                           </div>
                         )}
+                        <TargetTracker signal={sug} precision={sugPrec} />
                       </div>
                     );
                   })}

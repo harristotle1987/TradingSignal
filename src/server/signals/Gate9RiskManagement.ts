@@ -1,6 +1,7 @@
 import { NormalizedCandle, SignalDirection } from '../../types/index.js';
 import { TechnicalIndicators } from './TechnicalIndicators.js';
 import { Gate5SupportResistance, PriceZone } from './Gate5Liquidity.js';
+import { AtrTpGenerator } from './AtrTpGenerator.js';
 
 export interface Gate9Result {
   entryPrice: number;
@@ -21,7 +22,9 @@ export class Gate9RiskManagement {
   public static calculate(
     currentPrice: number,
     direction: SignalDirection,
-    candles: NormalizedCandle[]
+    candles: NormalizedCandle[],
+    assetClass?: string,
+    isAggressive?: boolean
   ): Gate9Result {
     const reasons: string[] = [];
     const lastCandle = candles[candles.length - 1];
@@ -42,16 +45,24 @@ export class Gate9RiskManagement {
       sl = Math.max(sl, sr.nearestResistance.top + (atr * 0.5));
     }
     
-    // TP calculations
+    // GATE 3: Primary ATR-Based TP Generation
+    const tpRes = AtrTpGenerator.generate({
+      direction,
+      entryPrice: currentPrice,
+      atr,
+      isAggressive,
+      assetClass,
+    });
+
+    const tp1 = tpRes.tp1;
+    const tp2 = tpRes.tp2;
+    const tp3 = tpRes.tp3;
+
     const risk = Math.abs(currentPrice - sl);
-    const tp1 = direction === 'BUY' ? currentPrice + (risk * 1.5) : currentPrice - (risk * 1.5);
-    const tp2 = direction === 'BUY' ? currentPrice + (risk * 2.5) : currentPrice - (risk * 2.5);
-    const tp3 = direction === 'BUY' ? currentPrice + (risk * 4.0) : currentPrice - (risk * 4.0);
     const reward = Math.abs(tp1 - currentPrice);
     const rrRatio = risk > 0 ? reward / risk : 0;
     
     // Estimated Win Probability (simplified logic based on confluence score and RR)
-    // In real system, this would be derived from historical strategy performance
     let winProb = 0.45; // Base probability
     if (rrRatio > 2) winProb -= 0.05;
     if (rrRatio < 1.5) winProb += 0.05;

@@ -487,6 +487,13 @@ export class MarketDataManager {
         }
       }
 
+      // If absolutely no provider succeeded, retrieve expired candles as high-quality fallback during rate limits
+      const expired = marketCache.getExpiredCandles(primaryProviderId, cleanSymbol, timeframe);
+      if (expired && expired.length > 0) {
+        logger.info(`[MarketData Candles] Fetch failed or rate-limited. Serving ${expired.length} expired candles from cache for ${cleanSymbol} (${timeframe})`);
+        return expired;
+      }
+
       logger.info(`No real OHLC candle data currently available for ${cleanSymbol} (${timeframe}) from primary or fallback providers`);
       return [];
     });

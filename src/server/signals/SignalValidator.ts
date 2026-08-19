@@ -15,6 +15,7 @@
 import { NormalizedCandle, NormalizedTicker, SignalDirection, SignalValidationReason } from '../../types/index.js';
 import { logger } from '../logger.js';
 import { TechnicalIndicators } from './TechnicalIndicators.js';
+import { AtrTpGenerator } from './AtrTpGenerator.js';
 
 export interface ValidationContext {
   symbol: string;
@@ -564,7 +565,7 @@ export class SignalValidator {
 
   /**
    * Validates and enforces distinct, properly ordered, and compliant TP targets.
-   * If any check fails, it recalculates compliant values.
+   * If any check fails, it recalculates compliant values using AtrTpGenerator.
    */
   public static validateAndEnforceTps(
     direction: SignalDirection,
@@ -574,12 +575,10 @@ export class SignalValidator {
     tp2: number,
     tp3: number,
     atr: number,
-    precision: number
+    precision: number,
+    assetClass?: string,
+    isAggressive?: boolean
   ): { tp1: number; tp2: number; tp3: number; takeProfit: number; riskRewardRatio: number; wasRecalculated: boolean } {
-    const minPrecisionStep = Math.pow(10, -precision);
-    const cleanAtr = atr > 0 ? atr : entryPrice * 0.01;
-    const minSafeTargetDistance = 1.80 * cleanAtr;
-
     // 1. Check distinctness
     const isDistinct = tp1 !== tp2 && tp2 !== tp3 && tp1 !== tp3;
 
@@ -591,22 +590,17 @@ export class SignalValidator {
       isOrdered = entryPrice > tp1 && tp1 > tp2 && tp2 > tp3;
     }
 
-    // 3. Check distance
     const tp1Dist = Math.abs(tp1 - entryPrice);
     const tp2Dist = Math.abs(tp2 - entryPrice);
     const tp3Dist = Math.abs(tp3 - entryPrice);
-    const satisfiesDistance = tp1Dist >= (minSafeTargetDistance * 0.5) &&
-                              tp2Dist >= minSafeTargetDistance &&
-                              tp3Dist >= (minSafeTargetDistance * 1.5);
 
-    // 4. Check risk/reward
+    // 3. Check risk/reward
     const risk = Math.abs(entryPrice - stopLoss);
     const averageReward = (tp1Dist + tp2Dist + tp3Dist) / 3;
     const rr = risk > 0 ? averageReward / risk : 0;
-    const satisfiesRR = rr >= 2.0;
 
     // If valid, return original values
-    if (isDistinct && isOrdered && satisfiesDistance && satisfiesRR) {
+    if (isDistinct && isOrdered && tp1Dist > 0) {
       return {
         tp1,
         tp2,
@@ -617,87 +611,28 @@ export class SignalValidator {
       };
     }
 
-    // Otherwise, RECALCULATE perfectly
-    const spacingStep = cleanAtr * 0.4;
-    const cleanSpacingStep = Math.max(spacingStep, 10 * minPrecisionStep);
+    // Otherwise, RECALCULATE using primary ATR-Based TP Generator
+    const atrGen = AtrTpGenerator.generate({
+      direction,
+      entryPrice,
+      atr,
+      precision,
+      assetClass,
+      isAggressive,
+    });
 
-    let finalTp1 = tp1;
-    let finalTp2 = tp2;
-    let finalTp3 = tp3;
-
-    if (direction === 'BUY') {
-      // Setup minimum baseline
-      finalTp1 = entryPrice + minSafeTargetDistance * 0.5;
-      finalTp2 = finalTp1 + cleanSpacingStep;
-      finalTp3 = finalTp2 + cleanSpacingStep;
-
-      // Ensure minimum tradeable distance
-      if (finalTp1 - entryPrice < minSafeTargetDistance * 0.5) {
-        finalTp1 = entryPrice + minSafeTargetDistance * 0.5;
-      }
-      if (finalTp2 - entryPrice < minSafeTargetDistance) {
-        finalTp2 = entryPrice + minSafeTargetDistance;
-      }
-      if (finalTp2 < finalTp1 + cleanSpacingStep) {
-        finalTp2 = finalTp1 + cleanSpacingStep;
-      }
-      if (finalTp3 - entryPrice < minSafeTargetDistance * 1.5) {
-        finalTp3 = entryPrice + minSafeTargetDistance * 1.5;
-      }
-      if (finalTp3 < finalTp2 + cleanSpacingStep) {
-        finalTp3 = finalTp2 + cleanSpacingStep;
-      }
-    } else {
-      // Setup minimum baseline
-      finalTp1 = entryPrice - minSafeTargetDistance * 0.5;
-      finalTp2 = finalTp1 - cleanSpacingStep;
-      finalTp3 = finalTp2 - cleanSpacingStep;
-
-      // Ensure minimum tradeable distance
-      if (entryPrice - finalTp1 < minSafeTargetDistance * 0.5) {
-        finalTp1 = entryPrice - minSafeTargetDistance * 0.5;
-      }
-      if (entryPrice - finalTp2 < minSafeTargetDistance) {
-        finalTp2 = entryPrice - minSafeTargetDistance;
-      }
-      if (finalTp2 > finalTp1 - cleanSpacingStep) {
-        finalTp2 = finalTp1 - cleanSpacingStep;
-      }
-      if (entryPrice - finalTp3 < minSafeTargetDistance * 1.5) {
-        finalTp3 = entryPrice - minSafeTargetDistance * 1.5;
-      }
-      if (finalTp3 > finalTp2 - cleanSpacingStep) {
-        finalTp3 = finalTp2 - cleanSpacingStep;
-      }
-    }
-
-    // Recalculate Risk/Reward and scale if needed to meet RR >= 2.0
-    const currentRisk = Math.abs(entryPrice - stopLoss);
-    let currentReward = (Math.abs(finalTp1 - entryPrice) + Math.abs(finalTp2 - entryPrice) + Math.abs(finalTp3 - entryPrice)) / 3;
-    let currentRR = currentRisk > 0 ? currentReward / currentRisk : 0;
-
-    if (currentRR < 2.0 && currentRisk > 0) {
-      const targetReward = currentRisk * 2.1; // scale to 2.1 to have comfortable margin
-      const scaleMultiplier = targetReward / currentReward;
-      if (direction === 'BUY') {
-        finalTp1 = entryPrice + (finalTp1 - entryPrice) * scaleMultiplier;
-        finalTp2 = entryPrice + (finalTp2 - entryPrice) * scaleMultiplier;
-        finalTp3 = entryPrice + (finalTp3 - entryPrice) * scaleMultiplier;
-      } else {
-        finalTp1 = entryPrice - (entryPrice - finalTp1) * scaleMultiplier;
-        finalTp2 = entryPrice - (entryPrice - finalTp2) * scaleMultiplier;
-        finalTp3 = entryPrice - (entryPrice - finalTp3) * scaleMultiplier;
-      }
-      currentReward = (Math.abs(finalTp1 - entryPrice) + Math.abs(finalTp2 - entryPrice) + Math.abs(finalTp3 - entryPrice)) / 3;
-      currentRR = currentRisk > 0 ? currentReward / currentRisk : 0;
-    }
+    const newTp1Dist = Math.abs(atrGen.tp1 - entryPrice);
+    const newTp2Dist = Math.abs(atrGen.tp2 - entryPrice);
+    const newTp3Dist = Math.abs(atrGen.tp3 - entryPrice);
+    const newAvgReward = (newTp1Dist + newTp2Dist + newTp3Dist) / 3;
+    const newRR = risk > 0 ? newAvgReward / risk : 0;
 
     return {
-      tp1: Number(finalTp1.toFixed(precision)),
-      tp2: Number(finalTp2.toFixed(precision)),
-      tp3: Number(finalTp3.toFixed(precision)),
-      takeProfit: Number(finalTp2.toFixed(precision)),
-      riskRewardRatio: Number(currentRR.toFixed(2)),
+      tp1: atrGen.tp1,
+      tp2: atrGen.tp2,
+      tp3: atrGen.tp3,
+      takeProfit: atrGen.tp2,
+      riskRewardRatio: Number(newRR.toFixed(2)),
       wasRecalculated: true
     };
   }

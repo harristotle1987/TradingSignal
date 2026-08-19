@@ -47,9 +47,13 @@ export interface SignalLogRecord {
   tp1?: number;
   tp2?: number;
   tp3?: number;
+  tp1Rr?: number;
+  tp2Rr?: number;
+  tp3Rr?: number;
   riskRewardRatio: number;
   score: number;
   confidenceScore: number;
+  targetQualityScore?: number;
   strategy: string;
   marketRegime: string;
   status: SignalLogStatus;
@@ -221,9 +225,13 @@ export class SignalLogger {
       tp1: signal.tp1,
       tp2: signal.tp2,
       tp3: signal.tp3,
+      tp1Rr: signal.tp1Rr,
+      tp2Rr: signal.tp2Rr,
+      tp3Rr: signal.tp3Rr,
       riskRewardRatio: Number(signal.riskRewardRatio?.toFixed(2) || 2.0),
       score: signal.score || 0,
       confidenceScore: signal.confidenceScore || 0,
+      targetQualityScore: signal.targetQualityScore,
       strategy,
       marketRegime,
       status,

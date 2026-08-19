@@ -7,7 +7,8 @@
  */
 
 import { useState, useEffect } from 'react';
-import { SignalHistoryItem } from '../types/index.js';
+import { SignalHistoryItem, TradingSignal } from '../types/index.js';
+import { TargetTracker } from './TargetTracker.js';
 import { formatTimeWithZone, DisplayTimeZone } from '../utils/time.js';
 import {
   formatLabel,
@@ -263,7 +264,7 @@ export function SignalHistoryPanel({
 
             return (
               <div
-                key={`${item.id}_${idx}`}
+                key={item.id || item.snapshotId || `${item.symbol}_${item.timestamp}`}
                 className="bg-slate-950/90 border border-slate-800/90 hover:border-slate-700 rounded-xl p-3 sm:p-4 transition shadow-md space-y-3"
               >
                 {/* Header Row: Symbol, Direction, Status & Badges */}
@@ -359,17 +360,15 @@ export function SignalHistoryPanel({
 
                   {/* Right: Scores & Timestamps */}
                   <div className="flex flex-wrap items-center gap-1.5 text-[10px] sm:text-xs font-mono shrink-0">
-                    {item.score !== undefined && (
+                    {item.confidenceScore !== undefined && (
                       <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                        Score: <strong className="text-blue-400 font-bold">{item.score}/100</strong>
+                        Confidence: <strong className="text-sky-400 font-bold">{item.confidenceScore}/100</strong>
                       </span>
                     )}
 
-                    {item.confidenceScore !== undefined && (
-                      <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                        Conf: <strong className="text-emerald-400 font-bold">{item.confidenceScore}%</strong>
-                      </span>
-                    )}
+                    <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                      Target Quality: <strong className="text-emerald-400 font-bold">{item.targetQualityScore !== undefined ? `${item.targetQualityScore}/100` : `${item.score || 75}/100`}</strong>
+                    </span>
 
                     {item.estimatedWinRate !== undefined && (
                       <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
@@ -516,6 +515,9 @@ export function SignalHistoryPanel({
                 {/* Expanded Details Drawer */}
                 {isExpanded && (
                   <div className="pt-3 border-t border-slate-800/80 space-y-3 text-xs">
+                    {/* Gate 2 Authoritative Target Hit Details Tracker */}
+                    <TargetTracker signal={item as unknown as TradingSignal} precision={precision} />
+
                     {item.strategy && (
                       <div className="text-slate-300 font-mono text-xs bg-slate-900/80 border border-slate-800 p-3 rounded-lg flex items-center gap-2">
                         <span className="text-slate-400 font-semibold uppercase text-[10px]">Strategy:</span>

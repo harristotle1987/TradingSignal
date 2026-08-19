@@ -3,7 +3,7 @@
     "date": "2026-08-19",
     "dailySignalCount": 0,
     "dailySignalCap": 5,
-    "lastScanTime": 1787146223528
+    "lastScanTime": 1787171865791
   },
   "sentSignals": [],
   "rejectedCandidates": [
@@ -236,6 +236,90 @@
       "symbol": "STOCKS",
       "reason": "Multi-asset screening completed across STOCKS universe (AAPL, NVDA, MSFT, TSLA, AMZN, GOOGL, META, LLY, V, UNH, TSM, JPM, NVO, XOM, WMT, MA, AVGO, ASML, JNJ, HD, PG, ADBE, MRK, COST, CVX, AMD, CRM, NFLX, PEP, KO, TMO, BAC, ABT, DIS, NKE, INTC, CMG, ORCL, QCOM, CSCO, IBM, AMGN, SPGI, INTU, GE, AXP, NOW, TXN): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
       "timestamp": 1787146223019,
+      "date": "2026-08-19"
+    },
+    {
+      "id": "rej_1787158934713_olbmi",
+      "symbol": "CRYPTO",
+      "reason": "Multi-asset scan completed across CRYPTO universe (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, DOGEUSDT, DOTUSDT, LTCUSDT, LINKUSDT, AVAXUSDT, POLUSDT, SHIBUSDT, TRXUSDT, UNIUSDT, ATOMUSDT, ETCUSDT, FILUSDT, APTUSDT, SUIUSDT, NEARUSDT, OPUSDT, ARBUSDT, LDOUSDT, HBARUSDT, ICPUSDT, GRTUSDT, SUSDT, INJUSDT, RENDERUSDT, STXUSDT, IMXUSDT, TIAUSDT, SEIUSDT, WIFUSDT, BONKUSDT, FLOKIUSDT, PEPEUSDT, JUPUSDT, PYTHUSDT, DYDXUSDT, AAVEUSDT, FETUSDT, RUNEUSDT, PIUSDT): No setups satisfied all strict confluence, volatility, risk-reward (>= 2:1), win-rate (> 30%), or live price validation hurdles. The system will never create placeholder signals.",
+      "timestamp": 1787158934713,
+      "date": "2026-08-19"
+    },
+    {
+      "id": "rej_1787158934713_10oxt",
+      "symbol": "FOREX",
+      "reason": "Multi-asset screening completed across FOREX universe (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD, EURGBP, EURJPY, GBPJPY, AUDJPY, EURCAD, AUDCAD, EURAUD, GBPAUD, CHFJPY, CADJPY, GBPCAD, EURCHF, GBPCHF): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
+      "timestamp": 1787158934713,
+      "date": "2026-08-19"
+    },
+    {
+      "id": "rej_1787158934713_fqee2",
+      "symbol": "STOCKS",
+      "reason": "Multi-asset screening completed across STOCKS universe (AAPL, NVDA, MSFT, TSLA, AMZN, GOOGL, META, LLY, V, UNH, TSM, JPM, NVO, XOM, WMT, MA, AVGO, ASML, JNJ, HD, PG, ADBE, MRK, COST, CVX, AMD, CRM, NFLX, PEP, KO, TMO, BAC, ABT, DIS, NKE, INTC, CMG, ORCL, QCOM, CSCO, IBM, AMGN, SPGI, INTU, GE, AXP, NOW, TXN): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
+      "timestamp": 1787158934713,
+      "date": "2026-08-19"
+    },
+    {
+      "id": "rej_1787162620007_wr9cn",
+      "symbol": "CRYPTO",
+      "reason": "Multi-asset scan completed across CRYPTO universe (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, DOGEUSDT, DOTUSDT, LTCUSDT, LINKUSDT, AVAXUSDT, POLUSDT, SHIBUSDT, TRXUSDT, UNIUSDT, ATOMUSDT, ETCUSDT, FILUSDT, APTUSDT, SUIUSDT, NEARUSDT, OPUSDT, ARBUSDT, LDOUSDT, HBARUSDT, ICPUSDT, GRTUSDT, SUSDT, INJUSDT, RENDERUSDT, STXUSDT, IMXUSDT, TIAUSDT, SEIUSDT, WIFUSDT, BONKUSDT, FLOKIUSDT, PEPEUSDT, JUPUSDT, PYTHUSDT, DYDXUSDT, AAVEUSDT, FETUSDT, RUNEUSDT, PIUSDT): No setups satisfied all strict confluence, volatility, risk-reward (>= 2:1), win-rate (> 30%), or live price validation hurdles. The system will never create placeholder signals.",
+      "timestamp": 1787162620007,
+      "date": "2026-08-19"
+    },
+    {
+      "id": "rej_1787162620007_kkzdp",
+      "symbol": "FOREX",
+      "reason": "Multi-asset screening completed across FOREX universe (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD, EURGBP, EURJPY, GBPJPY, AUDJPY, EURCAD, AUDCAD, EURAUD, GBPAUD, CHFJPY, CADJPY, GBPCAD, EURCHF, GBPCHF): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
+      "timestamp": 1787162620007,
+      "date": "2026-08-19"
+    },
+    {
+      "id": "rej_1787162620007_tdh4v",
+      "symbol": "STOCKS",
+      "reason": "Multi-asset screening completed across STOCKS universe (AAPL, NVDA, MSFT, TSLA, AMZN, GOOGL, META, LLY, V, UNH, TSM, JPM, NVO, XOM, WMT, MA, AVGO, ASML, JNJ, HD, PG, ADBE, MRK, COST, CVX, AMD, CRM, NFLX, PEP, KO, TMO, BAC, ABT, DIS, NKE, INTC, CMG, ORCL, QCOM, CSCO, IBM, AMGN, SPGI, INTU, GE, AXP, NOW, TXN): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
+      "timestamp": 1787162620007,
+      "date": "2026-08-19"
+    },
+    {
+      "id": "rej_1787164503869_a2v3j",
+      "symbol": "CRYPTO",
+      "reason": "Multi-asset scan completed across CRYPTO universe (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, DOGEUSDT, DOTUSDT, LTCUSDT, LINKUSDT, AVAXUSDT, POLUSDT, SHIBUSDT, TRXUSDT, UNIUSDT, ATOMUSDT, ETCUSDT, FILUSDT, APTUSDT, SUIUSDT, NEARUSDT, OPUSDT, ARBUSDT, LDOUSDT, HBARUSDT, ICPUSDT, GRTUSDT, SUSDT, INJUSDT, RENDERUSDT, STXUSDT, IMXUSDT, TIAUSDT, SEIUSDT, WIFUSDT, BONKUSDT, FLOKIUSDT, PEPEUSDT, JUPUSDT, PYTHUSDT, DYDXUSDT, AAVEUSDT, FETUSDT, RUNEUSDT, PIUSDT): No setups satisfied all strict confluence, volatility, risk-reward (>= 2:1), win-rate (> 30%), or live price validation hurdles. The system will never create placeholder signals.",
+      "timestamp": 1787164503869,
+      "date": "2026-08-19"
+    },
+    {
+      "id": "rej_1787164503869_vs3cc",
+      "symbol": "FOREX",
+      "reason": "Multi-asset screening completed across FOREX universe (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD, EURGBP, EURJPY, GBPJPY, AUDJPY, EURCAD, AUDCAD, EURAUD, GBPAUD, CHFJPY, CADJPY, GBPCAD, EURCHF, GBPCHF): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
+      "timestamp": 1787164503869,
+      "date": "2026-08-19"
+    },
+    {
+      "id": "rej_1787164503869_b35at",
+      "symbol": "STOCKS",
+      "reason": "Multi-asset screening completed across STOCKS universe (AAPL, NVDA, MSFT, TSLA, AMZN, GOOGL, META, LLY, V, UNH, TSM, JPM, NVO, XOM, WMT, MA, AVGO, ASML, JNJ, HD, PG, ADBE, MRK, COST, CVX, AMD, CRM, NFLX, PEP, KO, TMO, BAC, ABT, DIS, NKE, INTC, CMG, ORCL, QCOM, CSCO, IBM, AMGN, SPGI, INTU, GE, AXP, NOW, TXN): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
+      "timestamp": 1787164503869,
+      "date": "2026-08-19"
+    },
+    {
+      "id": "rej_1787171865295_ynd3a",
+      "symbol": "CRYPTO",
+      "reason": "Multi-asset scan completed across CRYPTO universe (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, DOGEUSDT, DOTUSDT, LTCUSDT, LINKUSDT, AVAXUSDT, POLUSDT, SHIBUSDT, TRXUSDT, UNIUSDT, ATOMUSDT, ETCUSDT, FILUSDT, APTUSDT, SUIUSDT, NEARUSDT, OPUSDT, ARBUSDT, LDOUSDT, HBARUSDT, ICPUSDT, GRTUSDT, SUSDT, INJUSDT, RENDERUSDT, STXUSDT, IMXUSDT, TIAUSDT, SEIUSDT, WIFUSDT, BONKUSDT, FLOKIUSDT, PEPEUSDT, JUPUSDT, PYTHUSDT, DYDXUSDT, AAVEUSDT, FETUSDT, RUNEUSDT, PIUSDT): No setups satisfied all strict confluence, volatility, risk-reward (>= 2:1), win-rate (> 30%), or live price validation hurdles. The system will never create placeholder signals.",
+      "timestamp": 1787171865295,
+      "date": "2026-08-19"
+    },
+    {
+      "id": "rej_1787171865295_zonvp",
+      "symbol": "FOREX",
+      "reason": "Multi-asset screening completed across FOREX universe (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD, EURGBP, EURJPY, GBPJPY, AUDJPY, EURCAD, AUDCAD, EURAUD, GBPAUD, CHFJPY, CADJPY, GBPCAD, EURCHF, GBPCHF): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
+      "timestamp": 1787171865295,
+      "date": "2026-08-19"
+    },
+    {
+      "id": "rej_1787171865295_feopa",
+      "symbol": "STOCKS",
+      "reason": "All instruments in the STOCKS universe (AAPL, NVDA, MSFT, TSLA, AMZN, GOOGL, META, LLY, V, UNH, TSM, JPM, NVO, XOM, WMT, MA, AVGO, ASML, JNJ, HD, PG, ADBE, MRK, COST, CVX, AMD, CRM, NFLX, PEP, KO, TMO, BAC, ABT, DIS, NKE, INTC, CMG, ORCL, QCOM, CSCO, IBM, AMGN, SPGI, INTU, GE, AXP, NOW, TXN) are currently outside official exchange trading hours. Forex and Stock markets operate only during active market sessions. Crypto operates 24/7.",
+      "timestamp": 1787171865295,
       "date": "2026-08-19"
     }
   ],

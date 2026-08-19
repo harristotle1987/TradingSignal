@@ -22,7 +22,9 @@ class ApiClient {
       const defaultProductionUrl = 'https://trading-signal-chi.vercel.app';
 
       const baseUrl = envApiUrl || (isNativeCapacitor ? defaultProductionUrl : windowOrigin);
-      const fullUrl = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`;
+      const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+      const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+      const fullUrl = endpoint.startsWith('http') ? endpoint : `${cleanBaseUrl}${cleanEndpoint}`;
       const response = await fetch(fullUrl, {
         headers: {
           'Accept': 'application/json',
@@ -254,6 +256,48 @@ class ApiClient {
    */
   async getPerformanceMetrics(): Promise<PerformanceMetricsResponse> {
     return this.fetchJson<PerformanceMetricsResponse>('/api/signals/performance');
+  }
+
+  /**
+   * Manually check and refresh an individual signal's targets & status
+   */
+  async refreshSignal(idOrSignal: string | any): Promise<{
+    success: boolean;
+    changed: boolean;
+    message: string;
+    currentPrice: number;
+    signal: any;
+    lastChecked: string;
+    timestamp: number;
+  }> {
+    const payload = typeof idOrSignal === 'string' 
+      ? { id: idOrSignal } 
+      : { 
+          id: idOrSignal.id,
+          symbol: idOrSignal.symbol,
+          direction: idOrSignal.direction,
+          entryPrice: idOrSignal.entryPrice,
+          stopLoss: idOrSignal.stopLoss,
+          takeProfit: idOrSignal.takeProfit,
+          tp1: idOrSignal.tp1,
+          tp2: idOrSignal.tp2,
+          tp3: idOrSignal.tp3,
+          status: idOrSignal.status || idOrSignal.signalStatus,
+          tp1Status: idOrSignal.tp1Status,
+          tp2Status: idOrSignal.tp2Status,
+          tp3Status: idOrSignal.tp3Status,
+          slStatus: idOrSignal.slStatus,
+          timestamp: idOrSignal.timestamp,
+          rankTier: idOrSignal.rankTier || idOrSignal.outcomeType,
+          strategy: idOrSignal.strategy,
+          timeframe: idOrSignal.timeframe,
+          dataSource: idOrSignal.dataSource,
+        };
+
+    return this.fetchJson<any>('/api/signals/refresh', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   }
 }
 

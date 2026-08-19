@@ -15,6 +15,8 @@ import { WalkForwardEngine } from '../signals/WalkForwardEngine.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
 import { marketCache } from '../market/CacheStore.js';
 import { logger } from '../logger.js';
+import { ScannerPersistence, PersistedSentSignal } from '../signals/ScannerPersistence.js';
+import { getFirestoreAdmin } from '../firebaseAdmin.js';
 
 const router = Router();
 
@@ -272,6 +274,317 @@ router.post('/signals/monitor', async (_req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       message: 'Active signals outcome evaluation failed',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/refresh
+ * Manually checks the latest verified market price for an individual active signal.
+ * Guarantees idempotency, target pricing preservation, and correct status outcomes.
+ */
+router.post('/signals/refresh', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.body || {};
+    if (!id || typeof id !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or missing signal ID parameter.',
+        timestamp: Date.now(),
+      });
+    }
+
+    const firestore = getFirestoreAdmin();
+    let signal: PersistedSentSignal | undefined;
+
+    if (firestore) {
+      try {
+        const doc = await firestore.collection('scanner_sent_signals').doc(id).get();
+        if (doc.exists) {
+          signal = doc.data() as PersistedSentSignal;
+        }
+      } catch (err) {
+        logger.warn(`[Refresh API] Firestore fetch failed for id=${id}: ${String(err)}`);
+      }
+    }
+
+    if (!signal) {
+      signal = ScannerPersistence.localData.sentSignals.find((s) => s.id === id);
+    }
+
+    if (!signal) {
+      // Fallback: Check inside signalEngine activeSignals map
+      const activeSig = Array.from(signalEngine.activeSignals.values()).find((s) => s.id === id);
+      if (activeSig) {
+        signal = {
+          id: activeSig.id,
+          snapshotId: activeSig.snapshotId || 'manual',
+          symbol: activeSig.symbol,
+          direction: activeSig.direction,
+          entryPrice: activeSig.entryPrice,
+          stopLoss: activeSig.stopLoss,
+          takeProfit: activeSig.takeProfit,
+          tp1: activeSig.tp1,
+          tp2: activeSig.tp2,
+          tp3: activeSig.tp3,
+          riskRewardRatio: activeSig.riskRewardRatio,
+          score: activeSig.score,
+          rankTier: activeSig.rankTier || 'SUGGESTION',
+          strategy: activeSig.strategy,
+          timeframe: activeSig.timeframe,
+          dataSource: activeSig.dataSource || 'binance',
+          status: (activeSig.status as any) || 'ACTIVE',
+          tp1Status: (activeSig.tp1Status as any) || 'PENDING',
+          tp2Status: (activeSig.tp2Status as any) || 'PENDING',
+          tp3Status: (activeSig.tp3Status as any) || 'PENDING',
+          slStatus: (activeSig.slStatus as any) || 'ACTIVE',
+          tp1HitAt: activeSig.tp1HitAt,
+          tp2HitAt: activeSig.tp2HitAt,
+          tp3HitAt: activeSig.tp3HitAt,
+          stopLossHitAt: activeSig.stopLossHitAt,
+          tp1HitPrice: activeSig.tp1HitPrice,
+          tp2HitPrice: activeSig.tp2HitPrice,
+          tp3HitPrice: activeSig.tp3HitPrice,
+          stopLossHitPrice: activeSig.stopLossHitPrice,
+          timestamp: activeSig.timestamp,
+          notificationSent: false,
+          notificationTimestamp: 0,
+          date: new Date(activeSig.timestamp).toISOString().split('T')[0],
+        };
+      }
+    }
+
+    if (!signal) {
+      const {
+        symbol,
+        direction,
+        entryPrice,
+        stopLoss,
+        takeProfit,
+        tp1,
+        tp2,
+        tp3,
+        status,
+        tp1Status,
+        tp2Status,
+        tp3Status,
+        slStatus,
+        timestamp,
+        rankTier,
+        strategy,
+        timeframe,
+        dataSource,
+        riskRewardRatio,
+        score
+      } = req.body || {};
+
+      if (symbol && direction && entryPrice !== undefined && stopLoss !== undefined) {
+        logger.info(`[Refresh API] Rebuilding on-the-fly signal evaluation for missing signal id=${id || 'ad-hoc'}`);
+        signal = {
+          id: id || `adhoc_${Date.now()}`,
+          snapshotId: id || `adhoc_${Date.now()}`,
+          symbol,
+          direction,
+          entryPrice: Number(entryPrice),
+          stopLoss: Number(stopLoss),
+          takeProfit: Number(takeProfit || entryPrice),
+          tp1: tp1 !== undefined ? Number(tp1) : undefined,
+          tp2: tp2 !== undefined ? Number(tp2) : undefined,
+          tp3: tp3 !== undefined ? Number(tp3) : undefined,
+          status: status || 'ACTIVE',
+          tp1Status: tp1Status || 'PENDING',
+          tp2Status: tp2Status || 'PENDING',
+          tp3Status: tp3Status || 'PENDING',
+          slStatus: slStatus || 'ACTIVE',
+          timestamp: timestamp || Date.now(),
+          rankTier: rankTier || 'SUGGESTION',
+          strategy: strategy || 'Ad-hoc Evaluation',
+          timeframe: timeframe || '1h',
+          dataSource: dataSource || 'binance',
+          notificationSent: false,
+          notificationTimestamp: 0,
+          date: new Date(timestamp || Date.now()).toISOString().split('T')[0],
+          riskRewardRatio: Number(riskRewardRatio) || 2,
+          score: Number(score) || 75,
+        };
+      }
+    }
+
+    if (!signal) {
+      return res.status(404).json({
+        success: false,
+        message: `Signal with ID ${id} not found.`,
+        timestamp: Date.now(),
+      });
+    }
+
+    // Normalize legacy signal objects to ensure they contain required TP/SL threshold structures before evaluation
+    if (signal.tp1 === undefined || signal.tp2 === undefined || signal.tp3 === undefined) {
+      const entry = signal.entryPrice;
+      const finalTp = signal.takeProfit;
+      const diff = finalTp - entry;
+      const dec = finalTp < 10 ? 5 : 2;
+
+      signal.tp1 = signal.tp1 ?? Number((entry + diff * 0.33).toFixed(dec));
+      signal.tp2 = signal.tp2 ?? Number((entry + diff * 0.66).toFixed(dec));
+      signal.tp3 = signal.tp3 ?? finalTp;
+
+      signal.tp1Status = signal.tp1Status || 'PENDING';
+      signal.tp2Status = signal.tp2Status || 'PENDING';
+      signal.tp3Status = signal.tp3Status || 'PENDING';
+      signal.slStatus = signal.slStatus || 'ACTIVE';
+    }
+
+    // For terminal historical results, return immediately without changes to avoid API wastage
+    const isTerminal = [
+      'COMPLETED',
+      'STOPPED_OUT',
+      'EXPIRED',
+      'SUPERSEDED',
+      'AMBIGUOUS',
+      'REJECTED'
+    ].includes(signal.status);
+
+    if (isTerminal) {
+      return res.status(200).json({
+        success: true,
+        changed: false,
+        message: '✓ Checked. Historical trade setup is already terminal.',
+        currentPrice: signal.tp3HitPrice || signal.stopLossHitPrice || signal.entryPrice,
+        signal,
+        lastChecked: new Date().toLocaleTimeString(),
+        timestamp: Date.now(),
+      });
+    }
+
+    // Fetch the latest verified market price bypassing standard cache to ensure freshness
+    const ticker = await marketDataManager.getPrice(signal.symbol, undefined, true);
+
+    if (ticker.status === 'MARKET_DATA_UNAVAILABLE' || !ticker.price || ticker.price <= 0) {
+      return res.status(503).json({
+        success: false,
+        message: 'Unable to verify market price. Try again shortly.',
+        timestamp: Date.now(),
+      });
+    }
+
+    // Acceptable freshness check: within 120 seconds
+    const freshnessAgeMs = Date.now() - ticker.timestamp;
+    if (freshnessAgeMs > 120000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Market data is stale. Target status was not changed.',
+        currentPrice: ticker.price,
+        timestamp: Date.now(),
+      });
+    }
+
+    // Run the SAME authoritative TP/SL evaluation logic used by automatic monitoring
+    const evalResult = SignalLifecycleManager.evaluateSignalPriceUpdate(
+      signal,
+      ticker.price,
+      ticker.timestamp,
+      signal.symbol
+    );
+
+    const statusChanged =
+      evalResult.newStatus !== signal.status ||
+      evalResult.tp1Status !== signal.tp1Status ||
+      evalResult.tp2Status !== signal.tp2Status ||
+      evalResult.tp3Status !== signal.tp3Status ||
+      evalResult.slStatus !== signal.slStatus;
+
+    if (statusChanged) {
+      const metadata: Partial<PersistedSentSignal> = {
+        tp1Status: evalResult.tp1Status,
+        tp2Status: evalResult.tp2Status,
+        tp3Status: evalResult.tp3Status,
+        slStatus: evalResult.slStatus,
+        tp1HitAt: evalResult.tp1HitAt,
+        tp2HitAt: evalResult.tp2HitAt,
+        tp3HitAt: evalResult.tp3HitAt,
+        stopLossHitAt: evalResult.stopLossHitAt,
+        tp1HitPrice: evalResult.tp1HitPrice,
+        tp2HitPrice: evalResult.tp2HitPrice,
+        tp3HitPrice: evalResult.tp3HitPrice,
+        stopLossHitPrice: evalResult.stopLossHitPrice,
+      };
+
+      const existsLocally = ScannerPersistence.localData.sentSignals.some(s => s.id === signal!.id);
+      if (!existsLocally && signal) {
+        ScannerPersistence.localData.sentSignals.push(signal);
+      }
+
+      await ScannerPersistence.updateSignalStatus(signal.id, evalResult.newStatus, metadata);
+
+      // Re-fetch updated signal to return
+      if (firestore) {
+        try {
+          const doc = await firestore.collection('scanner_sent_signals').doc(id).get();
+          if (doc.exists) {
+            signal = doc.data() as PersistedSentSignal;
+          }
+        } catch (err) {
+          // ignore
+        }
+      }
+      if (signal) {
+        Object.assign(signal, metadata);
+        signal.status = evalResult.newStatus;
+
+        // Sync with signalEngine activeSignals map
+        const activeSig = signalEngine.activeSignals.get(signal.symbol);
+        if (activeSig && activeSig.id === signal.id) {
+          activeSig.status = evalResult.newStatus as any;
+          activeSig.tp1Status = evalResult.tp1Status as any;
+          activeSig.tp2Status = evalResult.tp2Status as any;
+          activeSig.tp3Status = evalResult.tp3Status as any;
+          activeSig.slStatus = evalResult.slStatus as any;
+          activeSig.tp1HitAt = evalResult.tp1HitAt;
+          activeSig.tp2HitAt = evalResult.tp2HitAt;
+          activeSig.tp3HitAt = evalResult.tp3HitAt;
+          activeSig.stopLossHitAt = evalResult.stopLossHitAt;
+          activeSig.tp1HitPrice = evalResult.tp1HitPrice;
+          activeSig.tp2HitPrice = evalResult.tp2HitPrice;
+          activeSig.tp3HitPrice = evalResult.tp3HitPrice;
+          activeSig.stopLossHitPrice = evalResult.stopLossHitPrice;
+        }
+      }
+    }
+
+    // Build the specific change summary message for the user
+    let feedbackMsg = 'No new TP/SL levels hit.';
+    if (statusChanged) {
+      if (evalResult.newStatus === 'STOPPED_OUT') {
+        feedbackMsg = 'STOP LOSS HIT';
+      } else if (evalResult.newStatus === 'COMPLETED') {
+        feedbackMsg = 'TP1 ✓ HIT, TP2 ✓ HIT, TP3 ✓ HIT. TRADE COMPLETED';
+      } else {
+        const hits: string[] = [];
+        if (evalResult.tp1Status === 'HIT' && signal.tp1Status !== 'HIT') hits.push('TP1 ✓ HIT');
+        if (evalResult.tp2Status === 'HIT' && signal.tp2Status !== 'HIT') hits.push('TP2 ✓ HIT');
+        if (evalResult.tp3Status === 'HIT' && signal.tp3Status !== 'HIT') hits.push('TP3 ✓ HIT');
+        feedbackMsg = hits.length > 0 ? hits.join(', ') : 'Target states updated.';
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      changed: statusChanged,
+      message: `✓ Checked. Current Price: ${ticker.price.toFixed(5)}. ${feedbackMsg}`,
+      currentPrice: ticker.price,
+      signal,
+      lastChecked: new Date().toLocaleTimeString(),
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error(`[Refresh API] Error refreshing signal status: ${msg}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to manually verify market price setup.',
       error: msg,
       timestamp: Date.now(),
     });

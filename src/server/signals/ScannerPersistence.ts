@@ -36,13 +36,29 @@ export interface PersistedSentSignal {
   tp1?: number;
   tp2?: number;
   tp3?: number;
+  tp1Rr?: number;
+  tp2Rr?: number;
+  tp3Rr?: number;
   riskRewardRatio: number;
+  targetQualityScore?: number;
   score: number;
   rankTier: RankTier;
   strategy: string;
   timeframe: string;
   dataSource: string;
-  status: 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'EXPIRED' | 'COMPLETED' | 'SUPERSEDED' | 'AMBIGUOUS';
+  status: 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'SUPERSEDED' | 'AMBIGUOUS' | 'REJECTED';
+  tp1Status?: 'PENDING' | 'HIT';
+  tp2Status?: 'PENDING' | 'HIT';
+  tp3Status?: 'PENDING' | 'HIT';
+  slStatus?: 'ACTIVE' | 'HIT';
+  tp1HitAt?: string;
+  tp2HitAt?: string;
+  tp3HitAt?: string;
+  stopLossHitAt?: string;
+  tp1HitPrice?: number;
+  tp2HitPrice?: number;
+  tp3HitPrice?: number;
+  stopLossHitPrice?: number;
   timestamp: number;
   notificationSent: boolean;
   notificationTimestamp: number;
@@ -373,7 +389,11 @@ export class ScannerPersistence {
       tp1: signal.tp1,
       tp2: signal.tp2,
       tp3: signal.tp3,
+      tp1Rr: signal.tp1Rr,
+      tp2Rr: signal.tp2Rr,
+      tp3Rr: signal.tp3Rr,
       riskRewardRatio: signal.riskRewardRatio,
+      targetQualityScore: signal.targetQualityScore,
       score: signal.score || signal.confidenceScore || 80,
       rankTier: signal.rankTier || (signal.isBestTrade ? 'BEST_TRADE' : signal.isSecondBest ? 'SECOND_BEST' : 'SUGGESTION'),
       strategy: signal.strategy,
@@ -612,9 +632,13 @@ export class ScannerPersistence {
       try {
         const updatePayload: Record<string, any> = { status };
         if (metadata) {
-          Object.assign(updatePayload, metadata);
+          for (const [key, val] of Object.entries(metadata)) {
+            if (val !== undefined) {
+              updatePayload[key] = val;
+            }
+          }
         }
-        await firestore.collection(FIRESTORE_SIGNALS_COL).doc(signalId).update(updatePayload);
+        await firestore.collection(FIRESTORE_SIGNALS_COL).doc(signalId).set(updatePayload, { merge: true });
       } catch (err) {
         logger.warn('[ScannerPersistence] Firestore updateSignalStatus failed:', { error: String(err) });
       }

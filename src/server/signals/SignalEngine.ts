@@ -38,6 +38,7 @@ import { Gate17CorrelationExposure } from './Gate17CorrelationExposure.js';
 import { Gate18RegimeStrategySelection } from './Gate18RegimeStrategySelection.js';
 import { Gate20ProbabilityCalibration } from './Gate20ProbabilityCalibration.js';
 import { Gate21WalkForwardValidation } from './Gate21WalkForwardValidation.js';
+import { TargetQualityEvaluator, calculateTargetRr } from './TargetQualityEvaluator.js';
 import { Gate22MonteCarloSimulation } from './Gate22MonteCarloSimulation.js';
 import { NvidiaAIService } from './NvidiaAIService.js';
 import { SignalValidator, ValidationResult } from './SignalValidator.js';
@@ -894,14 +895,32 @@ export class SignalEngine {
           rawTp2,
           rawTp3,
           atr,
-          precision
+          precision,
+          classification
         );
 
         const safeTp1 = tpEnforced.tp1;
         const safeTp2 = tpEnforced.tp2;
         const safeTp3 = tpEnforced.tp3;
         const safeTakeProfit = tpEnforced.takeProfit;
-        const safeRR = tpEnforced.riskRewardRatio;
+
+        // GATE 4: Calculate exact R:R ratios directly from actual displayed prices
+        const tp1Rr = calculateTargetRr(scoring.direction, finalEntry, finalSL, safeTp1);
+        const tp2Rr = calculateTargetRr(scoring.direction, finalEntry, finalSL, safeTp2);
+        const tp3Rr = calculateTargetRr(scoring.direction, finalEntry, finalSL, safeTp3);
+        const exactPrimaryRr = calculateTargetRr(scoring.direction, finalEntry, finalSL, safeTakeProfit);
+
+        // GATE 4: Target Quality Score evaluation (independent of confidenceScore)
+        const tqResult = TargetQualityEvaluator.evaluate({
+          direction: scoring.direction,
+          entryPrice: finalEntry,
+          stopLoss: finalSL,
+          tp1: safeTp1,
+          tp2: safeTp2,
+          tp3: safeTp3,
+          atr,
+          marketRegime: scoring.marketRegime,
+        });
 
         const signal: TradingSignal = {
           id: `sig_${now}_${Math.random().toString(36).substring(2, 7)}`,
@@ -913,6 +932,7 @@ export class SignalEngine {
           strategy: primaryStrategyName,
           confluenceReasons: scoring.confluenceReasons,
           confidenceScore: aiResult.refinedConfidence,
+          targetQualityScore: tqResult.targetQualityScore,
           estimatedWinRate: winRate,
           isAiValidated: aiResult.isAiValidated,
           stopLoss: finalSL,
@@ -920,7 +940,10 @@ export class SignalEngine {
           tp1: safeTp1,
           tp2: safeTp2,
           tp3: safeTp3,
-          riskRewardRatio: safeRR,
+          tp1Rr,
+          tp2Rr,
+          tp3Rr,
+          riskRewardRatio: exactPrimaryRr,
           targetDistance,
           stopDistance,
           pipPointUnit: scoring.pipPointUnit,

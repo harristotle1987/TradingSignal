@@ -129,6 +129,12 @@ export class MarketDataCache {
     return entry.candles;
   }
 
+  getExpiredCandles(provider: string, symbol: string, timeframe: string): NormalizedCandle[] | null {
+    const key = this.getCandleCacheKey(provider, symbol, timeframe);
+    const entry = this.candleCache.get(key);
+    return entry ? entry.candles : null;
+  }
+
   setCandles(provider: string, symbol: string, timeframe: string, candles: NormalizedCandle[], ttlMs: number): void {
     const key = this.getCandleCacheKey(provider, symbol, timeframe);
     this.candleCache.set(key, {

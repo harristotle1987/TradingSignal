@@ -29,6 +29,26 @@ import { SignalOutcomeLogger, SignalOutcomeRecord } from './SignalOutcomeLogger.
 import { MarketRegime } from './StrategyEngine.js';
 import { logger } from '../logger.js';
 
+export function normalizeSymbol(symbol: string): string {
+  if (!symbol) return '';
+  return symbol.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+}
+
+export function validatePrice(price: unknown, symbol: string): boolean {
+  if (
+    price === null ||
+    price === undefined ||
+    typeof price !== 'number' ||
+    Number.isNaN(price) ||
+    !Number.isFinite(price) ||
+    price <= 0
+  ) {
+    logger.warn(`[TP/SL Monitor] Invalid price update rejected for symbol=${symbol}: ${price}`);
+    return false;
+  }
+  return true;
+}
+
 export type SignalLifecycleState =
   | 'GENERATED'
   | 'ACTIVE'
@@ -37,6 +57,8 @@ export type SignalLifecycleState =
   | 'TP2_HIT'
   | 'TP3_HIT'
   | 'SL_HIT'
+  | 'STOPPED_OUT'
+  | 'COMPLETED'
   | 'EXPIRED'
   | 'INVALIDATED'
   | 'AMBIGUOUS';
@@ -60,8 +82,330 @@ export interface ProgressiveTransitionStep {
   ambiguousDetails?: string;
 }
 
+export interface PriceEvaluationResult {
+  symbol: string;
+  previousStatus: PersistedSentSignal['status'];
+  newStatus: PersistedSentSignal['status'];
+  tp1Status: 'PENDING' | 'HIT';
+  tp2Status: 'PENDING' | 'HIT';
+  tp3Status: 'PENDING' | 'HIT';
+  slStatus: 'ACTIVE' | 'HIT';
+  tp1HitAt?: string;
+  tp2HitAt?: string;
+  tp3HitAt?: string;
+  stopLossHitAt?: string;
+  tp1HitPrice?: number;
+  tp2HitPrice?: number;
+  tp3HitPrice?: number;
+  stopLossHitPrice?: number;
+  transitions: ProgressiveTransitionStep[];
+}
+
 export class SignalLifecycleManager {
   private static isEvaluating = false;
+
+  /**
+   * Evaluates a single verified market price update for a signal against its entry, SL, TP1, TP2, and TP3 targets.
+   * Handles multi-target gaps in a single price update, exact hit timestamps (ISO 8601 UTC), actual hit prices,
+   * idempotency (never overwrites confirmed hits or hit prices), and diagnostic logging.
+   */
+  public static evaluateSignalPriceUpdate(
+    sig: PersistedSentSignal,
+    price: number,
+    timestampMs: number = Date.now(),
+    updateSymbol?: string
+  ): PriceEvaluationResult {
+    const symbol = sig.symbol;
+
+    // Dynamically guarantee 3-tier target structure for legacy signals
+    if (sig.tp1 === undefined || sig.tp2 === undefined || sig.tp3 === undefined) {
+      const entry = sig.entryPrice;
+      const finalTp = sig.takeProfit;
+      const diff = finalTp - entry;
+      const dec = finalTp < 10 ? 5 : 2;
+
+      sig.tp1 = sig.tp1 ?? Number((entry + diff * 0.33).toFixed(dec));
+      sig.tp2 = sig.tp2 ?? Number((entry + diff * 0.66).toFixed(dec));
+      sig.tp3 = sig.tp3 ?? finalTp;
+
+      sig.tp1Status = sig.tp1Status || 'PENDING';
+      sig.tp2Status = sig.tp2Status || 'PENDING';
+      sig.tp3Status = sig.tp3Status || 'PENDING';
+      sig.slStatus = sig.slStatus || 'ACTIVE';
+    }
+
+    if (updateSymbol && normalizeSymbol(updateSymbol) !== normalizeSymbol(symbol)) {
+      logger.warn(`[TP/SL Monitor] Mismatched symbol rejected for signal=${symbol} vs updateSymbol=${updateSymbol}`);
+      return {
+        symbol,
+        previousStatus: sig.status,
+        newStatus: sig.status,
+        tp1Status: sig.tp1Status || (sig.status === 'TP1_HIT' || sig.status === 'TP2_HIT' || sig.status === 'TP3_HIT' || sig.status === 'COMPLETED' ? 'HIT' : 'PENDING'),
+        tp2Status: sig.tp2Status || (sig.status === 'TP2_HIT' || sig.status === 'TP3_HIT' || sig.status === 'COMPLETED' ? 'HIT' : 'PENDING'),
+        tp3Status: sig.tp3Status || (sig.status === 'TP3_HIT' || sig.status === 'COMPLETED' ? 'HIT' : 'PENDING'),
+        slStatus: sig.slStatus || (sig.status === 'SL_HIT' || sig.status === 'STOPPED_OUT' ? 'HIT' : 'ACTIVE'),
+        tp1HitAt: sig.tp1HitAt,
+        tp2HitAt: sig.tp2HitAt,
+        tp3HitAt: sig.tp3HitAt,
+        stopLossHitAt: sig.stopLossHitAt,
+        tp1HitPrice: sig.tp1HitPrice,
+        tp2HitPrice: sig.tp2HitPrice,
+        tp3HitPrice: sig.tp3HitPrice,
+        stopLossHitPrice: sig.stopLossHitPrice,
+        transitions: [],
+      };
+    }
+
+    if (!validatePrice(price, symbol)) {
+      return {
+        symbol,
+        previousStatus: sig.status,
+        newStatus: sig.status,
+        tp1Status: sig.tp1Status || (sig.status === 'TP1_HIT' || sig.status === 'TP2_HIT' || sig.status === 'TP3_HIT' || sig.status === 'COMPLETED' ? 'HIT' : 'PENDING'),
+        tp2Status: sig.tp2Status || (sig.status === 'TP2_HIT' || sig.status === 'TP3_HIT' || sig.status === 'COMPLETED' ? 'HIT' : 'PENDING'),
+        tp3Status: sig.tp3Status || (sig.status === 'TP3_HIT' || sig.status === 'COMPLETED' ? 'HIT' : 'PENDING'),
+        slStatus: sig.slStatus || (sig.status === 'SL_HIT' || sig.status === 'STOPPED_OUT' ? 'HIT' : 'ACTIVE'),
+        tp1HitAt: sig.tp1HitAt,
+        tp2HitAt: sig.tp2HitAt,
+        tp3HitAt: sig.tp3HitAt,
+        stopLossHitAt: sig.stopLossHitAt,
+        tp1HitPrice: sig.tp1HitPrice,
+        tp2HitPrice: sig.tp2HitPrice,
+        tp3HitPrice: sig.tp3HitPrice,
+        stopLossHitPrice: sig.stopLossHitPrice,
+        transitions: [],
+      };
+    }
+
+    const transitions: ProgressiveTransitionStep[] = [];
+    const hitAtIso = new Date(timestampMs).toISOString();
+    const EPSILON = 1e-8;
+
+    let currentStatus = sig.status;
+
+    // If signal is in terminal state, do not process further updates
+    if (
+      currentStatus === 'STOPPED_OUT' ||
+      currentStatus === 'SL_HIT' ||
+      currentStatus === 'COMPLETED' ||
+      currentStatus === 'TP3_HIT' ||
+      currentStatus === 'EXPIRED' ||
+      currentStatus === 'SUPERSEDED' ||
+      currentStatus === 'AMBIGUOUS' ||
+      currentStatus === 'REJECTED'
+    ) {
+      return {
+        symbol,
+        previousStatus: sig.status,
+        newStatus: sig.status,
+        tp1Status: sig.tp1Status || 'HIT',
+        tp2Status: sig.tp2Status || 'HIT',
+        tp3Status: sig.tp3Status || 'HIT',
+        slStatus: sig.slStatus || 'HIT',
+        tp1HitAt: sig.tp1HitAt,
+        tp2HitAt: sig.tp2HitAt,
+        tp3HitAt: sig.tp3HitAt,
+        stopLossHitAt: sig.stopLossHitAt,
+        tp1HitPrice: sig.tp1HitPrice,
+        tp2HitPrice: sig.tp2HitPrice,
+        tp3HitPrice: sig.tp3HitPrice,
+        stopLossHitPrice: sig.stopLossHitPrice,
+        transitions: [],
+      };
+    }
+
+    const statusStr = currentStatus as string;
+    let tp1Status: 'PENDING' | 'HIT' = sig.tp1Status || (statusStr === 'TP1_HIT' || statusStr === 'TP2_HIT' || statusStr === 'TP3_HIT' || statusStr === 'COMPLETED' ? 'HIT' : 'PENDING');
+    let tp2Status: 'PENDING' | 'HIT' = sig.tp2Status || (statusStr === 'TP2_HIT' || statusStr === 'TP3_HIT' || statusStr === 'COMPLETED' ? 'HIT' : 'PENDING');
+    let tp3Status: 'PENDING' | 'HIT' = sig.tp3Status || (statusStr === 'TP3_HIT' || statusStr === 'COMPLETED' ? 'HIT' : 'PENDING');
+    let slStatus: 'ACTIVE' | 'HIT' = sig.slStatus || (statusStr === 'SL_HIT' || statusStr === 'STOPPED_OUT' ? 'HIT' : 'ACTIVE');
+
+    let tp1HitAt = sig.tp1HitAt;
+    let tp2HitAt = sig.tp2HitAt;
+    let tp3HitAt = sig.tp3HitAt;
+    let stopLossHitAt = sig.stopLossHitAt;
+
+    let tp1HitPrice = sig.tp1HitPrice;
+    let tp2HitPrice = sig.tp2HitPrice;
+    let tp3HitPrice = sig.tp3HitPrice;
+    let stopLossHitPrice = sig.stopLossHitPrice;
+
+    const isBuy = sig.direction === 'BUY';
+    const sl = sig.stopLoss;
+    const tp1 = sig.tp1 ?? sig.takeProfit;
+    const tp2 = sig.tp2 ?? sig.takeProfit;
+    const tp3 = sig.tp3 ?? sig.takeProfit;
+
+    if (isBuy) {
+      // 1. Check Stop Loss
+      if (slStatus !== 'HIT' && price <= sl + EPSILON) {
+        const prevStatus = currentStatus;
+        currentStatus = 'STOPPED_OUT';
+        slStatus = 'HIT';
+        stopLossHitAt = stopLossHitAt || hitAtIso;
+        stopLossHitPrice = stopLossHitPrice ?? price;
+
+        logger.info(`[SL_HIT] symbol=${symbol} direction=BUY currentPrice=${price} target=STOP_LOSS targetPrice=${sl} hitPrice=${price} previousStatus=${prevStatus} newStatus=STOPPED_OUT timestamp=${hitAtIso}`);
+
+        transitions.push({
+          nextState: 'SL_HIT',
+          eventTime: timestampMs,
+          eventSource: 'LIVE_STREAM',
+          timeframeUsed: 'tick',
+          isRecovered: false,
+        });
+      } else if (slStatus !== 'HIT') {
+        // 2. Check TPs sequentially / multi-target gaps
+        if (tp1Status !== 'HIT' && price >= tp1 - EPSILON) {
+          const prevStatus = currentStatus;
+          tp1Status = 'HIT';
+          tp1HitAt = tp1HitAt || hitAtIso;
+          tp1HitPrice = tp1HitPrice ?? price;
+          currentStatus = 'TP1_HIT';
+
+          logger.info(`[TP_HIT] symbol=${symbol} direction=BUY currentPrice=${price} target=TP1 targetPrice=${tp1} hitPrice=${price} previousStatus=${prevStatus} newStatus=TP1_HIT timestamp=${hitAtIso}`);
+
+          transitions.push({
+            nextState: 'TP1_HIT',
+            eventTime: timestampMs,
+            eventSource: 'LIVE_STREAM',
+            timeframeUsed: 'tick',
+            isRecovered: false,
+          });
+        }
+
+        if (tp2Status !== 'HIT' && price >= tp2 - EPSILON) {
+          const prevStatus = currentStatus;
+          tp2Status = 'HIT';
+          tp2HitAt = tp2HitAt || hitAtIso;
+          tp2HitPrice = tp2HitPrice ?? price;
+          currentStatus = 'TP2_HIT';
+
+          logger.info(`[TP_HIT] symbol=${symbol} direction=BUY currentPrice=${price} target=TP2 targetPrice=${tp2} hitPrice=${price} previousStatus=${prevStatus} newStatus=TP2_HIT timestamp=${hitAtIso}`);
+
+          transitions.push({
+            nextState: 'TP2_HIT',
+            eventTime: timestampMs,
+            eventSource: 'LIVE_STREAM',
+            timeframeUsed: 'tick',
+            isRecovered: false,
+          });
+        }
+
+        if (tp3Status !== 'HIT' && price >= tp3 - EPSILON) {
+          const prevStatus = currentStatus;
+          tp3Status = 'HIT';
+          tp3HitAt = tp3HitAt || hitAtIso;
+          tp3HitPrice = tp3HitPrice ?? price;
+          currentStatus = 'COMPLETED';
+
+          logger.info(`[TP_HIT] symbol=${symbol} direction=BUY currentPrice=${price} target=TP3 targetPrice=${tp3} hitPrice=${price} previousStatus=${prevStatus} newStatus=COMPLETED timestamp=${hitAtIso}`);
+
+          transitions.push({
+            nextState: 'TP3_HIT',
+            eventTime: timestampMs,
+            eventSource: 'LIVE_STREAM',
+            timeframeUsed: 'tick',
+            isRecovered: false,
+          });
+        }
+      }
+    } else {
+      // SELL
+      // 1. Check Stop Loss
+      if (slStatus !== 'HIT' && price >= sl - EPSILON) {
+        const prevStatus = currentStatus;
+        currentStatus = 'STOPPED_OUT';
+        slStatus = 'HIT';
+        stopLossHitAt = stopLossHitAt || hitAtIso;
+        stopLossHitPrice = stopLossHitPrice ?? price;
+
+        logger.info(`[SL_HIT] symbol=${symbol} direction=SELL currentPrice=${price} target=STOP_LOSS targetPrice=${sl} hitPrice=${price} previousStatus=${prevStatus} newStatus=STOPPED_OUT timestamp=${hitAtIso}`);
+
+        transitions.push({
+          nextState: 'SL_HIT',
+          eventTime: timestampMs,
+          eventSource: 'LIVE_STREAM',
+          timeframeUsed: 'tick',
+          isRecovered: false,
+        });
+      } else if (slStatus !== 'HIT') {
+        // 2. Check TPs
+        if (tp1Status !== 'HIT' && price <= tp1 + EPSILON) {
+          const prevStatus = currentStatus;
+          tp1Status = 'HIT';
+          tp1HitAt = tp1HitAt || hitAtIso;
+          tp1HitPrice = tp1HitPrice ?? price;
+          currentStatus = 'TP1_HIT';
+
+          logger.info(`[TP_HIT] symbol=${symbol} direction=SELL currentPrice=${price} target=TP1 targetPrice=${tp1} hitPrice=${price} previousStatus=${prevStatus} newStatus=TP1_HIT timestamp=${hitAtIso}`);
+
+          transitions.push({
+            nextState: 'TP1_HIT',
+            eventTime: timestampMs,
+            eventSource: 'LIVE_STREAM',
+            timeframeUsed: 'tick',
+            isRecovered: false,
+          });
+        }
+
+        if (tp2Status !== 'HIT' && price <= tp2 + EPSILON) {
+          const prevStatus = currentStatus;
+          tp2Status = 'HIT';
+          tp2HitAt = tp2HitAt || hitAtIso;
+          tp2HitPrice = tp2HitPrice ?? price;
+          currentStatus = 'TP2_HIT';
+
+          logger.info(`[TP_HIT] symbol=${symbol} direction=SELL currentPrice=${price} target=TP2 targetPrice=${tp2} hitPrice=${price} previousStatus=${prevStatus} newStatus=TP2_HIT timestamp=${hitAtIso}`);
+
+          transitions.push({
+            nextState: 'TP2_HIT',
+            eventTime: timestampMs,
+            eventSource: 'LIVE_STREAM',
+            timeframeUsed: 'tick',
+            isRecovered: false,
+          });
+        }
+
+        if (tp3Status !== 'HIT' && price <= tp3 + EPSILON) {
+          const prevStatus = currentStatus;
+          tp3Status = 'HIT';
+          tp3HitAt = tp3HitAt || hitAtIso;
+          tp3HitPrice = tp3HitPrice ?? price;
+          currentStatus = 'COMPLETED';
+
+          logger.info(`[TP_HIT] symbol=${symbol} direction=SELL currentPrice=${price} target=TP3 targetPrice=${tp3} hitPrice=${price} previousStatus=${prevStatus} newStatus=COMPLETED timestamp=${hitAtIso}`);
+
+          transitions.push({
+            nextState: 'TP3_HIT',
+            eventTime: timestampMs,
+            eventSource: 'LIVE_STREAM',
+            timeframeUsed: 'tick',
+            isRecovered: false,
+          });
+        }
+      }
+    }
+
+    return {
+      symbol,
+      previousStatus: sig.status,
+      newStatus: currentStatus,
+      tp1Status,
+      tp2Status,
+      tp3Status,
+      slStatus,
+      tp1HitAt,
+      tp2HitAt,
+      tp3HitAt,
+      stopLossHitAt,
+      tp1HitPrice,
+      tp2HitPrice,
+      tp3HitPrice,
+      stopLossHitPrice,
+      transitions,
+    };
+  }
 
   /**
    * Evaluates all currently active signals against historical candle progression from `sig.timestamp`
@@ -97,18 +441,30 @@ export class SignalLifecycleManager {
       for (const sig of activeSignals) {
         const providerName = sig.dataSource || 'twelvedata';
 
-        // 2. Fetch comprehensive historical candles from `sig.timestamp` up to `now` using the same provider
+        // Fetch comprehensive historical candles from `sig.timestamp` up to `now` using the same provider
         const candles = await this.fetchHistoricalCandlesForSignal(sig.symbol, providerName, sig.timestamp);
 
-        // 3. Load existing outcomes from persistent log if any to preserve already confirmed milestones
+        // Load existing outcomes from persistent log if any to preserve already confirmed milestones
         const existingOutcome = await SignalOutcomeLogger.getOutcome(sig.id);
         const timestamps: {
-          entryHitTimestamp: string | null | undefined;
+          entryHitTimestamp?: string | null;
           tp1HitTimestamp?: number;
           tp2HitTimestamp?: number;
           tp3HitTimestamp?: number;
           slHitTimestamp?: number;
           expiredTimestamp?: number;
+          tp1Status?: 'PENDING' | 'HIT';
+          tp2Status?: 'PENDING' | 'HIT';
+          tp3Status?: 'PENDING' | 'HIT';
+          slStatus?: 'ACTIVE' | 'HIT';
+          tp1HitAt?: string;
+          tp2HitAt?: string;
+          tp3HitAt?: string;
+          stopLossHitAt?: string;
+          tp1HitPrice?: number;
+          tp2HitPrice?: number;
+          tp3HitPrice?: number;
+          stopLossHitPrice?: number;
         } = {
           entryHitTimestamp: sig.entryHitTimestamp ?? existingOutcome?.entryHitTimestamp,
           tp1HitTimestamp: sig.tp1HitTimestamp ?? existingOutcome?.tp1HitTimestamp,
@@ -116,15 +472,27 @@ export class SignalLifecycleManager {
           tp3HitTimestamp: sig.tp3HitTimestamp ?? existingOutcome?.tp3HitTimestamp,
           slHitTimestamp: sig.slHitTimestamp ?? existingOutcome?.slHitTimestamp,
           expiredTimestamp: existingOutcome?.expiredTimestamp,
+          tp1Status: sig.tp1Status ?? existingOutcome?.tp1Status,
+          tp2Status: sig.tp2Status ?? existingOutcome?.tp2Status,
+          tp3Status: sig.tp3Status ?? existingOutcome?.tp3Status,
+          slStatus: sig.slStatus ?? existingOutcome?.slStatus,
+          tp1HitAt: sig.tp1HitAt ?? existingOutcome?.tp1HitAt,
+          tp2HitAt: sig.tp2HitAt ?? existingOutcome?.tp2HitAt,
+          tp3HitAt: sig.tp3HitAt ?? existingOutcome?.tp3HitAt,
+          stopLossHitAt: sig.stopLossHitAt ?? existingOutcome?.stopLossHitAt,
+          tp1HitPrice: sig.tp1HitPrice ?? existingOutcome?.tp1HitPrice,
+          tp2HitPrice: sig.tp2HitPrice ?? existingOutcome?.tp2HitPrice,
+          tp3HitPrice: sig.tp3HitPrice ?? existingOutcome?.tp3HitPrice,
+          stopLossHitPrice: sig.stopLossHitPrice ?? existingOutcome?.stopLossHitPrice,
         };
 
-        // 4. Chronological traversal of candle history
+        // Chronological traversal of candle history
         const historicalResult = this.evaluateCandleHistory(sig, candles, timestamps);
         let currentState = historicalResult.finalState;
         const queuedTransitions = [...historicalResult.transitions];
 
-        // 5. If candle scan did not resolve a terminal state, evaluate latest real-time quote
-        if (currentState !== 'SL_HIT' && currentState !== 'TP3_HIT' && currentState !== 'AMBIGUOUS') {
+        // If candle scan did not resolve a terminal state, evaluate latest real-time quote
+        if (currentState !== 'SL_HIT' && currentState !== 'STOPPED_OUT' && currentState !== 'TP3_HIT' && currentState !== 'COMPLETED' && currentState !== 'AMBIGUOUS') {
           let liveTicker: NormalizedTicker | null = null;
           try {
             liveTicker = await marketDataManager.getPrice(sig.symbol, providerName, true);
@@ -132,7 +500,7 @@ export class SignalLifecycleManager {
             logger.debug(`[SignalLifecycle] Live quote lookup failed for ${sig.symbol} from ${providerName}:`, { error: String(err) });
           }
 
-          if (liveTicker && liveTicker.price > 0) {
+          if (liveTicker && liveTicker.price > 0 && validatePrice(liveTicker.price, sig.symbol)) {
             const providerMismatch = (liveTicker.provider || '').toLowerCase() !== (providerName || '').toLowerCase();
             const isStale = (now - liveTicker.receivedAt > 15 * 60 * 1000) || (now - liveTicker.timestamp > 30 * 60 * 1000) || liveTicker.status !== 'OK';
 
@@ -144,12 +512,12 @@ export class SignalLifecycleManager {
           }
         }
 
-        // 1. Check TTL Expiration (Default 24 hours) - ONLY if not yet entry triggered or progressed
+        // Check TTL Expiration (Default 24 hours) - ONLY if not yet entry triggered or progressed
         const ageMs = now - sig.timestamp;
         const maxTtlMs = 24 * 60 * 60 * 1000;
         const hasQueuedProgress = queuedTransitions.length > 0;
         const isEntryTriggered = Boolean(timestamps.entryHitTimestamp);
-        const isProgressedState = sig.status === 'TP1_HIT' || sig.status === 'TP2_HIT' || sig.status === 'TP3_HIT' || sig.status === 'SL_HIT';
+        const isProgressedState = sig.status === 'TP1_HIT' || sig.status === 'TP2_HIT' || sig.status === 'TP3_HIT' || sig.status === 'SL_HIT' || sig.status === 'STOPPED_OUT' || sig.status === 'COMPLETED';
 
         if (ageMs > maxTtlMs && !isEntryTriggered && !hasQueuedProgress && !isProgressedState) {
           logger.info(`[SignalLifecycle] Signal ${sig.id} (${sig.symbol}) reached TTL expiration (${(ageMs / 3600000).toFixed(1)}h) without entry trigger.`);
@@ -167,7 +535,7 @@ export class SignalLifecycleManager {
           continue;
         }
 
-        // 6. Execute all queued progressive transitions in strict chronological order
+        // Execute all queued progressive transitions in strict chronological order
         if (queuedTransitions.length > 0) {
           for (const step of queuedTransitions) {
             logger.info(`[SignalLifecycle] Executing transition for ${sig.symbol} [${sig.direction}] -> ${step.nextState} (Source: ${step.eventSource}, Time: ${new Date(step.eventTime).toISOString()})`);
@@ -177,11 +545,12 @@ export class SignalLifecycleManager {
               recoveredEventsCount++;
             }
 
-            if (step.nextState === 'TP1_HIT' || step.nextState === 'TP2_HIT' || step.nextState === 'TP3_HIT') {
+            const stepStateStr = step.nextState as string;
+            if (stepStateStr === 'TP1_HIT' || stepStateStr === 'TP2_HIT' || stepStateStr === 'TP3_HIT' || stepStateStr === 'COMPLETED') {
               tpHitCount++;
-            } else if (step.nextState === 'SL_HIT') {
+            } else if (stepStateStr === 'SL_HIT' || stepStateStr === 'STOPPED_OUT') {
               slHitCount++;
-            } else if (step.nextState === 'AMBIGUOUS') {
+            } else if (stepStateStr === 'AMBIGUOUS') {
               ambiguousCount++;
             }
           }
@@ -441,13 +810,30 @@ export class SignalLifecycleManager {
     time: number,
     timeframe: string,
     transitions: ProgressiveTransitionStep[],
-    timestamps: { tp1HitTimestamp?: number; tp2HitTimestamp?: number; tp3HitTimestamp?: number }
+    timestamps: {
+      tp1HitTimestamp?: number;
+      tp2HitTimestamp?: number;
+      tp3HitTimestamp?: number;
+      tp1Status?: 'PENDING' | 'HIT';
+      tp2Status?: 'PENDING' | 'HIT';
+      tp3Status?: 'PENDING' | 'HIT';
+      tp1HitAt?: string;
+      tp2HitAt?: string;
+      tp3HitAt?: string;
+      tp1HitPrice?: number;
+      tp2HitPrice?: number;
+      tp3HitPrice?: number;
+    }
   ): PersistedSentSignal['status'] {
     let state = currentState;
+    const isoTime = new Date(time).toISOString();
 
-    if (state === 'ACTIVE' && high >= tp1) {
+    if ((state === 'ACTIVE' || timestamps.tp1Status !== 'HIT') && high >= tp1 - 1e-8) {
       state = 'TP1_HIT';
+      timestamps.tp1Status = 'HIT';
       timestamps.tp1HitTimestamp = timestamps.tp1HitTimestamp || time;
+      timestamps.tp1HitAt = timestamps.tp1HitAt || isoTime;
+      timestamps.tp1HitPrice = timestamps.tp1HitPrice ?? high;
       transitions.push({
         nextState: 'TP1_HIT',
         eventTime: time,
@@ -457,9 +843,12 @@ export class SignalLifecycleManager {
       });
     }
 
-    if (state === 'TP1_HIT' && high >= tp2) {
+    if ((state === 'TP1_HIT' || timestamps.tp2Status !== 'HIT') && high >= tp2 - 1e-8) {
       state = 'TP2_HIT';
+      timestamps.tp2Status = 'HIT';
       timestamps.tp2HitTimestamp = timestamps.tp2HitTimestamp || time;
+      timestamps.tp2HitAt = timestamps.tp2HitAt || isoTime;
+      timestamps.tp2HitPrice = timestamps.tp2HitPrice ?? high;
       transitions.push({
         nextState: 'TP2_HIT',
         eventTime: time,
@@ -469,9 +858,12 @@ export class SignalLifecycleManager {
       });
     }
 
-    if (state === 'TP2_HIT' && high >= tp3) {
-      state = 'TP3_HIT';
+    if ((state === 'TP2_HIT' || timestamps.tp3Status !== 'HIT') && high >= tp3 - 1e-8) {
+      state = 'COMPLETED';
+      timestamps.tp3Status = 'HIT';
       timestamps.tp3HitTimestamp = timestamps.tp3HitTimestamp || time;
+      timestamps.tp3HitAt = timestamps.tp3HitAt || isoTime;
+      timestamps.tp3HitPrice = timestamps.tp3HitPrice ?? high;
       transitions.push({
         nextState: 'TP3_HIT',
         eventTime: time,
@@ -493,13 +885,30 @@ export class SignalLifecycleManager {
     time: number,
     timeframe: string,
     transitions: ProgressiveTransitionStep[],
-    timestamps: { tp1HitTimestamp?: number; tp2HitTimestamp?: number; tp3HitTimestamp?: number }
+    timestamps: {
+      tp1HitTimestamp?: number;
+      tp2HitTimestamp?: number;
+      tp3HitTimestamp?: number;
+      tp1Status?: 'PENDING' | 'HIT';
+      tp2Status?: 'PENDING' | 'HIT';
+      tp3Status?: 'PENDING' | 'HIT';
+      tp1HitAt?: string;
+      tp2HitAt?: string;
+      tp3HitAt?: string;
+      tp1HitPrice?: number;
+      tp2HitPrice?: number;
+      tp3HitPrice?: number;
+    }
   ): PersistedSentSignal['status'] {
     let state = currentState;
+    const isoTime = new Date(time).toISOString();
 
-    if (state === 'ACTIVE' && low <= tp1) {
+    if ((state === 'ACTIVE' || timestamps.tp1Status !== 'HIT') && low <= tp1 + 1e-8) {
       state = 'TP1_HIT';
+      timestamps.tp1Status = 'HIT';
       timestamps.tp1HitTimestamp = timestamps.tp1HitTimestamp || time;
+      timestamps.tp1HitAt = timestamps.tp1HitAt || isoTime;
+      timestamps.tp1HitPrice = timestamps.tp1HitPrice ?? low;
       transitions.push({
         nextState: 'TP1_HIT',
         eventTime: time,
@@ -509,9 +918,12 @@ export class SignalLifecycleManager {
       });
     }
 
-    if (state === 'TP1_HIT' && low <= tp2) {
+    if ((state === 'TP1_HIT' || timestamps.tp2Status !== 'HIT') && low <= tp2 + 1e-8) {
       state = 'TP2_HIT';
+      timestamps.tp2Status = 'HIT';
       timestamps.tp2HitTimestamp = timestamps.tp2HitTimestamp || time;
+      timestamps.tp2HitAt = timestamps.tp2HitAt || isoTime;
+      timestamps.tp2HitPrice = timestamps.tp2HitPrice ?? low;
       transitions.push({
         nextState: 'TP2_HIT',
         eventTime: time,
@@ -521,9 +933,12 @@ export class SignalLifecycleManager {
       });
     }
 
-    if (state === 'TP2_HIT' && low <= tp3) {
-      state = 'TP3_HIT';
+    if ((state === 'TP2_HIT' || timestamps.tp3Status !== 'HIT') && low <= tp3 + 1e-8) {
+      state = 'COMPLETED';
+      timestamps.tp3Status = 'HIT';
       timestamps.tp3HitTimestamp = timestamps.tp3HitTimestamp || time;
+      timestamps.tp3HitAt = timestamps.tp3HitAt || isoTime;
+      timestamps.tp3HitPrice = timestamps.tp3HitPrice ?? low;
       transitions.push({
         nextState: 'TP3_HIT',
         eventTime: time,
@@ -549,117 +964,56 @@ export class SignalLifecycleManager {
       tp2HitTimestamp?: number;
       tp3HitTimestamp?: number;
       slHitTimestamp?: number;
+      tp1Status?: 'PENDING' | 'HIT';
+      tp2Status?: 'PENDING' | 'HIT';
+      tp3Status?: 'PENDING' | 'HIT';
+      slStatus?: 'ACTIVE' | 'HIT';
+      tp1HitAt?: string;
+      tp2HitAt?: string;
+      tp3HitAt?: string;
+      stopLossHitAt?: string;
+      tp1HitPrice?: number;
+      tp2HitPrice?: number;
+      tp3HitPrice?: number;
+      stopLossHitPrice?: number;
     }
   ): {
     finalState: PersistedSentSignal['status'];
     transitions: ProgressiveTransitionStep[];
   } {
-    let state = currentState;
-    const transitions: ProgressiveTransitionStep[] = [];
-    const price = ticker.price;
-    const time = ticker.timestamp || Date.now();
-    const isBuy = sig.direction === 'BUY';
-    const entry = sig.entryPrice;
-    const sl = sig.stopLoss;
-    const tp1 = sig.tp1 ?? sig.takeProfit;
-    const tp2 = sig.tp2 ?? sig.takeProfit;
-    const tp3 = sig.tp3 ?? sig.takeProfit;
+    const activeSigState: PersistedSentSignal = {
+      ...sig,
+      status: currentState,
+      tp1Status: timestamps.tp1Status ?? sig.tp1Status,
+      tp2Status: timestamps.tp2Status ?? sig.tp2Status,
+      tp3Status: timestamps.tp3Status ?? sig.tp3Status,
+      slStatus: timestamps.slStatus ?? sig.slStatus,
+      tp1HitAt: timestamps.tp1HitAt ?? sig.tp1HitAt,
+      tp2HitAt: timestamps.tp2HitAt ?? sig.tp2HitAt,
+      tp3HitAt: timestamps.tp3HitAt ?? sig.tp3HitAt,
+      stopLossHitAt: timestamps.stopLossHitAt ?? sig.stopLossHitAt,
+      tp1HitPrice: timestamps.tp1HitPrice ?? sig.tp1HitPrice,
+      tp2HitPrice: timestamps.tp2HitPrice ?? sig.tp2HitPrice,
+      tp3HitPrice: timestamps.tp3HitPrice ?? sig.tp3HitPrice,
+      stopLossHitPrice: timestamps.stopLossHitPrice ?? sig.stopLossHitPrice,
+    };
 
-    if (isBuy) {
-      if (price <= sl) {
-        state = 'SL_HIT';
-        timestamps.slHitTimestamp = timestamps.slHitTimestamp || time;
-        transitions.push({
-          nextState: 'SL_HIT',
-          eventTime: time,
-          eventSource: 'LIVE_STREAM',
-          timeframeUsed: 'tick',
-          isRecovered: false,
-        });
-      } else {
-        if (state === 'ACTIVE' && price >= tp1) {
-          state = 'TP1_HIT';
-          timestamps.tp1HitTimestamp = timestamps.tp1HitTimestamp || time;
-          transitions.push({
-            nextState: 'TP1_HIT',
-            eventTime: time,
-            eventSource: 'LIVE_STREAM',
-            timeframeUsed: 'tick',
-            isRecovered: false,
-          });
-        }
-        if (state === 'TP1_HIT' && price >= tp2) {
-          state = 'TP2_HIT';
-          timestamps.tp2HitTimestamp = timestamps.tp2HitTimestamp || time;
-          transitions.push({
-            nextState: 'TP2_HIT',
-            eventTime: time,
-            eventSource: 'LIVE_STREAM',
-            timeframeUsed: 'tick',
-            isRecovered: false,
-          });
-        }
-        if (state === 'TP2_HIT' && price >= tp3) {
-          state = 'TP3_HIT';
-          timestamps.tp3HitTimestamp = timestamps.tp3HitTimestamp || time;
-          transitions.push({
-            nextState: 'TP3_HIT',
-            eventTime: time,
-            eventSource: 'LIVE_STREAM',
-            timeframeUsed: 'tick',
-            isRecovered: false,
-          });
-        }
-      }
-    } else {
-      if (price >= sl) {
-        state = 'SL_HIT';
-        timestamps.slHitTimestamp = timestamps.slHitTimestamp || time;
-        transitions.push({
-          nextState: 'SL_HIT',
-          eventTime: time,
-          eventSource: 'LIVE_STREAM',
-          timeframeUsed: 'tick',
-          isRecovered: false,
-        });
-      } else {
-        if (state === 'ACTIVE' && price <= tp1) {
-          state = 'TP1_HIT';
-          timestamps.tp1HitTimestamp = timestamps.tp1HitTimestamp || time;
-          transitions.push({
-            nextState: 'TP1_HIT',
-            eventTime: time,
-            eventSource: 'LIVE_STREAM',
-            timeframeUsed: 'tick',
-            isRecovered: false,
-          });
-        }
-        if (state === 'TP1_HIT' && price <= tp2) {
-          state = 'TP2_HIT';
-          timestamps.tp2HitTimestamp = timestamps.tp2HitTimestamp || time;
-          transitions.push({
-            nextState: 'TP2_HIT',
-            eventTime: time,
-            eventSource: 'LIVE_STREAM',
-            timeframeUsed: 'tick',
-            isRecovered: false,
-          });
-        }
-        if (state === 'TP2_HIT' && price <= tp3) {
-          state = 'TP3_HIT';
-          timestamps.tp3HitTimestamp = timestamps.tp3HitTimestamp || time;
-          transitions.push({
-            nextState: 'TP3_HIT',
-            eventTime: time,
-            eventSource: 'LIVE_STREAM',
-            timeframeUsed: 'tick',
-            isRecovered: false,
-          });
-        }
-      }
-    }
+    const result = this.evaluateSignalPriceUpdate(activeSigState, ticker.price, ticker.timestamp || Date.now(), ticker.symbol);
 
-    return { finalState: state, transitions };
+    timestamps.tp1Status = result.tp1Status;
+    timestamps.tp2Status = result.tp2Status;
+    timestamps.tp3Status = result.tp3Status;
+    timestamps.slStatus = result.slStatus;
+    if (result.tp1HitAt) timestamps.tp1HitAt = result.tp1HitAt;
+    if (result.tp2HitAt) timestamps.tp2HitAt = result.tp2HitAt;
+    if (result.tp3HitAt) timestamps.tp3HitAt = result.tp3HitAt;
+    if (result.stopLossHitAt) timestamps.stopLossHitAt = result.stopLossHitAt;
+    if (result.tp1HitPrice !== undefined) timestamps.tp1HitPrice = result.tp1HitPrice;
+    if (result.tp2HitPrice !== undefined) timestamps.tp2HitPrice = result.tp2HitPrice;
+    if (result.tp3HitPrice !== undefined) timestamps.tp3HitPrice = result.tp3HitPrice;
+    if (result.stopLossHitPrice !== undefined) timestamps.stopLossHitPrice = result.stopLossHitPrice;
+
+    return { finalState: result.newStatus, transitions: result.transitions };
   }
 
   /**
@@ -676,10 +1030,23 @@ export class SignalLifecycleManager {
       tp3HitTimestamp?: number;
       slHitTimestamp?: number;
       expiredTimestamp?: number;
+      tp1Status?: 'PENDING' | 'HIT';
+      tp2Status?: 'PENDING' | 'HIT';
+      tp3Status?: 'PENDING' | 'HIT';
+      slStatus?: 'ACTIVE' | 'HIT';
+      tp1HitAt?: string;
+      tp2HitAt?: string;
+      tp3HitAt?: string;
+      stopLossHitAt?: string;
+      tp1HitPrice?: number;
+      tp2HitPrice?: number;
+      tp3HitPrice?: number;
+      stopLossHitPrice?: number;
     }
   ): Promise<void> {
     const now = Date.now();
     const nextState = step.nextState;
+    const nextStateStr = nextState as string;
 
     // Track notified states to guarantee strict idempotency (Requirement 12)
     const currentNotified = new Set<string>(sig.notifiedStates || []);
@@ -698,34 +1065,34 @@ export class SignalLifecycleManager {
       });
       const recoveryTag = step.isRecovered ? ' (Recovered / Historical)' : '';
 
-      if (nextState === 'TP1_HIT') {
+      if (nextStateStr === 'TP1_HIT') {
         type = 'SETUP_UPDATE';
         title = `${sig.symbol} [${sig.direction}] - TP1 HIT${recoveryTag} ✅`;
         const tpVal = sig.tp1 ?? sig.takeProfit;
         message = step.isRecovered
           ? `Historically confirmed Conservative Take-Profit level reached for ${sig.symbol} at ${tpVal} (Event Time: ${eventTimeStr} UTC, Source: Historical Backfill, Timeframe: ${step.timeframeUsed}).`
           : `Conservative Take-Profit level reached for ${sig.symbol} at ${tpVal}.`;
-      } else if (nextState === 'TP2_HIT') {
+      } else if (nextStateStr === 'TP2_HIT') {
         type = 'HIGH_QUALITY';
         title = `${sig.symbol} [${sig.direction}] - TP2 HIT${recoveryTag} ✅`;
         const tpVal = sig.tp2 ?? sig.takeProfit;
         message = step.isRecovered
           ? `Historically confirmed Main Take-Profit target achieved for ${sig.symbol} at ${tpVal} (Event Time: ${eventTimeStr} UTC, Source: Historical Backfill, Timeframe: ${step.timeframeUsed}).`
           : `Main Take-Profit target achieved for ${sig.symbol} at ${tpVal}.`;
-      } else if (nextState === 'TP3_HIT') {
+      } else if (nextStateStr === 'TP3_HIT' || nextStateStr === 'COMPLETED') {
         type = 'BEST_TRADE';
         title = `${sig.symbol} [${sig.direction}] - TP3 HIT 🏆 FULL TARGET${recoveryTag}`;
         const tpVal = sig.tp3 ?? sig.takeProfit;
         message = step.isRecovered
           ? `Historically confirmed Extended Take-Profit reached for ${sig.symbol} at ${tpVal} (Event Time: ${eventTimeStr} UTC, Source: Historical Backfill, Timeframe: ${step.timeframeUsed}).`
           : `Extended Take-Profit reached! ${sig.symbol} fully completed target at ${tpVal}.`;
-      } else if (nextState === 'SL_HIT') {
+      } else if (nextStateStr === 'SL_HIT' || nextStateStr === 'STOPPED_OUT') {
         type = 'NO_TRADE';
         title = `${sig.symbol} [${sig.direction}] - STOP LOSS HIT${recoveryTag} ❌`;
         message = step.isRecovered
           ? `Historically confirmed Stop Loss triggered for ${sig.symbol} at ${sig.stopLoss} (Event Time: ${eventTimeStr} UTC, Source: Historical Backfill, Timeframe: ${step.timeframeUsed}).`
           : `Stop-loss triggered for ${sig.symbol} at ${sig.stopLoss}.`;
-      } else if (nextState === 'AMBIGUOUS') {
+      } else if (nextStateStr === 'AMBIGUOUS') {
         type = 'SETUP_UPDATE';
         title = `${sig.symbol} [${sig.direction}] - OUTCOME AMBIGUOUS ⚠️`;
         message = `Both Target and Stop Loss were breached inside the same candle (${step.timeframeUsed} timeframe). Event recorded as AMBIGUOUS without guessing.`;
@@ -753,6 +1120,18 @@ export class SignalLifecycleManager {
       tp2HitTimestamp: timestamps.tp2HitTimestamp,
       tp3HitTimestamp: timestamps.tp3HitTimestamp,
       slHitTimestamp: timestamps.slHitTimestamp,
+      tp1Status: timestamps.tp1Status,
+      tp2Status: timestamps.tp2Status,
+      tp3Status: timestamps.tp3Status,
+      slStatus: timestamps.slStatus,
+      tp1HitAt: timestamps.tp1HitAt,
+      tp2HitAt: timestamps.tp2HitAt,
+      tp3HitAt: timestamps.tp3HitAt,
+      stopLossHitAt: timestamps.stopLossHitAt,
+      tp1HitPrice: timestamps.tp1HitPrice,
+      tp2HitPrice: timestamps.tp2HitPrice,
+      tp3HitPrice: timestamps.tp3HitPrice,
+      stopLossHitPrice: timestamps.stopLossHitPrice,
       detectedAt: now,
       eventTime: step.eventTime,
       eventSource: step.eventSource,
@@ -764,16 +1143,16 @@ export class SignalLifecycleManager {
 
     // 3. Update dedicated Signal Logger status
     const logStatusMapping: SignalLogStatus =
-      nextState === 'TP1_HIT' ? 'TP1 HIT' :
-      nextState === 'TP2_HIT' ? 'TP2 HIT' :
-      nextState === 'TP3_HIT' ? 'TP3 HIT' :
-      nextState === 'SL_HIT' ? 'SL HIT' :
-      nextState === 'AMBIGUOUS' ? 'AMBIGUOUS' :
-      nextState === 'EXPIRED' ? 'EXPIRED' : 'ACTIVE';
+      nextStateStr === 'TP1_HIT' ? 'TP1 HIT' :
+      nextStateStr === 'TP2_HIT' ? 'TP2 HIT' :
+      (nextStateStr === 'TP3_HIT' || nextStateStr === 'COMPLETED') ? 'TP3 HIT' :
+      (nextStateStr === 'SL_HIT' || nextStateStr === 'STOPPED_OUT') ? 'SL HIT' :
+      nextStateStr === 'AMBIGUOUS' ? 'AMBIGUOUS' :
+      nextStateStr === 'EXPIRED' ? 'EXPIRED' : 'ACTIVE';
     await SignalLogger.updateStatus(sig.id, logStatusMapping);
 
     // 4. Write separate Signal Outcome Log (Requirement 14 & 15)
-    const finalOutcome = nextState === 'ACTIVE' ? undefined : nextState;
+    const finalOutcome = nextStateStr === 'ACTIVE' ? undefined : (nextStateStr as SignalOutcomeRecord['finalOutcome']);
     const outcomeRecord: SignalOutcomeRecord = {
       id: sig.id,
       symbol: sig.symbol,
@@ -790,9 +1169,21 @@ export class SignalLifecycleManager {
       tp2HitTimestamp: timestamps.tp2HitTimestamp,
       tp3HitTimestamp: timestamps.tp3HitTimestamp,
       slHitTimestamp: timestamps.slHitTimestamp,
-      expiredTimestamp: nextState === 'EXPIRED' ? (timestamps.expiredTimestamp || now) : undefined,
-      finalOutcome,
-      status: nextState,
+      tp1Status: timestamps.tp1Status,
+      tp2Status: timestamps.tp2Status,
+      tp3Status: timestamps.tp3Status,
+      slStatus: timestamps.slStatus,
+      tp1HitAt: timestamps.tp1HitAt,
+      tp2HitAt: timestamps.tp2HitAt,
+      tp3HitAt: timestamps.tp3HitAt,
+      stopLossHitAt: timestamps.stopLossHitAt,
+      tp1HitPrice: timestamps.tp1HitPrice,
+      tp2HitPrice: timestamps.tp2HitPrice,
+      tp3HitPrice: timestamps.tp3HitPrice,
+      stopLossHitPrice: timestamps.stopLossHitPrice,
+      expiredTimestamp: nextStateStr === 'EXPIRED' ? (timestamps.expiredTimestamp || now) : undefined,
+      finalOutcome: (nextStateStr === 'SL_HIT' || nextStateStr === 'STOPPED_OUT') ? 'SL_HIT' : (nextStateStr === 'COMPLETED' || nextStateStr === 'TP3_HIT') ? 'TP3_HIT' : (finalOutcome as any),
+      status: nextState as any,
       timestamp: sig.timestamp,
       updatedAt: now,
       detectedAt: now,
@@ -804,8 +1195,8 @@ export class SignalLifecycleManager {
     };
     await SignalOutcomeLogger.recordOutcome(outcomeRecord);
 
-    // 5. If terminal state reached (TP3_HIT, SL_HIT, EXPIRED), push outcome into StrategyPerformanceTracker
-    if (nextState === 'TP3_HIT' || nextState === 'SL_HIT' || nextState === 'EXPIRED') {
+    // 5. If terminal state reached, push outcome into StrategyPerformanceTracker
+    if (nextStateStr === 'TP3_HIT' || nextStateStr === 'COMPLETED' || nextStateStr === 'SL_HIT' || nextStateStr === 'STOPPED_OUT' || nextStateStr === 'EXPIRED') {
       let assetClass: 'CRYPTO' | 'FOREX' | 'STOCKS' = 'CRYPTO';
       if (sig.symbol.includes('USD') && (sig.symbol.length === 6 || sig.symbol.includes('EUR') || sig.symbol.includes('GBP'))) {
         assetClass = 'FOREX';
@@ -818,15 +1209,15 @@ export class SignalLifecycleManager {
       let isWin = false;
       let outcomeStatus: 'TP_HIT' | 'SL_HIT' | 'EXPIRED' | 'INVALIDATED' = 'EXPIRED';
 
-      if (nextState === 'TP3_HIT') {
+      if (nextStateStr === 'TP3_HIT' || nextStateStr === 'COMPLETED') {
         realizedRR = Math.max(2.0, sig.riskRewardRatio);
         isWin = true;
         outcomeStatus = 'TP_HIT';
-      } else if (nextState === 'SL_HIT') {
+      } else if (nextStateStr === 'SL_HIT' || nextStateStr === 'STOPPED_OUT') {
         realizedRR = -1.0;
         isWin = false;
         outcomeStatus = 'SL_HIT';
-      } else if (nextState === 'EXPIRED') {
+      } else if (nextStateStr === 'EXPIRED') {
         realizedRR = 0;
         isWin = false;
         outcomeStatus = 'EXPIRED';
