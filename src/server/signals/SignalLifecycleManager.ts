@@ -95,25 +95,6 @@ export class SignalLifecycleManager {
       logger.info(`[SignalLifecycle] Beginning outcome evaluation for ${activeSignals.length} active/progressive signals.`);
 
       for (const sig of activeSignals) {
-        // 1. Check TTL Expiration (Default 24 hours)
-        const ageMs = now - sig.timestamp;
-        const maxTtlMs = 24 * 60 * 60 * 1000;
-
-        if (ageMs > maxTtlMs) {
-          logger.info(`[SignalLifecycle] Signal ${sig.id} (${sig.symbol}) reached TTL expiration (${(ageMs / 3600000).toFixed(1)}h).`);
-          await this.transitionSignalProgressive(sig, {
-            nextState: 'EXPIRED',
-            eventTime: now,
-            eventSource: 'TICK_EVALUATION',
-            timeframeUsed: '1h',
-            isRecovered: false,
-          }, {
-            expiredTimestamp: now,
-          });
-          expiredCount++;
-          continue;
-        }
-
         const providerName = sig.dataSource || 'twelvedata';
 
         // 2. Fetch comprehensive historical candles from `sig.timestamp` up to `now` using the same provider
@@ -122,6 +103,7 @@ export class SignalLifecycleManager {
         // 3. Load existing outcomes from persistent log if any to preserve already confirmed milestones
         const existingOutcome = await SignalOutcomeLogger.getOutcome(sig.id);
         const timestamps = {
+          entryHitTimestamp: sig.entryHitTimestamp ?? existingOutcome?.entryHitTimestamp,
           tp1HitTimestamp: sig.tp1HitTimestamp ?? existingOutcome?.tp1HitTimestamp,
           tp2HitTimestamp: sig.tp2HitTimestamp ?? existingOutcome?.tp2HitTimestamp,
           tp3HitTimestamp: sig.tp3HitTimestamp ?? existingOutcome?.tp3HitTimestamp,
@@ -153,6 +135,26 @@ export class SignalLifecycleManager {
               queuedTransitions.push(...liveResult.transitions);
             }
           }
+        }
+
+        // 1. Check TTL Expiration (Default 24 hours) - ONLY if not yet entry triggered
+        const ageMs = now - sig.timestamp;
+        const maxTtlMs = 24 * 60 * 60 * 1000;
+
+        if (ageMs > maxTtlMs && !timestamps.entryHitTimestamp) {
+          logger.info(`[SignalLifecycle] Signal ${sig.id} (${sig.symbol}) reached TTL expiration (${(ageMs / 3600000).toFixed(1)}h).`);
+          await this.transitionSignalProgressive(sig, {
+            nextState: 'EXPIRED',
+            eventTime: now,
+            eventSource: 'TICK_EVALUATION',
+            timeframeUsed: '1h',
+            isRecovered: false,
+          }, {
+            ...timestamps,
+            expiredTimestamp: now,
+          });
+          expiredCount++;
+          continue;
         }
 
         // 6. Execute all queued progressive transitions in strict chronological order
@@ -299,6 +301,20 @@ export class SignalLifecycleManager {
       const open = candle.open;
       const time = candle.timestamp;
       const timeframe = candle.timeframe || '1m';
+
+      // 1. Entry Detection
+      if (!timestamps.entryHitTimestamp) {
+        if ((low <= entry && high >= entry)) {
+          timestamps.entryHitTimestamp = time;
+          transitions.push({
+            nextState: 'ACTIVE',
+            eventTime: time,
+            eventSource: 'HISTORICAL_BACKFILL',
+            timeframeUsed: timeframe,
+            isRecovered: true,
+          });
+        }
+      }
 
       if (isBuy) {
         // Next target price needed for BUY

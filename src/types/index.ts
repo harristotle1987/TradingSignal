@@ -152,6 +152,7 @@ export interface TradingSignal {
   isAiValidated?: boolean;
   targetDistance?: number;
   stopDistance?: number;
+  entryHitTimestamp?: number;
   suggestedRiskAmount?: number; // Hypothetical analysis only
   suggestedPositionSize?: number; // Hypothetical analysis only
   pipPointUnit?: 'PIPS' | 'POINTS';

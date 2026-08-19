@@ -898,6 +898,7 @@ export class SignalEngine {
           validationReason: 'VALID',
           aiAssessment: aiResult.aiAssessment,
           score: scoring.score,
+          entryHitTimestamp: undefined,
         };
 
         candidates.push({
