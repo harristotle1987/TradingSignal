@@ -142,11 +142,11 @@ export class SignalValidator {
     }
 
     // 7. Confluence & Quality Score Check (INSUFFICIENT_CONFLUENCE)
-    if (ctx.score < 75) {
+    if (ctx.score < 70) {
       return {
         isValid: false,
         validationReason: 'INSUFFICIENT_CONFLUENCE',
-        detailedMessage: `Deterministic score ${ctx.score}/100 is below the minimum actionable threshold of 75 (85+ = BEST TRADE, 75-84 = HIGH QUALITY)`,
+        detailedMessage: `Deterministic score ${ctx.score}/100 is below the minimum actionable threshold of 70 (90+ = EXCEPTIONAL, 80-89 = STRONG, 70-79 = VALID)`,
         snapshotId,
         validatedAt: now,
       };
@@ -443,14 +443,14 @@ export class SignalValidator {
       };
     }
 
-    // 5. Net Risk / Reward Ratio Check: Strict 2.0:1 (1:2) minimum
+    // 5. Net Risk / Reward Ratio Check: Minimum 1.5:1
     const rawRR = reward / risk;
     const adjustedNetRR = Number(rawRR.toFixed(2));
 
-    if (adjustedNetRR < 2.0) {
+    if (adjustedNetRR < 1.5) {
       return {
         isValid: false,
-        message: `Risk/Reward ratio (${adjustedNetRR}:1) is below strict 2.0:1 (1:2) minimum hurdle`,
+        message: `Risk/Reward ratio (${adjustedNetRR}:1) is below 1.5:1 minimum hurdle`,
       };
     }
 
@@ -485,10 +485,10 @@ export class SignalValidator {
       };
     }
 
-    if (expectancyRatio < 0.12) {
+    if (expectancyRatio < 0.01) {
       return {
         isValid: false,
-        message: `Expected Value rejected: Expectancy ratio (${(expectancyRatio * 100).toFixed(1)}%) below 12.0% minimum risk-adjusted hurdle`,
+        message: `Expected Value rejected: Expectancy ratio (${(expectancyRatio * 100).toFixed(1)}%) below minimum positive risk-adjusted hurdle`,
       };
     }
 

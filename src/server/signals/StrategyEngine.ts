@@ -196,12 +196,12 @@ export class StrategyEngine {
         (rawWeightedScore / 100) * 30
     );
 
-    // Require at least 4 out of 6 strategies agreeing, minimum 70 agreement score, and at least 3 aligned timeframes
-    const hasStrongConfluence = agreeingStrategiesCount >= 4 && agreementScore >= 70 && tfScores.alignedCount >= 3;
+    // Require at least 2 out of 6 strategies agreeing, minimum 50 agreement score, and at least 2 aligned timeframes
+    const hasStrongConfluence = agreeingStrategiesCount >= 2 && agreementScore >= 50 && tfScores.alignedCount >= 2;
 
     if (!hasStrongConfluence) {
       return this.createRejection(
-        `Insufficient strategy confluence: ${agreeingStrategiesCount}/6 strategies agreed with ${tfScores.alignedCount}/${tfScores.totalEvaluated} timeframes (Agreement Score: ${agreementScore}/100, min 70 required)`,
+        `Insufficient strategy confluence: ${agreeingStrategiesCount}/6 strategies agreed with ${tfScores.alignedCount}/${tfScores.totalEvaluated} timeframes (Agreement Score: ${agreementScore}/100, min 50 required)`,
         regime,
         regimeDetails
       );

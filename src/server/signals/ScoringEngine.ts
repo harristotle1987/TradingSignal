@@ -25,7 +25,7 @@ export interface ScoringFactors {
   freshnessAgreementScore?: number;
 }
 
-export type QualityTier = 'BEST_TRADE' | 'HIGH_QUALITY' | 'REJECT';
+export type QualityTier = 'BEST_TRADE' | 'HIGH_QUALITY' | 'VALID' | 'REJECT';
 
 export interface ScoringResult {
   isValid: boolean;
@@ -566,10 +566,10 @@ export class ScoringEngine {
     const calculatedReward = (Math.abs(tp1 - entryPrice) + Math.abs(tp2 - entryPrice) + Math.abs(tp3 - entryPrice)) / 3;
     const rawRR = calculatedRisk > 0 ? Number((calculatedReward / calculatedRisk).toFixed(2)) : 0;
 
-    // Minimum R:R ratio is 2.0:1 (1:2)
-    if (rawRR < 2.0) {
+    // Minimum R:R ratio is 1.5:1
+    if (rawRR < 1.5) {
       return this.createRejection(
-        `Risk/Reward ratio (${rawRR}:1) is below strict 2.0:1 requirement`,
+        `Risk/Reward ratio (${rawRR}:1) is below minimum 1.5:1 requirement`,
         marketRegime,
         regimeDetails
       );
@@ -594,17 +594,19 @@ export class ScoringEngine {
       );
     }
 
-    // Minimum Actionable Score = 75
-    // 85+ = BEST TRADE
-    // 75–84 = HIGH QUALITY
-    // Below 75 = REJECT
+    // Minimum Actionable Score = 70
+    // 90+ = BEST TRADE (EXCEPTIONAL)
+    // 80–89 = HIGH QUALITY (STRONG)
+    // 70–79 = VALID
+    // Below 70 = REJECT
     let qualityTier: QualityTier = 'REJECT';
-    if (totalScore >= 85) qualityTier = 'BEST_TRADE';
-    else if (totalScore >= 75) qualityTier = 'HIGH_QUALITY';
+    if (totalScore >= 90) qualityTier = 'BEST_TRADE';
+    else if (totalScore >= 80) qualityTier = 'HIGH_QUALITY';
+    else if (totalScore >= 70) qualityTier = 'VALID';
 
-    if (totalScore < 75) {
+    if (totalScore < 70) {
       return this.createRejection(
-        `Deterministic quality score ${totalScore}/100 is below minimum actionable threshold of 75 (85+ = BEST TRADE, 75-84 = HIGH QUALITY)`,
+        `Deterministic quality score ${totalScore}/100 is below minimum actionable threshold of 70 (90+ = EXCEPTIONAL, 80-89 = STRONG, 70-79 = VALID)`,
         marketRegime,
         regimeDetails
       );

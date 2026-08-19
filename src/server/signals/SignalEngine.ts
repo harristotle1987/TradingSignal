@@ -444,105 +444,95 @@ export class SignalEngine {
         );
 
         if (scoring.isValid && scoring.direction) {
-          // Gate 2: Multi-Timeframe Confluence
+          const setupCandles = candlesMap['15m'] || candlesMap['1h'] || candlesMap['5m'] || [];
+
+          // Gate 2: Multi-Timeframe Confluence (Trend)
           const gate2 = Gate2MTFConfluence.evaluateConfluence(scoring.direction, candlesMap);
           logger.info(`[Gate 2 MTF Confluence] ${asset}: HTF=${gate2.htfDirection}, MTF=${gate2.mtfDirection}, LTF=${gate2.ltfDirection}, SCORE=${gate2.alignmentScore}, STATUS=${gate2.confluenceStatus}`);
-          
-          if (gate2.confluenceStatus === 'CONTRADICTION' || gate2.alignmentScore < 50) {
-             scoring.isValid = false;
-             scoring.rejectionReason = `Gate 2 MTF Contradiction (${gate2.alignmentScore} pts): ${gate2.conflicts.join('; ')}`;
+
+          // Gate 3: Market Structure
+          const gate3 = Gate3MarketStructure.analyzeStructure(scoring.direction, setupCandles);
+          logger.info(`[Gate 3 Market Structure] ${asset}: DIR=${gate3.direction}, STR=${gate3.strength}, BOS=${gate3.bosStatus}, CHOCH=${gate3.chochStatus}, SCORE=${gate3.score}`);
+
+          // Gate 4: Momentum & Volatility
+          const gate4 = Gate4MomentumVolatility.analyze(scoring.direction, setupCandles);
+          logger.info(`[Gate 4 Mom/Vol] ${asset}: MOM=${gate4.momentumDirection}, VOL=${gate4.volatilityState}, EXT=${gate4.overextensionStatus}, SCORE=${gate4.score}`);
+
+          // Gate 5: Support, Resistance & Liquidity
+          const gate5 = Gate5SupportResistance.analyze(scoring.direction, setupCandles);
+          logger.info(`[Gate 5 S/R & Liq] ${asset}: SR_SCORE=${gate5.srConfluenceScore}, LIQ_SCORE=${gate5.liquidityScore}, SCORE=${gate5.score}`);
+
+          // Gate 6: Volume & Price Action Confirmation
+          const gate6 = Gate6VolumePriceAction.analyze(scoring.direction, setupCandles);
+          logger.info(`[Gate 6 Vol/PA] ${asset}: VOL=${gate6.volumeConfirmation}, VWAP=${gate6.vwapDirection}, PA=${gate6.priceActionConfirmation}, SCORE=${gate6.score}`);
+
+          // Gate 7: Market Context
+          const gate7 = Gate7MarketContext.analyze(asset, scoring.direction, setupCandles);
+          logger.info(`[Gate 7 Context] ${asset}: SESSION=${gate7.session}, NEWS=${gate7.newsRisk}, ALLOWED=${gate7.tradingAllowed}, SCORE=${gate7.marketContextScore}`);
+
+          // Gate 8: Entry Quality
+          const gate8 = Gate8EntryQuality.analyze(baselinePrice, scoring.direction, setupCandles);
+          logger.info(`[Gate 8 Entry] ${asset}: QUALITY=${gate8.entryQuality}, SCORE=${gate8.entryScore}`);
+
+          // Gate 9: Risk Management & Expected Value
+          const gate9 = Gate9RiskManagement.calculate(baselinePrice, scoring.direction, setupCandles);
+          logger.info(`[Gate 9 Risk] ${asset}: RR=${gate9.rrRatio.toFixed(2)}, EV=${gate9.expectedValue.toFixed(2)}, SCORE=${gate9.riskScore}`);
+
+          // -----------------------------------------------------------------
+          // DIRECTIONAL CONFIRMATION MODEL (2 OF 3 REQUIRED: Trend, Structure, Momentum)
+          // -----------------------------------------------------------------
+          const isDirBullish = scoring.direction === 'BUY';
+          const isDirBearish = scoring.direction === 'SELL';
+
+          const trendPass = gate2.confluenceStatus !== 'CONTRADICTION' && gate2.alignmentScore >= 40;
+          const structurePass = gate3.score >= 40 || (isDirBullish && gate3.direction === 'BULLISH') || (isDirBearish && gate3.direction === 'BEARISH');
+          const momentumPass = gate4.score >= 40 || (isDirBullish && gate4.momentumDirection === 'BULLISH') || (isDirBearish && gate4.momentumDirection === 'BEARISH');
+
+          const directionalPasses = (trendPass ? 1 : 0) + (structurePass ? 1 : 0) + (momentumPass ? 1 : 0);
+
+          if (directionalPasses < 2) {
+            scoring.isValid = false;
+            scoring.rejectionReason = `Directional Confirmation Failed: Required 2 of 3 (Trend, Structure, Momentum) to pass, but only ${directionalPasses} passed (Trend:${trendPass}, Structure:${structurePass}, Momentum:${momentumPass})`;
+          } else if (gate7.tradingAllowed === 'NO') {
+            scoring.isValid = false;
+            scoring.rejectionReason = `Gate 7 Market Context Blocked: ${gate7.reasons.join('; ')}`;
+          } else if (gate9.rrRatio < 1.5) {
+            scoring.isValid = false;
+            scoring.rejectionReason = `Gate 9 Risk/Reward Hurdle Failed: R:R ${gate9.rrRatio.toFixed(2)} is below minimum required 1.5:1 ratio`;
           } else {
-             // Adjust score based on MTF alignment
-             scoring.score = Math.min(100, Math.round((scoring.score * 0.7) + (gate2.alignmentScore * 0.3)));
-             
-             // Gate 3: Market Structure Analysis
-             const setupCandles = candlesMap['15m'] || candlesMap['1h'] || candlesMap['5m'] || [];
-             if (setupCandles.length > 0) {
-                const gate3 = Gate3MarketStructure.analyzeStructure(scoring.direction, setupCandles);
-                logger.info(`[Gate 3 Market Structure] ${asset}: DIR=${gate3.direction}, STR=${gate3.strength}, BOS=${gate3.bosStatus}, CHOCH=${gate3.chochStatus}, SCORE=${gate3.score}`);
-                
-                if (gate3.score < 40) {
-                   scoring.isValid = false;
-                   scoring.rejectionReason = `Gate 3 Structure Conflict (${gate3.score} pts): ${gate3.reasons.join('; ')}`;
-                } else {
-                   // Adjust score with structure weight
-                   scoring.score = Math.min(100, Math.round((scoring.score * 0.8) + (gate3.score * 0.2)));
-                   
-                   // Gate 4: Momentum & Volatility
-                   const gate4 = Gate4MomentumVolatility.analyze(scoring.direction, setupCandles);
-                   logger.info(`[Gate 4 Mom/Vol] ${asset}: MOM=${gate4.momentumDirection}, VOL=${gate4.volatilityState}, EXT=${gate4.overextensionStatus}, SCORE=${gate4.score}`);
-                   
-                   if (gate4.score < 40) {
-                      scoring.isValid = false;
-                      scoring.rejectionReason = `Gate 4 Momentum/Volatility Conflict (${gate4.score} pts): ${gate4.reasons.join('; ')}`;
-                   } else {
-                      // Final score adjustment with Mom/Vol
-                      scoring.score = Math.min(100, Math.round((scoring.score * 0.8) + (gate4.score * 0.2)));
-                      
-                      // Gate 5: Support, Resistance & Liquidity
-                      const gate5 = Gate5SupportResistance.analyze(scoring.direction, setupCandles);
-                      logger.info(`[Gate 5 S/R & Liq] ${asset}: SR_SCORE=${gate5.srConfluenceScore}, LIQ_SCORE=${gate5.liquidityScore}, SCORE=${gate5.score}`);
-                      
-                      if (gate5.score < 40) {
-                         scoring.isValid = false;
-                         scoring.rejectionReason = `Gate 5 S/R Conflict (${gate5.score} pts): ${gate5.reasons.join('; ')}`;
-                      } else {
-                         // Final score adjustment with Gate 5
-                         scoring.score = Math.min(100, Math.round((scoring.score * 0.8) + (gate5.score * 0.2)));
-                         
-                         // Gate 6: Volume & Price Action Confirmation
-                         const gate6 = Gate6VolumePriceAction.analyze(scoring.direction, setupCandles);
-                         logger.info(`[Gate 6 Vol/PA] ${asset}: VOL=${gate6.volumeConfirmation}, VWAP=${gate6.vwapDirection}, PA=${gate6.priceActionConfirmation}, SCORE=${gate6.score}`);
+            // Apply weighted composite scoring:
+            // Weights: Trend (25), Structure (20), Momentum (20), Volatility (15), Volume (10), Multi-TF (10)
+            const trendWeightScore = gate2.alignmentScore;
+            const structureWeightScore = gate3.score;
+            const momentumWeightScore = gate4.score;
+            const volatilityWeightScore = gate4.volatilityState === 'DEAD' || gate4.volatilityState === 'ERRATIC' ? 20 : 85;
+            const volumeWeightScore = gate6.score;
+            const mtfWeightScore = gate2.alignmentScore;
 
-                         if (gate6.score < 40) {
-                             scoring.isValid = false;
-                             scoring.rejectionReason = `Gate 6 Volume/PA Conflict (${gate6.score} pts): ${gate6.reasons.join('; ')}`;
-                         } else {
-                             // Final score adjustment with Gate 6
-                             scoring.score = Math.min(100, Math.round((scoring.score * 0.8) + (gate6.score * 0.2)));
+            const compositeScore = Math.round(
+              trendWeightScore * 0.25 +
+              structureWeightScore * 0.20 +
+              momentumWeightScore * 0.20 +
+              volatilityWeightScore * 0.15 +
+              volumeWeightScore * 0.10 +
+              mtfWeightScore * 0.10
+            );
 
-                             // Gate 7: Market Context
-                             const gate7 = Gate7MarketContext.analyze(asset, scoring.direction, setupCandles);
-                             logger.info(`[Gate 7 Context] ${asset}: SESSION=${gate7.session}, NEWS=${gate7.newsRisk}, ALLOWED=${gate7.tradingAllowed}, SCORE=${gate7.marketContextScore}`);
+            // Combine composite score with baseline score
+            scoring.score = Math.min(100, Math.max(scoring.score, compositeScore));
 
-                             if (gate7.tradingAllowed === 'NO' || gate7.marketContextScore < 30) {
-                                scoring.isValid = false;
-                                scoring.rejectionReason = `Gate 7 Market Context Conflict: Trading Blocked or Score too low (${gate7.marketContextScore} pts). ${gate7.reasons.join('; ')}`;
-                             } else {
-                                // Final score adjustment with Gate 7
-                                scoring.score = Math.min(100, Math.round((scoring.score * 0.9) + (gate7.marketContextScore * 0.1)));
-
-                                // Gate 8: Entry Quality
-                                const gate8 = Gate8EntryQuality.analyze(baselinePrice, scoring.direction, setupCandles);
-                                logger.info(`[Gate 8 Entry] ${asset}: QUALITY=${gate8.entryQuality}, SCORE=${gate8.entryScore}`);
-                                
-                                if (gate8.entryScore < 50) {
-                                   scoring.isValid = false;
-                                   scoring.rejectionReason = `Gate 8 Entry Quality Conflict: ${gate8.reasons.join('; ')}`;
-                                } else {
-                                   scoring.score = Math.min(100, Math.round((scoring.score * 0.9) + (gate8.entryScore * 0.1)));
-
-                                   // Gate 9: Risk Management & Expected Value
-                                   const gate9 = Gate9RiskManagement.calculate(baselinePrice, scoring.direction, setupCandles);
-                                   logger.info(`[Gate 9 Risk] ${asset}: RR=${gate9.rrRatio.toFixed(2)}, EV=${gate9.expectedValue.toFixed(2)}, SCORE=${gate9.riskScore}`);
-
-                                   if (gate9.riskScore < 50) {
-                                      scoring.isValid = false;
-                                      scoring.rejectionReason = `Gate 9 Risk Management Conflict: ${gate9.reasons.join('; ')}`;
-                                   } else {
-                                      scoring.score = Math.min(100, Math.round((scoring.score * 0.9) + (gate9.riskScore * 0.1)));
-                                      
-                                      // Update signal object with SL/TPs
-                                      scoring.stopLoss = gate9.sl;
-                                      scoring.takeProfit = gate9.tp1;
-                                   }
-                                }
-                             }
-                         }
-                      }
-                   }
-                }
-             }
+            if (scoring.score < 70) {
+              scoring.isValid = false;
+              scoring.rejectionReason = `Composite signal score ${scoring.score}/100 is below the minimum required threshold of 70`;
+            } else {
+              // Update SL/TP levels from Risk Management
+              scoring.stopLoss = gate9.sl;
+              scoring.takeProfit = gate9.tp1;
+              scoring.tp1 = gate9.tp1;
+              scoring.tp2 = gate9.tp2;
+              scoring.tp3 = gate9.tp3;
+              scoring.riskRewardRatio = gate9.rrRatio;
+            }
           }
         }
 
