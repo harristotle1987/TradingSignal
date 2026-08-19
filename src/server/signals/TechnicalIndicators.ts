@@ -139,6 +139,94 @@ export class TechnicalIndicators {
   }
 
   /**
+   * Average Directional Index (ADX)
+   */
+  static calculateADX(candles: NormalizedCandle[], period = 14): { adx: number; pdi: number; mdi: number } | null {
+    if (candles.length <= period * 2) return null;
+
+    let trSum = 0;
+    let pdmSum = 0;
+    let mdmSum = 0;
+
+    // Initial true range and directional movement
+    for (let i = 1; i <= period; i++) {
+      const high = candles[i].high;
+      const low = candles[i].low;
+      const prevHigh = candles[i - 1].high;
+      const prevLow = candles[i - 1].low;
+      const prevClose = candles[i - 1].close;
+
+      const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+      trSum += tr;
+
+      const upMove = high - prevHigh;
+      const downMove = prevLow - low;
+
+      let pdm = 0;
+      let mdm = 0;
+
+      if (upMove > downMove && upMove > 0) {
+        pdm = upMove;
+      } else if (downMove > upMove && downMove > 0) {
+        mdm = downMove;
+      }
+
+      pdmSum += pdm;
+      mdmSum += mdm;
+    }
+
+    let pdi = trSum === 0 ? 0 : (pdmSum / trSum) * 100;
+    let mdi = trSum === 0 ? 0 : (mdmSum / trSum) * 100;
+
+    const dxList: number[] = [];
+    let dx = pdi + mdi === 0 ? 0 : (Math.abs(pdi - mdi) / (pdi + mdi)) * 100;
+    dxList.push(dx);
+
+    let adx = 0;
+
+    // Wilder's smoothing
+    for (let i = period + 1; i < candles.length; i++) {
+      const high = candles[i].high;
+      const low = candles[i].low;
+      const prevHigh = candles[i - 1].high;
+      const prevLow = candles[i - 1].low;
+      const prevClose = candles[i - 1].close;
+
+      const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+      trSum = trSum - (trSum / period) + tr;
+
+      const upMove = high - prevHigh;
+      const downMove = prevLow - low;
+
+      let pdm = 0;
+      let mdm = 0;
+      if (upMove > downMove && upMove > 0) pdm = upMove;
+      else if (downMove > upMove && downMove > 0) mdm = downMove;
+
+      pdmSum = pdmSum - (pdmSum / period) + pdm;
+      mdmSum = mdmSum - (mdmSum / period) + mdm;
+
+      pdi = trSum === 0 ? 0 : (pdmSum / trSum) * 100;
+      mdi = trSum === 0 ? 0 : (mdmSum / trSum) * 100;
+
+      dx = pdi + mdi === 0 ? 0 : (Math.abs(pdi - mdi) / (pdi + mdi)) * 100;
+      dxList.push(dx);
+    }
+
+    if (dxList.length < period) return null;
+
+    // Initial ADX
+    adx = dxList.slice(0, period).reduce((a, b) => a + b, 0) / period;
+
+    // Subsequent ADX
+    for (let i = period; i < dxList.length; i++) {
+      adx = (adx * (period - 1) + dxList[i]) / period;
+    }
+
+    return { adx, pdi, mdi };
+  }
+
+  /**
    * Average True Range (ATR)
    */
   static calculateATR(candles: NormalizedCandle[], period = 14): number {
@@ -557,5 +645,49 @@ export class TechnicalIndicators {
       hasBullishWickAbsorption: lowerWickRejectionPct >= 38,
       hasBearishWickAbsorption: upperWickRejectionPct >= 38,
     };
+  }
+
+  static calculateVWAP(candles: NormalizedCandle[]): number[] {
+    const vwapSeries: number[] = [];
+    if (candles.length === 0) return vwapSeries;
+
+    let cumulativePV = 0;
+    let cumulativeVol = 0;
+    let currentDay = new Date(candles[0].timestamp).getUTCDay();
+
+    for (const c of candles) {
+      const day = new Date(c.timestamp).getUTCDay();
+      if (day !== currentDay) {
+        // Reset daily
+        cumulativePV = 0;
+        cumulativeVol = 0;
+        currentDay = day;
+      }
+      const typicalPrice = (c.high + c.low + c.close) / 3;
+      cumulativePV += typicalPrice * c.volume;
+      cumulativeVol += c.volume;
+      vwapSeries.push(cumulativeVol > 0 ? cumulativePV / cumulativeVol : c.close);
+    }
+    return vwapSeries;
+  }
+
+  static calculateOBV(candles: NormalizedCandle[]): number[] {
+    const obvSeries: number[] = [];
+    if (candles.length === 0) return obvSeries;
+
+    let obv = 0;
+    obvSeries.push(obv);
+
+    for (let i = 1; i < candles.length; i++) {
+      const current = candles[i];
+      const prev = candles[i - 1];
+      if (current.close > prev.close) {
+        obv += current.volume;
+      } else if (current.close < prev.close) {
+        obv -= current.volume;
+      }
+      obvSeries.push(obv);
+    }
+    return obvSeries;
   }
 }

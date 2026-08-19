@@ -19,6 +19,16 @@ import { marketDataManager } from '../market/MarketDataManager.js';
 import { MarketSessionManager } from '../market/MarketSessionManager.js';
 import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 import { ScoringEngine, ScoringResult } from './ScoringEngine.js';
+import { Gate0DataValidator } from './Gate0DataValidator.js';
+import { Gate1MarketRegime } from './Gate1MarketRegime.js';
+import { Gate2MTFConfluence } from './Gate2MTFConfluence.js';
+import { Gate3MarketStructure } from './Gate3MarketStructure.js';
+import { Gate4MomentumVolatility } from './Gate4MomentumVolatility.js';
+import { Gate5SupportResistance } from './Gate5Liquidity.js';
+import { Gate6VolumePriceAction } from './Gate6VolumePriceAction.js';
+import { Gate7MarketContext } from './Gate7MarketContext.js';
+import { Gate8EntryQuality } from './Gate8EntryQuality.js';
+import { Gate9RiskManagement } from './Gate9RiskManagement.js';
 import { NvidiaAIService } from './NvidiaAIService.js';
 import { SignalValidator, ValidationResult } from './SignalValidator.js';
 import { TradeRankingEngine, ValidatedCandidate } from './TradeRankingEngine.js';
@@ -262,6 +272,20 @@ export class SignalEngine {
           continue;
         }
 
+        // Gate 0: Data Integrity & Market Data Validation
+        const gate0 = Gate0DataValidator.validate({
+          symbol: asset,
+          timeframe: '1h',
+          liveTicker: null,
+          candles: htf1h,
+          minCandlesRequired: 20
+        });
+
+        if (gate0.dataStatus !== 'VALID') {
+          logger.info(`[Gate 0 Data Integrity] Skipped ${asset}: ${gate0.dataStatus} - ${gate0.reasons.join(', ')}`);
+          continue;
+        }
+
         const pass = this.computeTechnicalVolatilityScore(asset, htf1h);
         logger.info(`[Stage 2 Filter] ${asset}: Score = ${pass.preliminaryScore}/100 (${pass.reason})`);
 
@@ -352,9 +376,54 @@ export class SignalEngine {
           }
         }
 
-        const baselinePrice = lastCandle.close;
+        let liveTicker: NormalizedTicker | null = null;
+        try {
+          liveTicker = await marketDataManager.getPrice(asset, undefined, true);
+        } catch (err) {
+          logger.warn(`Live ticker quote failed for ${asset}`, { error: String(err) });
+          continue;
+        }
+
+        if (!liveTicker || liveTicker.price <= 0) {
+          logger.info(`[Stage 3 Deep Analysis] Rejected ${asset} at Gate 0: INSUFFICIENT - Live ticker unavailable`);
+          continue;
+        }
+
+        const baselinePrice = liveTicker.price;
         const newsSentiment = this.evaluateNewsSentiment(asset, generalNews);
         const crossCheck = await this.verifyCrossSourcePrice(asset, baselinePrice);
+
+        // Gate 0: Deep Data Integrity Validation across ALL fetched timeframes & live price
+        let allDataValid = true;
+        let dataRejectReason = '';
+        let dataFreshnessSeconds = 0;
+        
+        for (const [tf, candles] of Object.entries(candlesMap)) {
+          const gate0 = Gate0DataValidator.validate({
+            symbol: asset,
+            timeframe: tf,
+            liveTicker,
+            candles,
+            secondaryPrice: crossCheck.secondaryPrice ? { price: crossCheck.secondaryPrice, source: crossCheck.source2 || 'Secondary' } : undefined,
+            minCandlesRequired: 10
+          });
+          
+          if (gate0.dataStatus !== 'VALID') {
+            allDataValid = false;
+            dataRejectReason = `[Gate 0 - ${tf}] ${gate0.dataStatus}: ${gate0.reasons.join(', ')}`;
+            break;
+          }
+          dataFreshnessSeconds = Math.max(dataFreshnessSeconds, gate0.freshnessSec);
+        }
+
+        if (!allDataValid) {
+          logger.info(`[Stage 3 Deep Analysis] Rejected ${asset} at Gate 0: ${dataRejectReason}`);
+          continue;
+        }
+
+        // Gate 1: Market Regime Detection
+        const gate1 = Gate1MarketRegime.detectRegime(asset, candlesMap);
+        logger.info(`[Gate 1 Market Regime] ${asset}: REGIME=${gate1.regime}, CONFIDENCE=${gate1.confidence}, FACTORS=[${gate1.factors.join('; ')}]`);
 
         const scoring = ScoringEngine.calculateScore(
           asset,
@@ -363,6 +432,109 @@ export class SignalEngine {
           newsSentiment.sentiment,
           crossCheck.agreementPct
         );
+
+        if (scoring.isValid && scoring.direction) {
+          // Gate 2: Multi-Timeframe Confluence
+          const gate2 = Gate2MTFConfluence.evaluateConfluence(scoring.direction, candlesMap);
+          logger.info(`[Gate 2 MTF Confluence] ${asset}: HTF=${gate2.htfDirection}, MTF=${gate2.mtfDirection}, LTF=${gate2.ltfDirection}, SCORE=${gate2.alignmentScore}, STATUS=${gate2.confluenceStatus}`);
+          
+          if (gate2.confluenceStatus === 'CONTRADICTION' || gate2.alignmentScore < 50) {
+             scoring.isValid = false;
+             scoring.rejectionReason = `Gate 2 MTF Contradiction (${gate2.alignmentScore} pts): ${gate2.conflicts.join('; ')}`;
+          } else {
+             // Adjust score based on MTF alignment
+             scoring.score = Math.min(100, Math.round((scoring.score * 0.7) + (gate2.alignmentScore * 0.3)));
+             
+             // Gate 3: Market Structure Analysis
+             const setupCandles = candlesMap['15m'] || candlesMap['1h'] || candlesMap['5m'] || [];
+             if (setupCandles.length > 0) {
+                const gate3 = Gate3MarketStructure.analyzeStructure(scoring.direction, setupCandles);
+                logger.info(`[Gate 3 Market Structure] ${asset}: DIR=${gate3.direction}, STR=${gate3.strength}, BOS=${gate3.bosStatus}, CHOCH=${gate3.chochStatus}, SCORE=${gate3.score}`);
+                
+                if (gate3.score < 40) {
+                   scoring.isValid = false;
+                   scoring.rejectionReason = `Gate 3 Structure Conflict (${gate3.score} pts): ${gate3.reasons.join('; ')}`;
+                } else {
+                   // Adjust score with structure weight
+                   scoring.score = Math.min(100, Math.round((scoring.score * 0.8) + (gate3.score * 0.2)));
+                   
+                   // Gate 4: Momentum & Volatility
+                   const gate4 = Gate4MomentumVolatility.analyze(scoring.direction, setupCandles);
+                   logger.info(`[Gate 4 Mom/Vol] ${asset}: MOM=${gate4.momentumDirection}, VOL=${gate4.volatilityState}, EXT=${gate4.overextensionStatus}, SCORE=${gate4.score}`);
+                   
+                   if (gate4.score < 40) {
+                      scoring.isValid = false;
+                      scoring.rejectionReason = `Gate 4 Momentum/Volatility Conflict (${gate4.score} pts): ${gate4.reasons.join('; ')}`;
+                   } else {
+                      // Final score adjustment with Mom/Vol
+                      scoring.score = Math.min(100, Math.round((scoring.score * 0.8) + (gate4.score * 0.2)));
+                      
+                      // Gate 5: Support, Resistance & Liquidity
+                      const gate5 = Gate5SupportResistance.analyze(scoring.direction, setupCandles);
+                      logger.info(`[Gate 5 S/R & Liq] ${asset}: SR_SCORE=${gate5.srConfluenceScore}, LIQ_SCORE=${gate5.liquidityScore}, SCORE=${gate5.score}`);
+                      
+                      if (gate5.score < 40) {
+                         scoring.isValid = false;
+                         scoring.rejectionReason = `Gate 5 S/R Conflict (${gate5.score} pts): ${gate5.reasons.join('; ')}`;
+                      } else {
+                         // Final score adjustment with Gate 5
+                         scoring.score = Math.min(100, Math.round((scoring.score * 0.8) + (gate5.score * 0.2)));
+                         
+                         // Gate 6: Volume & Price Action Confirmation
+                         const gate6 = Gate6VolumePriceAction.analyze(scoring.direction, setupCandles);
+                         logger.info(`[Gate 6 Vol/PA] ${asset}: VOL=${gate6.volumeConfirmation}, VWAP=${gate6.vwapDirection}, PA=${gate6.priceActionConfirmation}, SCORE=${gate6.score}`);
+
+                         if (gate6.score < 40) {
+                             scoring.isValid = false;
+                             scoring.rejectionReason = `Gate 6 Volume/PA Conflict (${gate6.score} pts): ${gate6.reasons.join('; ')}`;
+                         } else {
+                             // Final score adjustment with Gate 6
+                             scoring.score = Math.min(100, Math.round((scoring.score * 0.8) + (gate6.score * 0.2)));
+
+                             // Gate 7: Market Context
+                             const gate7 = Gate7MarketContext.analyze(asset, scoring.direction, setupCandles);
+                             logger.info(`[Gate 7 Context] ${asset}: SESSION=${gate7.session}, NEWS=${gate7.newsRisk}, ALLOWED=${gate7.tradingAllowed}, SCORE=${gate7.marketContextScore}`);
+
+                             if (gate7.tradingAllowed === 'NO' || gate7.marketContextScore < 30) {
+                                scoring.isValid = false;
+                                scoring.rejectionReason = `Gate 7 Market Context Conflict: Trading Blocked or Score too low (${gate7.marketContextScore} pts). ${gate7.reasons.join('; ')}`;
+                             } else {
+                                // Final score adjustment with Gate 7
+                                scoring.score = Math.min(100, Math.round((scoring.score * 0.9) + (gate7.marketContextScore * 0.1)));
+
+                                // Gate 8: Entry Quality
+                                const gate8 = Gate8EntryQuality.analyze(baselinePrice, scoring.direction, setupCandles);
+                                logger.info(`[Gate 8 Entry] ${asset}: QUALITY=${gate8.entryQuality}, SCORE=${gate8.entryScore}`);
+                                
+                                if (gate8.entryScore < 50) {
+                                   scoring.isValid = false;
+                                   scoring.rejectionReason = `Gate 8 Entry Quality Conflict: ${gate8.reasons.join('; ')}`;
+                                } else {
+                                   scoring.score = Math.min(100, Math.round((scoring.score * 0.9) + (gate8.entryScore * 0.1)));
+
+                                   // Gate 9: Risk Management & Expected Value
+                                   const gate9 = Gate9RiskManagement.calculate(baselinePrice, scoring.direction, setupCandles);
+                                   logger.info(`[Gate 9 Risk] ${asset}: RR=${gate9.rrRatio.toFixed(2)}, EV=${gate9.expectedValue.toFixed(2)}, SCORE=${gate9.riskScore}`);
+
+                                   if (gate9.riskScore < 50) {
+                                      scoring.isValid = false;
+                                      scoring.rejectionReason = `Gate 9 Risk Management Conflict: ${gate9.reasons.join('; ')}`;
+                                   } else {
+                                      scoring.score = Math.min(100, Math.round((scoring.score * 0.9) + (gate9.riskScore * 0.1)));
+                                      
+                                      // Update signal object with SL/TPs
+                                      scoring.stopLoss = gate9.sl;
+                                      scoring.takeProfit = gate9.tp1;
+                                   }
+                                }
+                             }
+                         }
+                      }
+                   }
+                }
+             }
+          }
+        }
 
         const primaryStrategyName = scoring.primaryStrategy || 'Multi-Timeframe Trend Confluence';
         const fp = SignalFingerprint.generateFingerprint({
@@ -493,18 +665,8 @@ export class SignalEngine {
           continue;
         }
 
-        let liveTicker: NormalizedTicker | null = null;
-        try {
-          liveTicker = await marketDataManager.getPrice(asset, undefined, true);
-        } catch (err) {
-          logger.warn(`Live ticker quote failed for ${asset}`, { error: String(err) });
-          continue;
-        }
-
-        if (!liveTicker || liveTicker.price <= 0) continue;
-
-        const dataFreshnessSeconds = Math.max(0, Math.round((now - liveTicker.timestamp) / 1000));
         const secondaryPrice = crossCheck.secondaryPrice ? { price: crossCheck.secondaryPrice, source: crossCheck.source2 || 'Secondary' } : undefined;
+        
         const validation = SignalValidator.validate({
           symbol: asset,
           direction: scoring.direction,

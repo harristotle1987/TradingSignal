@@ -30,19 +30,10 @@
 import { NormalizedCandle, SignalDirection } from '../../types/index.js';
 import { TechnicalIndicators } from './TechnicalIndicators.js';
 import { StrategyPerformanceTracker } from './StrategyPerformanceTracker.js';
+import { Gate1MarketRegime, Gate1Regime } from './Gate1MarketRegime.js';
 import { logger } from '../logger.js';
 
-export type MarketRegime =
-  | 'TRENDING'
-  | 'RANGING'
-  | 'BREAKOUT'
-  | 'HIGH_VOLATILITY'
-  | 'LOW_VOLATILITY'
-  | 'UPTREND'
-  | 'DOWNTREND'
-  | 'RANGE'
-  | 'HIGH-VOLATILITY'
-  | 'LOW-VOLATILITY';
+export type MarketRegime = Gate1Regime | 'TRENDING' | 'UPTREND' | 'DOWNTREND' | 'RANGING' | 'HIGH-VOLATILITY' | 'LOW-VOLATILITY';
 
 export interface StrategyResult {
   id: string;
@@ -91,120 +82,18 @@ export class StrategyEngine {
   }
 
   /**
-   * Classifies the market regime from multi-timeframe candle datasets:
-   * TRENDING / RANGING / BREAKOUT / HIGH_VOLATILITY / LOW_VOLATILITY
+   * Classifies the market regime from multi-timeframe candle datasets using Gate 1
    */
   static classifyMarketRegime(
     symbol: string,
     entryPrice: number,
     tfMap: Record<string, NormalizedCandle[]>
   ): { regime: MarketRegime; regimeDetails: string } {
-    const s1h = tfMap['1h'] || [];
-    const s15m = tfMap['15m'] || [];
-    const s4h = tfMap['4h'] || [];
-    const s1d = tfMap['1d'] || [];
-
-    if (s1h.length < 20) {
-      return { regime: 'RANGING', regimeDetails: 'Insufficient 1H history to determine regime' };
-    }
-
-    // 1. Volatility Metrics Check (1H & 15m)
-    const vm1h = TechnicalIndicators.calculateVolatilityMetrics(s1h, 14);
-    const vm15m = s15m.length >= 20 ? TechnicalIndicators.calculateVolatilityMetrics(s15m, 14) : vm1h;
-
-    // A. Extreme Volatility (High or Low)
-    if (vm1h.atrRatio >= 1.85 || vm1h.isErratic) {
-      return {
-        regime: 'HIGH_VOLATILITY',
-        regimeDetails: `High-volatility regime: 1H ATR ratio (${vm1h.atrRatio}x) shows wide volatility expansion / momentum surge`,
-      };
-    }
-    if (vm1h.atrRatio <= 0.55 || (vm1h.isSqueeze && vm15m.isSqueeze)) {
-      return {
-        regime: 'LOW_VOLATILITY',
-        regimeDetails: `Low-volatility regime: 1H ATR ratio (${vm1h.atrRatio}x) compressed into tight volatility squeeze`,
-      };
-    }
-
-    // 2. Breakout Evaluation
-    const dc1h = TechnicalIndicators.calculateDonchianChannels(s1h, 20);
-    if (dc1h) {
-      const range1h = dc1h.upper - dc1h.lower;
-      const isAtUpperEdge = entryPrice >= dc1h.upper - range1h * 0.05;
-      const isAtLowerEdge = entryPrice <= dc1h.lower + range1h * 0.05;
-      const last1hVol = s1h[s1h.length - 1]?.volume || 0;
-      const avg1hVol = s1h.slice(-20).reduce((acc, c) => acc + (c.volume || 0), 0) / 20;
-      const isVolExpanding = avg1hVol > 0 ? last1hVol >= avg1hVol * 1.15 : true;
-
-      if ((isAtUpperEdge || isAtLowerEdge) && isVolExpanding && vm1h.atrRatio >= 1.05) {
-        return {
-          regime: 'BREAKOUT',
-          regimeDetails: `Breakout regime: Price breaking 1H Donchian boundary with expanding volume (${(last1hVol / Math.max(1, avg1hVol)).toFixed(2)}x)`,
-        };
-      }
-    }
-
-    // 3. Trend vs Range Evaluation
-    const ema9_1h = TechnicalIndicators.calculateEMA(s1h, 9);
-    const ema21_1h = TechnicalIndicators.calculateEMA(s1h, 21);
-    const ema50_1h = s1h.length >= 50 ? TechnicalIndicators.calculateEMA(s1h, 50) : [];
-
-    const lastEma9_1h = ema9_1h[ema9_1h.length - 1];
-    const lastEma21_1h = ema21_1h[ema21_1h.length - 1];
-    const lastEma50_1h = ema50_1h.length > 0 ? ema50_1h[ema50_1h.length - 1] : lastEma21_1h;
-
-    const slope9_1h = TechnicalIndicators.calculateEMASlope(ema9_1h, 3);
-    const slope21_1h = TechnicalIndicators.calculateEMASlope(ema21_1h, 3);
-    const struct1h = TechnicalIndicators.calculateMarketStructure(s1h, 15);
-
-    // HTF (4H/1D) trend validation if available
-    let htfBull = true;
-    let htfBear = true;
-    if (s4h.length >= 20) {
-      const ema21_4h = TechnicalIndicators.calculateEMA(s4h, 21);
-      if (ema21_4h.length > 0) {
-        const last4h = ema21_4h[ema21_4h.length - 1];
-        if (entryPrice < last4h) htfBull = false;
-        if (entryPrice > last4h) htfBear = false;
-      }
-    }
-    if (s1d.length >= 20) {
-      const ema21_1d = TechnicalIndicators.calculateEMA(s1d, 21);
-      if (ema21_1d.length > 0) {
-        const last1d = ema21_1d[ema21_1d.length - 1];
-        if (entryPrice < last1d) htfBull = false;
-        if (entryPrice > last1d) htfBear = false;
-      }
-    }
-
-    const isBullTrend =
-      lastEma9_1h > lastEma21_1h &&
-      lastEma21_1h >= lastEma50_1h &&
-      slope21_1h > -0.01 &&
-      (struct1h.structureBias === 'BULLISH' || htfBull);
-
-    const isBearTrend =
-      lastEma9_1h < lastEma21_1h &&
-      lastEma21_1h <= lastEma50_1h &&
-      slope21_1h < 0.01 &&
-      (struct1h.structureBias === 'BEARISH' || htfBear);
-
-    if (isBullTrend) {
-      return {
-        regime: 'TRENDING',
-        regimeDetails: 'TRENDING (UPTREND): Bullish hierarchical EMA stack & higher high/low structure',
-      };
-    }
-    if (isBearTrend) {
-      return {
-        regime: 'TRENDING',
-        regimeDetails: 'TRENDING (DOWNTREND): Bearish hierarchical EMA stack & lower high/low structure',
-      };
-    }
-
+    const gate1Result = Gate1MarketRegime.detectRegime(symbol, tfMap);
+    
     return {
-      regime: 'RANGING',
-      regimeDetails: 'RANGING: Price moving between horizontal support/resistance boundaries',
+      regime: gate1Result.regime as MarketRegime, // For now, we will cast or expand MarketRegime
+      regimeDetails: `Gate 1 Regime Classification: ${gate1Result.regime} (Confidence: ${gate1Result.confidence}%). Factors: ${gate1Result.factors.join('; ')}`
     };
   }
 
