@@ -25,14 +25,14 @@
     ],
     "isTopTrade": true,
     "direction": "SELL",
-    "status": "ACTIVE",
     "timestamp": 1787008003492,
     "strategy": "[Automated BEST TRADE] [BEST TRADE] Primary High-Confluence Setup (Score 85+)",
-    "tp3": 3.80295,
     "tp2": 3.88663,
     "riskRewardRatio": 2.1,
     "takeProfit": 3.88663,
+    "status": "EXPIRED",
+    "tp3": 3.80295,
     "tp1": 3.97032,
-    "updatedAt": 1787057251969
+    "updatedAt": 1787133460863
   }
 ]

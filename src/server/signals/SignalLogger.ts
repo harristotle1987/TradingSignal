@@ -59,6 +59,7 @@ export interface SignalLogRecord {
   aiAssessment?: string;
   isTopTrade?: boolean;
   isBestTrade?: boolean;
+  entryHitTimestamp?: string | null;
   updatedAt?: number;
 }
 
@@ -231,6 +232,7 @@ export class SignalLogger {
       aiAssessment: signal.aiAssessment,
       isTopTrade: signal.isTopTrade || signal.rankTier === 'BEST_TRADE',
       isBestTrade: signal.isBestTrade || signal.rankTier === 'BEST_TRADE',
+      entryHitTimestamp: signal.entryHitTimestamp ?? null,
       updatedAt: Date.now(),
     };
 

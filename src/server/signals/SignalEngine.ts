@@ -29,6 +29,16 @@ import { Gate6VolumePriceAction } from './Gate6VolumePriceAction.js';
 import { Gate7MarketContext } from './Gate7MarketContext.js';
 import { Gate8EntryQuality } from './Gate8EntryQuality.js';
 import { Gate9RiskManagement } from './Gate9RiskManagement.js';
+import { Gate12Divergence } from './Gate12Divergence.js';
+import { Gate13BreakoutQuality } from './Gate13BreakoutQuality.js';
+import { Gate14PullbackQuality } from './Gate14PullbackQuality.js';
+import { Gate15LiquiditySweep } from './Gate15LiquiditySweep.js';
+import { Gate16RelativeStrength } from './Gate16RelativeStrength.js';
+import { Gate17CorrelationExposure } from './Gate17CorrelationExposure.js';
+import { Gate18RegimeStrategySelection } from './Gate18RegimeStrategySelection.js';
+import { Gate20ProbabilityCalibration } from './Gate20ProbabilityCalibration.js';
+import { Gate21WalkForwardValidation } from './Gate21WalkForwardValidation.js';
+import { Gate22MonteCarloSimulation } from './Gate22MonteCarloSimulation.js';
 import { NvidiaAIService } from './NvidiaAIService.js';
 import { SignalValidator, ValidationResult } from './SignalValidator.js';
 import { TradeRankingEngine, ValidatedCandidate } from './TradeRankingEngine.js';
@@ -536,6 +546,43 @@ export class SignalEngine {
           }
         }
 
+        // Gate 12: Divergence Analysis (Additive Confluence Module)
+        const divergenceCandles = candlesMap['15m'] || candlesMap['1h'] || candlesMap['5m'] || [];
+        if (scoring.isValid && divergenceCandles.length >= 25) {
+          const gate12 = Gate12Divergence.analyze(divergenceCandles, scoring.direction);
+          logger.info(`[Gate 12 Divergence] ${asset}: DIR=${gate12.direction}, TYPE=${gate12.type}, STR=${gate12.strength}, CONFIRMED=${gate12.confirmed}, SCORE=${gate12.score}`);
+          if (gate12.direction !== 'NONE' && gate12.reasons.length > 0) {
+            scoring.confluenceReasons.push(...gate12.reasons);
+          }
+        }
+
+        // Gate 13: Breakout Quality Engine (Additive Confluence Module)
+        if (scoring.isValid && divergenceCandles.length >= 25) {
+          const gate13 = Gate13BreakoutQuality.analyze(divergenceCandles, scoring.direction);
+          logger.info(`[Gate 13 Breakout Quality] ${asset}: QUALITY=${gate13.breakoutQuality}, SCORE=${gate13.breakoutScore}, TYPE=${gate13.breakoutType}, RETEST=${gate13.retestStatus}, VOL=${gate13.volumeConfirmation}`);
+          if (gate13.breakoutQuality !== 'UNCONFIRMED_BREAKOUT' && gate13.reasons.length > 0) {
+            scoring.confluenceReasons.push(...gate13.reasons);
+          }
+        }
+
+        // Gate 14: Pullback Quality Engine (Additive Confluence Module)
+        if (scoring.isValid && divergenceCandles.length >= 25) {
+          const gate14 = Gate14PullbackQuality.analyze(divergenceCandles, scoring.direction);
+          logger.info(`[Gate 14 Pullback Quality] ${asset}: QUALITY=${gate14.pullbackQuality}, SCORE=${gate14.pullbackScore}, DEPTH=${gate14.pullbackDepth}%, PRESERVED=${gate14.structurePreserved}, RISK=${gate14.reversalRisk}`);
+          if (gate14.reasons.length > 0) {
+            scoring.confluenceReasons.push(...gate14.reasons);
+          }
+        }
+
+        // Gate 15: False Breakout & Liquidity Sweep Engine (Additive Confluence Module)
+        if (scoring.isValid && divergenceCandles.length >= 25) {
+          const gate15 = Gate15LiquiditySweep.analyze(divergenceCandles, scoring.direction);
+          logger.info(`[Gate 15 Liquidity Sweep] ${asset}: STATUS=${gate15.confirmationStatus}, DIR=${gate15.sweepDirection}, LEVEL=${gate15.sweepLevel}, STR=${gate15.sweepStrength}, SCORE=${gate15.sweepScore}`);
+          if (gate15.confirmationStatus !== 'UNCONFIRMED' && gate15.reasons.length > 0) {
+            scoring.confluenceReasons.push(...gate15.reasons);
+          }
+        }
+
         const primaryStrategyName = scoring.primaryStrategy || 'Multi-Timeframe Trend Confluence';
         const fp = SignalFingerprint.generateFingerprint({
           symbol: asset,
@@ -898,7 +945,7 @@ export class SignalEngine {
           validationReason: 'VALID',
           aiAssessment: aiResult.aiAssessment,
           score: scoring.score,
-          entryHitTimestamp: undefined,
+          entryHitTimestamp: null,
         };
 
         candidates.push({
@@ -907,6 +954,7 @@ export class SignalEngine {
           validation,
           aiConfidence: aiResult.refinedConfidence,
           timeframesAligned: scoring.timeframesAligned,
+          candles: candlesMap['1h'] || candlesMap['15m'] || candlesMap['5m'] || [],
         });
       }
 
@@ -956,6 +1004,139 @@ export class SignalEngine {
       }
 
       const filteredCandidates = correlationResult.accepted.map((a) => a.candidate);
+
+      // Stage 3.5: Gate 16 Relative Strength Ranking across Comparable Universes
+      const rsInputs = filteredCandidates.map((c) => ({
+        symbol: c.signal.symbol,
+        direction: c.signal.direction,
+        candles: c.candles || [],
+        currentPrice: c.signal.entryPrice,
+        atr: c.scoring.technicalMetrics?.atr,
+      }));
+      const rsResults = Gate16RelativeStrength.rankCandidates(rsInputs);
+
+      // Attach Gate 16 Relative Strength properties to signals
+      for (const cand of filteredCandidates) {
+        const rs = rsResults.get(cand.signal.symbol);
+        if (rs) {
+          cand.signal.relativeStrengthScore = rs.relativeStrengthScore;
+          cand.signal.relativeRank = rs.relativeRank;
+          cand.signal.assetClassRank = rs.assetClassRank;
+          cand.signal.marketContext = rs.marketContext;
+          if (rs.reasons && rs.reasons.length > 0) {
+            cand.signal.confluenceReasons.push(...rs.reasons);
+          }
+          logger.info(`[Gate 16 Relative Strength] ${cand.signal.symbol}: RANK=${rs.assetClassRank}, RS_SCORE=${rs.relativeStrengthScore}, CONTEXT=${rs.marketContext}`);
+        }
+      }
+
+      // Stage 3.6: Gate 17 Correlation & Signal Exposure Control
+      const corrInputs = filteredCandidates.map((c) => ({
+        symbol: c.signal.symbol,
+        direction: c.signal.direction,
+        candles: c.candles || [],
+        score: c.signal.score,
+        relativeStrengthScore: c.signal.relativeStrengthScore,
+      }));
+      const activeSignalsSimple = Array.from(this.activeSignals.values()).map((s) => ({
+        symbol: s.symbol,
+        direction: s.direction,
+        score: s.score,
+      }));
+      const corrResults = Gate17CorrelationExposure.evaluateCandidates(corrInputs, activeSignalsSimple);
+
+      for (const cand of filteredCandidates) {
+        const corr = corrResults.get(cand.signal.symbol);
+        if (corr) {
+          cand.signal.correlationScore = corr.correlationScore;
+          cand.signal.correlationCluster = corr.correlationCluster;
+          cand.signal.clusterExposure = corr.clusterExposure;
+          cand.signal.correlationPenalty = corr.correlationPenalty;
+          cand.signal.correlationLevel = corr.correlationLevel;
+          if (corr.reasons && corr.reasons.length > 0) {
+            cand.signal.confluenceReasons.push(...corr.reasons);
+          }
+          logger.info(`[Gate 17 Correlation] ${cand.signal.symbol}: CLUSTER=${corr.correlationCluster}, LEVEL=${corr.correlationLevel}, EXPOSURE=${corr.clusterExposure}, PENALTY=-${corr.correlationPenalty}`);
+        }
+      }
+
+      // Stage 3.7: Gate 18 Regime-Specific Strategy Selection
+      for (const cand of filteredCandidates) {
+        const detectedRegime = (cand.scoring as any)?.regime || cand.signal.marketRegime || 'UNKNOWN';
+        const regimeSelection = Gate18RegimeStrategySelection.selectStrategy({
+          symbol: cand.signal.symbol,
+          regime: detectedRegime,
+          candidateStrategyName: cand.signal.strategy,
+        });
+
+        cand.signal.marketRegime = detectedRegime;
+        cand.signal.selectedStrategy = regimeSelection.selectedStrategy;
+        cand.signal.eligibleStrategies = regimeSelection.eligibleStrategies;
+        cand.signal.strategyCompatibilityScore = regimeSelection.strategyCompatibilityScore;
+        cand.signal.regimeStrategyMatch = regimeSelection.regimeStrategyMatch;
+
+        if (regimeSelection.reasons && regimeSelection.reasons.length > 0) {
+          cand.signal.confluenceReasons.push(...regimeSelection.reasons);
+        }
+        logger.info(`[Gate 18 Strategy Selection] ${cand.signal.symbol}: REGIME=${regimeSelection.marketRegime}, STRATEGY=${regimeSelection.selectedStrategy}, MATCH=${regimeSelection.regimeStrategyMatch} (${regimeSelection.strategyCompatibilityScore}/100)`);
+      }
+
+      // Stage 3.8: Gate 20 Empirical Probability Calibration
+      for (const cand of filteredCandidates) {
+        const calibration = Gate20ProbabilityCalibration.calibrateProbability({
+          signalScore: cand.signal.score || cand.signal.confidenceScore || 0,
+          strategy: cand.signal.selectedStrategy || cand.signal.strategy,
+          regime: cand.signal.marketRegime,
+          assetClass: cand.signal.assetClass as any,
+          timeframe: cand.signal.timeframe,
+        });
+
+        cand.signal.empiricalProbability = calibration.empiricalProbability;
+        cand.signal.probabilityScoreBucket = calibration.scoreBucket;
+        cand.signal.probabilitySampleSize = calibration.sampleSize;
+        cand.signal.probabilityConfidenceInterval = calibration.confidenceInterval
+          ? { lower: calibration.confidenceInterval.lowerPct, upper: calibration.confidenceInterval.upperPct }
+          : null;
+        cand.signal.calibrationStatus = calibration.calibrationStatus;
+
+        if (calibration.reasons && calibration.reasons.length > 0) {
+          cand.signal.confluenceReasons.push(...calibration.reasons);
+        }
+        logger.info(`[Gate 20 Calibration] ${cand.signal.symbol}: BUCKET=${calibration.scoreBucket}, N=${calibration.sampleSize}, PROB=${calibration.empiricalProbability !== null ? calibration.empiricalProbability + '%' : 'WITHHELD'}, STATUS=${calibration.calibrationStatus}`);
+      }
+
+      // Stage 3.9: Gate 21 Walk-Forward Validation
+      for (const cand of filteredCandidates) {
+        const wfResult = Gate21WalkForwardValidation.validateStrategy(
+          cand.signal.selectedStrategy || cand.signal.strategy
+        );
+
+        cand.signal.walkForwardEfficiency = wfResult.walkForwardEfficiency;
+        cand.signal.walkForwardStatus = wfResult.status;
+        cand.signal.overfitRiskDetected = wfResult.overfitRiskDetected;
+
+        if (wfResult.reasons && wfResult.reasons.length > 0) {
+          cand.signal.confluenceReasons.push(...wfResult.reasons);
+        }
+        logger.info(`[Gate 21 Walk-Forward] ${cand.signal.symbol}: STRATEGY=${wfResult.strategy}, WFE=${wfResult.walkForwardEfficiency !== null ? wfResult.walkForwardEfficiency + '%' : 'N/A'}, STATUS=${wfResult.status}, OVERFIT_RISK=${wfResult.overfitRiskDetected}`);
+      }
+
+      // Stage 3.10: Gate 22 Monte Carlo Trade-Sequence Analysis
+      for (const cand of filteredCandidates) {
+        const mcResult = Gate22MonteCarloSimulation.runSimulation(
+          cand.signal.selectedStrategy || cand.signal.strategy
+        );
+
+        cand.signal.monteCarloMedianMaxDrawdownR = mcResult.medianMaxDrawdownR;
+        cand.signal.monteCarlo95PctDrawdownR = mcResult.percentile95MaxDrawdownR;
+        cand.signal.monteCarloRiskOfRuinPct = mcResult.riskOfRuinPct;
+        cand.signal.monteCarloSimulationStatus = mcResult.simulationStatus;
+
+        if (mcResult.reasons && mcResult.reasons.length > 0) {
+          cand.signal.confluenceReasons.push(...mcResult.reasons);
+        }
+        logger.info(`[Gate 22 Monte Carlo] ${cand.signal.symbol}: MED_DD=${mcResult.medianMaxDrawdownR !== null ? mcResult.medianMaxDrawdownR + 'R' : 'N/A'}, 95th_DD=${mcResult.percentile95MaxDrawdownR !== null ? mcResult.percentile95MaxDrawdownR + 'R' : 'N/A'}, RUIN_PROB=${mcResult.riskOfRuinPct !== null ? mcResult.riskOfRuinPct + '%' : 'N/A'}, STATUS=${mcResult.simulationStatus}`);
+      }
 
       // Stage 4: Final Trade Selection & Opportunity Ranking
       const ranking = TradeRankingEngine.rankOpportunities(filteredCandidates);

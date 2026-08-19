@@ -102,7 +102,14 @@ export class SignalLifecycleManager {
 
         // 3. Load existing outcomes from persistent log if any to preserve already confirmed milestones
         const existingOutcome = await SignalOutcomeLogger.getOutcome(sig.id);
-        const timestamps = {
+        const timestamps: {
+          entryHitTimestamp: string | null | undefined;
+          tp1HitTimestamp?: number;
+          tp2HitTimestamp?: number;
+          tp3HitTimestamp?: number;
+          slHitTimestamp?: number;
+          expiredTimestamp?: number;
+        } = {
           entryHitTimestamp: sig.entryHitTimestamp ?? existingOutcome?.entryHitTimestamp,
           tp1HitTimestamp: sig.tp1HitTimestamp ?? existingOutcome?.tp1HitTimestamp,
           tp2HitTimestamp: sig.tp2HitTimestamp ?? existingOutcome?.tp2HitTimestamp,
@@ -126,7 +133,7 @@ export class SignalLifecycleManager {
           }
 
           if (liveTicker && liveTicker.price > 0) {
-            const providerMismatch = liveTicker.provider.toLowerCase() !== providerName.toLowerCase();
+            const providerMismatch = (liveTicker.provider || '').toLowerCase() !== (providerName || '').toLowerCase();
             const isStale = (now - liveTicker.receivedAt > 15 * 60 * 1000) || (now - liveTicker.timestamp > 30 * 60 * 1000) || liveTicker.status !== 'OK';
 
             if (!providerMismatch && !isStale) {
@@ -137,12 +144,15 @@ export class SignalLifecycleManager {
           }
         }
 
-        // 1. Check TTL Expiration (Default 24 hours) - ONLY if not yet entry triggered
+        // 1. Check TTL Expiration (Default 24 hours) - ONLY if not yet entry triggered or progressed
         const ageMs = now - sig.timestamp;
         const maxTtlMs = 24 * 60 * 60 * 1000;
+        const hasQueuedProgress = queuedTransitions.length > 0;
+        const isEntryTriggered = Boolean(timestamps.entryHitTimestamp);
+        const isProgressedState = sig.status === 'TP1_HIT' || sig.status === 'TP2_HIT' || sig.status === 'TP3_HIT' || sig.status === 'SL_HIT';
 
-        if (ageMs > maxTtlMs && !timestamps.entryHitTimestamp) {
-          logger.info(`[SignalLifecycle] Signal ${sig.id} (${sig.symbol}) reached TTL expiration (${(ageMs / 3600000).toFixed(1)}h).`);
+        if (ageMs > maxTtlMs && !isEntryTriggered && !hasQueuedProgress && !isProgressedState) {
+          logger.info(`[SignalLifecycle] Signal ${sig.id} (${sig.symbol}) reached TTL expiration (${(ageMs / 3600000).toFixed(1)}h) without entry trigger.`);
           await this.transitionSignalProgressive(sig, {
             nextState: 'EXPIRED',
             eventTime: now,
@@ -268,6 +278,7 @@ export class SignalLifecycleManager {
     sig: PersistedSentSignal,
     candles: NormalizedCandle[],
     timestamps: {
+      entryHitTimestamp?: string | null;
       tp1HitTimestamp?: number;
       tp2HitTimestamp?: number;
       tp3HitTimestamp?: number;
@@ -301,20 +312,6 @@ export class SignalLifecycleManager {
       const open = candle.open;
       const time = candle.timestamp;
       const timeframe = candle.timeframe || '1m';
-
-      // 1. Entry Detection
-      if (!timestamps.entryHitTimestamp) {
-        if ((low <= entry && high >= entry)) {
-          timestamps.entryHitTimestamp = time;
-          transitions.push({
-            nextState: 'ACTIVE',
-            eventTime: time,
-            eventSource: 'HISTORICAL_BACKFILL',
-            timeframeUsed: timeframe,
-            isRecovered: true,
-          });
-        }
-      }
 
       if (isBuy) {
         // Next target price needed for BUY
@@ -547,6 +544,7 @@ export class SignalLifecycleManager {
     currentState: PersistedSentSignal['status'],
     ticker: NormalizedTicker,
     timestamps: {
+      entryHitTimestamp?: string | null;
       tp1HitTimestamp?: number;
       tp2HitTimestamp?: number;
       tp3HitTimestamp?: number;
@@ -561,6 +559,7 @@ export class SignalLifecycleManager {
     const price = ticker.price;
     const time = ticker.timestamp || Date.now();
     const isBuy = sig.direction === 'BUY';
+    const entry = sig.entryPrice;
     const sl = sig.stopLoss;
     const tp1 = sig.tp1 ?? sig.takeProfit;
     const tp2 = sig.tp2 ?? sig.takeProfit;
@@ -671,6 +670,7 @@ export class SignalLifecycleManager {
     sig: PersistedSentSignal,
     step: ProgressiveTransitionStep,
     timestamps: {
+      entryHitTimestamp?: string | null;
       tp1HitTimestamp?: number;
       tp2HitTimestamp?: number;
       tp3HitTimestamp?: number;
@@ -748,6 +748,7 @@ export class SignalLifecycleManager {
 
     // 2. Update scanner persistence status & rich historical metadata (single call)
     await ScannerPersistence.updateSignalStatus(sig.id, nextState, {
+      entryHitTimestamp: timestamps.entryHitTimestamp,
       tp1HitTimestamp: timestamps.tp1HitTimestamp,
       tp2HitTimestamp: timestamps.tp2HitTimestamp,
       tp3HitTimestamp: timestamps.tp3HitTimestamp,
@@ -784,6 +785,7 @@ export class SignalLifecycleManager {
       tp1: sig.tp1 ?? sig.takeProfit,
       tp2: sig.tp2 ?? sig.takeProfit,
       tp3: sig.tp3 ?? sig.takeProfit,
+      entryHitTimestamp: timestamps.entryHitTimestamp,
       tp1HitTimestamp: timestamps.tp1HitTimestamp,
       tp2HitTimestamp: timestamps.tp2HitTimestamp,
       tp3HitTimestamp: timestamps.tp3HitTimestamp,

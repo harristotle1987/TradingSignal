@@ -9,7 +9,7 @@
  * Below 75: REJECT
  */
 
-import { TradingSignal, RankTier } from '../../types/index.js';
+import { TradingSignal, RankTier, NormalizedCandle } from '../../types/index.js';
 import { ScoringResult, ScoringEngine } from './ScoringEngine.js';
 import { ValidationResult } from './SignalValidator.js';
 import { logger } from '../logger.js';
@@ -20,6 +20,7 @@ export interface ValidatedCandidate {
   validation: ValidationResult;
   aiConfidence: number;
   timeframesAligned: number;
+  candles?: NormalizedCandle[];
 }
 
 export interface RankingResult {
@@ -104,10 +105,13 @@ export class TradeRankingEngine {
   }
 
   private static computeCompositeScore(candidate: ValidatedCandidate): number {
-    const { scoring, aiConfidence } = candidate;
-    const baseScore = scoring.factors.totalScore || scoring.score;
+    const { scoring, aiConfidence, signal } = candidate;
+    const baseScore = scoring.factors?.totalScore || scoring.score;
     const aiAdjustment = ((aiConfidence - 70) / 30) * 3;
-    return Math.min(100, Math.max(0, baseScore + aiAdjustment));
+    const rsScore = signal.relativeStrengthScore ?? 50;
+    const rsAdjustment = ((rsScore - 50) / 50) * 2; // Subtle ±2 confidence modifier based on universe leadership
+    const corrPenalty = signal.correlationPenalty ?? 0;
+    return Math.min(100, Math.max(0, baseScore + aiAdjustment + rsAdjustment - corrPenalty));
   }
 
   public static getAssetCluster(symbol: string): string | null {

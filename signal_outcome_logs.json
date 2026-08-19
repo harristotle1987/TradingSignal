@@ -1,5 +1,27 @@
 [
   {
+    "id": "sig_1787007981546_9srkv",
+    "symbol": "INJUSDT",
+    "direction": "SELL",
+    "provider": "Bitget Live Feed with Live Price & Sentiment Cross-Validation",
+    "entryPrice": 4.054,
+    "stopLoss": 4.1337,
+    "takeProfit": 3.88663,
+    "tp1": 3.97032,
+    "tp2": 3.88663,
+    "tp3": 3.80295,
+    "expiredTimestamp": 1787133458499,
+    "finalOutcome": "EXPIRED",
+    "status": "EXPIRED",
+    "timestamp": 1787007981546,
+    "updatedAt": 1787133460862,
+    "detectedAt": 1787133460862,
+    "eventTime": 1787133458499,
+    "eventSource": "TICK_EVALUATION",
+    "timeframeUsed": "1h",
+    "isRecovered": false
+  },
+  {
     "id": "test_sell_hist_1787058405563_m5oi",
     "symbol": "GBPUSD_SELL_HIST",
     "direction": "SELL",

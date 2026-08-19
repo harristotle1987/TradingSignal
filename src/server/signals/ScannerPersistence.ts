@@ -49,7 +49,7 @@ export interface PersistedSentSignal {
   date: string;
   estimatedWinRate?: number;
   aiAssessment?: string;
-  entryHitTimestamp?: number;
+  entryHitTimestamp?: string | null;
   tp1HitTimestamp?: number;
   tp2HitTimestamp?: number;
   tp3HitTimestamp?: number;

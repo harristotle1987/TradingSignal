@@ -125,6 +125,7 @@ export interface TradingSignal {
   direction: SignalDirection;
   entryPrice: number;
   timeframe: string;
+  assetClass?: string;
   strategy: string;
   confluenceReasons: string[];
   confidenceScore: number;
@@ -152,7 +153,7 @@ export interface TradingSignal {
   isAiValidated?: boolean;
   targetDistance?: number;
   stopDistance?: number;
-  entryHitTimestamp?: number;
+  entryHitTimestamp?: string | null;
   suggestedRiskAmount?: number; // Hypothetical analysis only
   suggestedPositionSize?: number; // Hypothetical analysis only
   pipPointUnit?: 'PIPS' | 'POINTS';
@@ -161,6 +162,32 @@ export interface TradingSignal {
     feeBufferPct: number;
     netRiskRewardRatio: number;
   };
+  relativeStrengthScore?: number;
+  relativeRank?: number;
+  assetClassRank?: string;
+  marketContext?: string;
+  marketRegime?: string;
+  correlationScore?: number;
+  correlationCluster?: string;
+  clusterExposure?: number;
+  correlationPenalty?: number;
+  correlationLevel?: 'LOW_CORRELATION' | 'MODERATE_CORRELATION' | 'HIGH_CORRELATION';
+  selectedStrategy?: string;
+  eligibleStrategies?: string[];
+  strategyCompatibilityScore?: number;
+  regimeStrategyMatch?: 'OPTIMAL' | 'COMPATIBLE' | 'SUBOPTIMAL' | 'INCOMPATIBLE';
+  empiricalProbability?: number | null;
+  probabilityScoreBucket?: string;
+  probabilitySampleSize?: number;
+  probabilityConfidenceInterval?: { lower: number; upper: number } | null;
+  calibrationStatus?: 'INSUFFICIENT_DATA' | 'CALIBRATED' | 'HIGH_CONFIDENCE_CALIBRATION';
+  walkForwardEfficiency?: number | null;
+  walkForwardStatus?: 'ROBUST_STABLE' | 'ACCEPTABLE_DEGRADATION' | 'MODERATE_OVERFIT_RISK' | 'HIGH_OVERFIT_RISK' | 'INSUFFICIENT_DATA';
+  overfitRiskDetected?: boolean;
+  monteCarloMedianMaxDrawdownR?: number | null;
+  monteCarlo95PctDrawdownR?: number | null;
+  monteCarloRiskOfRuinPct?: number | null;
+  monteCarloSimulationStatus?: 'INSUFFICIENT_DATA' | 'ROBUST_STABLE' | 'ELEVATED_DRAWDOWN_RISK' | 'HIGH_RUIN_RISK';
   expiresAt?: number;
 }
 
@@ -223,6 +250,7 @@ export interface SignalLogRecord {
   aiAssessment?: string;
   isTopTrade?: boolean;
   isBestTrade?: boolean;
+  entryHitTimestamp?: string | null;
   updatedAt?: number;
 }
 
@@ -251,6 +279,7 @@ export interface SignalHistoryItem {
   dataSource?: string;
   reason?: string;
   timestamp: number;
+  entryHitTimestamp?: string | null;
   marketType?: 'Crypto' | 'Forex' | 'Stocks';
   marketRegime?: string;
   signalStatus?: SignalLogStatus;

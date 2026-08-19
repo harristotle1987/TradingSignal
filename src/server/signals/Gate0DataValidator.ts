@@ -317,7 +317,8 @@ export class Gate0DataValidator {
     }
 
     // Deduct if non-primary provider
-    if (params.liveTicker.provider !== 'bitget' && params.liveTicker.provider !== 'twelvedata' && params.liveTicker.provider !== 'finnhub') {
+    const providerName = (params.liveTicker?.provider || params.candles?.[0]?.provider || '').toLowerCase();
+    if (providerName && providerName !== 'bitget' && providerName !== 'twelvedata' && providerName !== 'finnhub') {
       confidence -= 10;
     }
 

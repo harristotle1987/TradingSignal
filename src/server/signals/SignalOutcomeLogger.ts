@@ -18,6 +18,7 @@ export interface SignalOutcomeRecord {
   tp2HitTimestamp?: number;
   tp3HitTimestamp?: number;
   slHitTimestamp?: number;
+  entryHitTimestamp?: string | null;
   expiredTimestamp?: number;
   finalOutcome?: 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'EXPIRED' | 'AMBIGUOUS';
   status: 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'EXPIRED' | 'AMBIGUOUS';
