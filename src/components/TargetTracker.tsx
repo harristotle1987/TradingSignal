@@ -28,29 +28,37 @@ export function TargetTracker({ signal, precision, onSignalRefreshed }: TargetTr
     setPrevSignalId(signal.id);
   }
 
-  const prec = precision ?? (currentSignal.entryPrice < 10 ? 5 : 2);
+  const prec = precision ?? (currentSignal?.entryPrice ? (currentSignal.entryPrice < 10 ? 5 : 2) : 2);
 
-  const tp1 = currentSignal.tp1 ?? currentSignal.takeProfit;
-  const tp2 = currentSignal.tp2;
-  const tp3 = currentSignal.tp3;
-  const sl = currentSignal.stopLoss;
+  const tp1 = currentSignal?.tp1 ?? currentSignal?.takeProfit;
+  const tp2 = currentSignal?.tp2;
+  const tp3 = currentSignal?.tp3;
+  const sl = currentSignal?.stopLoss;
+
+  const entry = currentSignal?.entryPrice ?? 0;
 
   // Exact R:R ratios computed directly from actual displayed prices
-  const isBuy = currentSignal.direction === 'BUY';
-  const risk = isBuy ? (currentSignal.entryPrice - sl) : (sl - currentSignal.entryPrice);
+  const isBuy = currentSignal?.direction === 'BUY';
+  const risk = sl !== undefined && sl !== null ? (isBuy ? (entry - sl) : (sl - entry)) : 0;
   
-  const tp1Rr = risk > 0 ? Number((Math.abs(tp1 - currentSignal.entryPrice) / risk).toFixed(2)) : 0;
-  const tp2Rr = tp2 !== undefined && risk > 0 ? Number((Math.abs(tp2 - currentSignal.entryPrice) / risk).toFixed(2)) : 0;
-  const tp3Rr = tp3 !== undefined && risk > 0 ? Number((Math.abs(tp3 - currentSignal.entryPrice) / risk).toFixed(2)) : 0;
+  const tp1Rr = risk > 0 && tp1 !== undefined && tp1 !== null ? Number((Math.abs(tp1 - entry) / risk).toFixed(2)) : 0;
+  const tp2Rr = tp2 !== undefined && tp2 !== null && risk > 0 ? Number((Math.abs(tp2 - entry) / risk).toFixed(2)) : 0;
+  const tp3Rr = tp3 !== undefined && tp3 !== null && risk > 0 ? Number((Math.abs(tp3 - entry) / risk).toFixed(2)) : 0;
+
+  // Safe toFixed formatter
+  const formatVal = (v: any) => {
+    if (v === undefined || v === null || isNaN(Number(v))) return '--';
+    return Number(v).toFixed(prec);
+  };
 
   // Authoritative statuses from backend signal object
-  const tp1Hit = currentSignal.tp1Status === 'HIT' || currentSignal.status === 'TP1_HIT' || currentSignal.status === 'TP2_HIT' || currentSignal.status === 'TP3_HIT' || currentSignal.status === 'COMPLETED';
-  const tp2Hit = currentSignal.tp2Status === 'HIT' || currentSignal.status === 'TP2_HIT' || currentSignal.status === 'TP3_HIT' || currentSignal.status === 'COMPLETED';
-  const tp3Hit = currentSignal.tp3Status === 'HIT' || currentSignal.status === 'TP3_HIT' || currentSignal.status === 'COMPLETED';
-  const slHit = currentSignal.slStatus === 'HIT' || currentSignal.status === 'SL_HIT' || currentSignal.status === 'STOPPED_OUT';
+  const tp1Hit = currentSignal?.tp1Status === 'HIT' || currentSignal?.status === 'TP1_HIT' || currentSignal?.status === 'TP2_HIT' || currentSignal?.status === 'TP3_HIT' || currentSignal?.status === 'COMPLETED';
+  const tp2Hit = currentSignal?.tp2Status === 'HIT' || currentSignal?.status === 'TP2_HIT' || currentSignal?.status === 'TP3_HIT' || currentSignal?.status === 'COMPLETED';
+  const tp3Hit = currentSignal?.tp3Status === 'HIT' || currentSignal?.status === 'TP3_HIT' || currentSignal?.status === 'COMPLETED';
+  const slHit = currentSignal?.slStatus === 'HIT' || currentSignal?.status === 'SL_HIT' || currentSignal?.status === 'STOPPED_OUT';
 
-  const isCompleted = currentSignal.status === 'COMPLETED' || (tp1Hit && tp2Hit && tp3Hit);
-  const isStoppedOut = currentSignal.status === 'STOPPED_OUT' || slHit;
+  const isCompleted = currentSignal?.status === 'COMPLETED' || (tp1Hit && tp2Hit && tp3Hit);
+  const isStoppedOut = currentSignal?.status === 'STOPPED_OUT' || slHit;
 
   const formatHitTime = (isoString?: string) => {
     if (!isoString) return null;
@@ -79,7 +87,7 @@ export function TargetTracker({ signal, precision, onSignalRefreshed }: TargetTr
             </span>
           ) : (
             <span className="px-2 py-0.5 rounded bg-slate-900 text-sky-400 border border-slate-800 text-[10px] font-bold">
-              {currentSignal.status || 'ACTIVE'}
+              {currentSignal?.status || 'ACTIVE'}
             </span>
           )}
         </div>
@@ -132,15 +140,15 @@ export function TargetTracker({ signal, precision, onSignalRefreshed }: TargetTr
             )}
           </div>
           <div>
-            <div className="text-sm font-bold text-emerald-400">{tp1.toFixed(prec)}</div>
+            <div className="text-sm font-bold text-emerald-400">{formatVal(tp1)}</div>
             <div className="text-[11px] text-blue-400 font-semibold mt-0.5">R:R: {tp1Rr}:1</div>
             {tp1Hit && (
               <div className="mt-1.5 pt-1.5 border-t border-slate-800/80 text-[10px] text-slate-300 space-y-0.5">
                 <div className="flex justify-between">
                   <span className="text-slate-400">Hit Price:</span>
-                  <span className="font-bold text-emerald-300">{currentSignal.tp1HitPrice ? currentSignal.tp1HitPrice.toFixed(prec) : tp1.toFixed(prec)}</span>
+                  <span className="font-bold text-emerald-300">{formatVal(currentSignal?.tp1HitPrice ? currentSignal.tp1HitPrice : tp1)}</span>
                 </div>
-                {currentSignal.tp1HitAt && (
+                {currentSignal?.tp1HitAt && (
                   <div className="flex items-center justify-between text-slate-400">
                     <span className="flex items-center gap-1"><Clock className="w-2.5 h-2.5 text-slate-500" /> Hit Time:</span>
                     <span className="text-[9px] font-mono text-slate-300">{formatHitTime(currentSignal.tp1HitAt)}</span>
@@ -167,15 +175,15 @@ export function TargetTracker({ signal, precision, onSignalRefreshed }: TargetTr
               )}
             </div>
             <div>
-              <div className="text-sm font-bold text-emerald-300">{tp2.toFixed(prec)}</div>
+              <div className="text-sm font-bold text-emerald-300">{formatVal(tp2)}</div>
               <div className="text-[11px] text-blue-400 font-semibold mt-0.5">R:R: {tp2Rr}:1</div>
               {tp2Hit && (
                 <div className="mt-1.5 pt-1.5 border-t border-slate-800/80 text-[10px] text-slate-300 space-y-0.5">
                   <div className="flex justify-between">
                     <span className="text-slate-400">Hit Price:</span>
-                    <span className="font-bold text-emerald-300">{currentSignal.tp2HitPrice ? currentSignal.tp2HitPrice.toFixed(prec) : tp2.toFixed(prec)}</span>
+                    <span className="font-bold text-emerald-300">{formatVal(currentSignal?.tp2HitPrice ? currentSignal.tp2HitPrice : tp2)}</span>
                   </div>
-                  {currentSignal.tp2HitAt && (
+                  {currentSignal?.tp2HitAt && (
                     <div className="flex items-center justify-between text-slate-400">
                       <span className="flex items-center gap-1"><Clock className="w-2.5 h-2.5 text-slate-500" /> Hit Time:</span>
                       <span className="text-[9px] font-mono text-slate-300">{formatHitTime(currentSignal.tp2HitAt)}</span>
@@ -203,15 +211,15 @@ export function TargetTracker({ signal, precision, onSignalRefreshed }: TargetTr
               )}
             </div>
             <div>
-              <div className="text-sm font-bold text-emerald-200">{tp3.toFixed(prec)}</div>
+              <div className="text-sm font-bold text-emerald-200">{formatVal(tp3)}</div>
               <div className="text-[11px] text-blue-400 font-semibold mt-0.5">R:R: {tp3Rr}:1</div>
               {tp3Hit && (
                 <div className="mt-1.5 pt-1.5 border-t border-slate-800/80 text-[10px] text-slate-300 space-y-0.5">
                   <div className="flex justify-between">
                     <span className="text-slate-400">Hit Price:</span>
-                    <span className="font-bold text-emerald-300">{currentSignal.tp3HitPrice ? currentSignal.tp3HitPrice.toFixed(prec) : tp3.toFixed(prec)}</span>
+                    <span className="font-bold text-emerald-300">{formatVal(currentSignal?.tp3HitPrice ? currentSignal.tp3HitPrice : tp3)}</span>
                   </div>
-                  {currentSignal.tp3HitAt && (
+                  {currentSignal?.tp3HitAt && (
                     <div className="flex items-center justify-between text-slate-400">
                       <span className="flex items-center gap-1"><Clock className="w-2.5 h-2.5 text-slate-500" /> Hit Time:</span>
                       <span className="text-[9px] font-mono text-slate-300">{formatHitTime(currentSignal.tp3HitAt)}</span>
@@ -238,14 +246,14 @@ export function TargetTracker({ signal, precision, onSignalRefreshed }: TargetTr
             )}
           </div>
           <div>
-            <div className="text-sm font-bold text-rose-400">{sl.toFixed(prec)}</div>
+            <div className="text-sm font-bold text-rose-400">{formatVal(sl)}</div>
             {slHit && (
               <div className="mt-1.5 pt-1.5 border-t border-rose-800/80 text-[10px] text-slate-300 space-y-0.5">
                 <div className="flex justify-between">
                   <span className="text-slate-400">Hit Price:</span>
-                  <span className="font-bold text-rose-300">{currentSignal.stopLossHitPrice ? currentSignal.stopLossHitPrice.toFixed(prec) : sl.toFixed(prec)}</span>
+                  <span className="font-bold text-rose-300">{formatVal(currentSignal?.stopLossHitPrice ? currentSignal.stopLossHitPrice : sl)}</span>
                 </div>
-                {currentSignal.stopLossHitAt && (
+                {currentSignal?.stopLossHitAt && (
                   <div className="flex items-center justify-between text-slate-400">
                     <span className="flex items-center gap-1"><Clock className="w-2.5 h-2.5 text-slate-500" /> Hit Time:</span>
                     <span className="text-[9px] font-mono text-slate-300">{formatHitTime(currentSignal.stopLossHitAt)}</span>
