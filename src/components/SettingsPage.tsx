@@ -50,6 +50,13 @@ export function SettingsPage({
   const [pushActionMessage, setPushActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [subscriberCount, setSubscriberCount] = useState<number>(0);
   const [soundAlerts, setSoundAlerts] = useState<boolean>(true);
+  const [highPriorityPushEnabled, setHighPriorityPushEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('high_priority_push_enabled') !== 'false';
+    } catch {
+      return true;
+    }
+  });
   const [scannerSettings, setScannerSettings] = useState<{
     enabled: boolean;
     notificationsEnabled: boolean;
@@ -618,6 +625,44 @@ export function SettingsPage({
                 }`}
               >
                 {scannerSettings?.notificationsEnabled ? 'NOTIFY ON' : 'NOTIFY OFF'}
+              </button>
+            </div>
+
+            {/* High-Priority Real-Time Push Notifications Toggle */}
+            <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 flex items-center justify-between gap-4 md:col-span-2">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-white block">High-Priority Trading Signals Push Alerts</span>
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 bg-emerald-950 text-emerald-300 border border-emerald-500/40 rounded font-bold">
+                    PRIORITY PUSH
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Enables instant real-time push notifications delivered via Web Push service specifically for high-priority trading signals (Top Trades / Score &gt;= 85).
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const nextVal = !highPriorityPushEnabled;
+                  setHighPriorityPushEnabled(nextVal);
+                  try {
+                    localStorage.setItem('high_priority_push_enabled', String(nextVal));
+                  } catch {}
+                  setScannerMessage({
+                    type: 'success',
+                    text: nextVal ? 'High-priority push alerts enabled.' : 'High-priority push alerts muted.',
+                  });
+                  setTimeout(() => setScannerMessage(null), 3000);
+                }}
+                className={`px-3 py-1.5 rounded-lg border text-xs font-mono transition-colors min-w-[100px] shrink-0 ${
+                  highPriorityPushEnabled
+                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                    : 'bg-slate-900 border-slate-800 text-slate-500'
+                }`}
+              >
+                {highPriorityPushEnabled ? 'PUSH ACTIVE' : 'PUSH MUTED'}
               </button>
             </div>
           </div>

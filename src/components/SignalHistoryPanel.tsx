@@ -35,12 +35,16 @@ import {
   X,
   Activity,
   Globe,
+  RefreshCw,
+  BarChart3,
 } from 'lucide-react';
+import { SignalPerformanceChart } from './SignalPerformanceChart.js';
 
 interface SignalHistoryPanelProps {
   history: SignalHistoryItem[];
   onClearHistory: () => void;
   onDeleteHistoryItem?: (id: string, symbol: string) => void;
+  deletingIds?: string[];
   preferredTimeZone: DisplayTimeZone;
   onSelectSymbol?: (symbol: string) => void;
   onTimeZoneChange?: (tz: DisplayTimeZone) => void;
@@ -51,6 +55,7 @@ export function SignalHistoryPanel({
   history,
   onClearHistory,
   onDeleteHistoryItem,
+  deletingIds = [],
   preferredTimeZone,
   onSelectSymbol,
   onTimeZoneChange,
@@ -58,6 +63,7 @@ export function SignalHistoryPanel({
 }: SignalHistoryPanelProps) {
   const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'TOP_TRADE' | 'SUGGESTION' | 'NO_TRADE'>('ALL');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'list' | 'chart'>('list');
 
   // State for confirmation modals and toast notifications
   const [itemToDelete, setItemToDelete] = useState<{ id: string; symbol: string } | null>(null);
@@ -257,18 +263,75 @@ export function SignalHistoryPanel({
         </div>
       </div>
 
-      {/* History List */}
-      {filteredHistory.length > 0 ? (
+      {/* History List or Chart */}
+      <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+        <button
+          type="button"
+          onClick={() => setActiveTab('list')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold transition cursor-pointer ${
+            activeTab === 'list'
+              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
+              : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+          }`}
+        >
+          <History className="w-3.5 h-3.5" />
+          Signal Logs ({history.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('chart')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold transition cursor-pointer ${
+            activeTab === 'chart'
+              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
+              : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+          }`}
+        >
+          <BarChart3 className="w-3.5 h-3.5 text-sky-400" />
+          30-Day Performance Trends
+        </button>
+      </div>
+
+      {activeTab === 'chart' ? (
+        <SignalPerformanceChart />
+      ) : filteredHistory.length > 0 ? (
         <div className="space-y-3">
           {filteredHistory.map((item, idx) => {
             const isExpanded = expandedId === item.id;
             const precision = item.entryPrice && item.entryPrice < 10 ? 5 : 2;
+            const isDeleting = deletingIds.includes(item.id);
+
+            // Determine custom visual statuses
+            let customStatus: 'ACTIVE' | 'EXPIRING' | 'PROCESSING' | null = null;
+            if (item.signalStatus === 'ACTIVE' || item.signalStatus === 'ENTRY_CONFIRMED' || item.signalStatus === 'CONFIRMED') {
+              customStatus = 'ACTIVE';
+            } else if (
+              item.signalStatus === 'WAITING_ENTRY' ||
+              (item.expiresAt && item.expiresAt - Date.now() > 0 && item.expiresAt - Date.now() < 30 * 60 * 1000)
+            ) {
+              customStatus = 'EXPIRING';
+            } else if (
+              item.signalStatus === 'WATCHING' ||
+              item.signalStatus === 'CANDIDATE' ||
+              (item as any).status === 'PROCESSING'
+            ) {
+              customStatus = 'PROCESSING';
+            }
 
             return (
               <div
                 key={item.id || item.snapshotId || `${item.symbol}_${item.timestamp}`}
-                className="bg-slate-950/90 border border-slate-800/90 hover:border-slate-700 rounded-xl p-3 sm:p-4 transition shadow-md space-y-3"
+                className={`relative bg-slate-950/90 border border-slate-800/90 hover:border-slate-700 rounded-xl p-3 sm:p-4 transition shadow-md space-y-3 ${
+                  isDeleting ? 'opacity-50 pointer-events-none' : ''
+                }`}
               >
+                {isDeleting && (
+                  <div className="absolute inset-0 bg-slate-950/70 rounded-xl flex items-center justify-center z-10 backdrop-blur-[1px]">
+                    <div className="flex items-center gap-2 px-4 py-2 bg-slate-900 border border-slate-800 rounded-lg shadow-xl">
+                      <RefreshCw className="w-4 h-4 text-rose-400 animate-spin" />
+                      <span className="text-xs font-mono font-bold text-slate-300">DELETING SIGNAL...</span>
+                    </div>
+                  </div>
+                )}
                 {/* Header Row: Symbol, Direction, Status & Badges */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
                   {/* Left: Direction Badge, Symbol Name, Category & Status Tags */}
@@ -315,7 +378,22 @@ export function SignalHistoryPanel({
                       </span>
                     )}
 
-                    {item.signalStatus ? (
+                    {customStatus === 'ACTIVE' ? (
+                      <span className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded border bg-emerald-950 text-emerald-300 border-emerald-500 text-[10px] sm:text-xs font-mono font-bold shadow-[0_0_8px_rgba(16,185,129,0.1)]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        ACTIVE
+                      </span>
+                    ) : customStatus === 'EXPIRING' ? (
+                      <span className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded border bg-amber-950/90 text-amber-300 border-amber-500/80 text-[10px] sm:text-xs font-mono font-bold shadow-[0_0_8px_rgba(245,158,11,0.1)] animate-pulse">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                        EXPIRING
+                      </span>
+                    ) : customStatus === 'PROCESSING' ? (
+                      <span className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded border bg-sky-950/90 text-sky-300 border-sky-500/80 text-[10px] sm:text-xs font-mono font-bold shadow-[0_0_8px_rgba(14,165,233,0.1)]">
+                        <RefreshCw className="w-2.5 h-2.5 text-sky-400 animate-spin" />
+                        PROCESSING
+                      </span>
+                    ) : item.signalStatus ? (
                       <span
                         className={`text-[10px] sm:text-xs font-mono font-bold px-2 py-0.5 rounded border ${
                           item.signalStatus === 'ACTIVE'
@@ -396,11 +474,20 @@ export function SignalHistoryPanel({
                     {/* Delete Entry Button */}
                     <button
                       type="button"
+                      disabled={isDeleting}
                       onClick={() => setItemToDelete({ id: item.id, symbol: item.symbol })}
-                      className="p-1 rounded bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-800/80 transition cursor-pointer min-h-[28px] min-w-[28px] flex items-center justify-center shadow-sm"
-                      title={`Delete entry for ${item.symbol}`}
+                      className={`p-1 rounded transition min-h-[28px] min-w-[28px] flex items-center justify-center shadow-sm ${
+                        isDeleting
+                          ? 'bg-slate-900/50 text-slate-500 border-slate-900/50 cursor-not-allowed'
+                          : 'bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-800/80 cursor-pointer'
+                      }`}
+                      title={isDeleting ? 'Deleting entry...' : `Delete entry for ${item.symbol}`}
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      {isDeleting ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-rose-400" />
+                      ) : (
+                        <Trash2 className="w-3.5 h-3.5" />
+                      )}
                     </button>
                   </div>
                 </div>

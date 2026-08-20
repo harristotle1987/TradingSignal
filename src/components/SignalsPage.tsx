@@ -60,6 +60,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
     NotificationService.getPermission()
   );
   const [soundAlerts, setSoundAlerts] = useState<boolean>(true);
+  const [deletingIds, setDeletingIds] = useState<string[]>([]);
   const isInitialLoad = useRef<boolean>(true);
 
   // Local State-Based Signal History (Last 30 generated signals/outcomes)
@@ -236,20 +237,22 @@ export function SignalsPage({ health }: SignalsPageProps) {
 
   // Individual history item deletion handler
   const handleDeleteHistoryItem = async (id: string, symbol: string) => {
-    setSignalHistory((prev) => {
-      const updated = prev.filter((item) => item.id !== id && item.snapshotId !== id);
-      try {
-        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updated));
-      } catch (e) {
-        console.warn('Failed to update localStorage signal history:', e);
-      }
-      return updated;
-    });
-
+    setDeletingIds((prev) => [...prev, id]);
     try {
       await api.deleteSignalLog(id);
+      setSignalHistory((prev) => {
+        const updated = prev.filter((item) => item.id !== id && item.snapshotId !== id);
+        try {
+          localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updated));
+        } catch (e) {
+          console.warn('Failed to update localStorage signal history:', e);
+        }
+        return updated;
+      });
     } catch (e) {
       console.warn(`Failed to delete backend signal log entry ${id}:`, e);
+    } finally {
+      setDeletingIds((prev) => prev.filter((dId) => dId !== id));
     }
   };
 
@@ -744,6 +747,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
         history={signalHistory}
         onClearHistory={handleClearHistory}
         onDeleteHistoryItem={handleDeleteHistoryItem}
+        deletingIds={deletingIds}
         preferredTimeZone={preferredTimeZone}
         onTimeZoneChange={setPreferredTimeZone}
         onSelectSymbol={(sym) => {
