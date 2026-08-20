@@ -73,6 +73,7 @@ const FIRESTORE_COLLECTION = 'signal_logs';
 export class SignalLogger {
   private static logs: Map<string, SignalLogRecord> = new Map();
   private static isInitialized = false;
+  private static lastFirestoreSync = 0;
 
   /**
    * Helper to detect Market Type from Symbol structure
@@ -109,6 +110,42 @@ export class SignalLogger {
   }
 
   /**
+   * Re-synchronizes in-memory and local disk cache with master Firestore logs collection.
+   */
+  public static async syncFromFirestore(): Promise<void> {
+    const firestore = getFirestoreAdmin();
+    if (!firestore) return;
+
+    try {
+      const snapshot = await firestore.collection(FIRESTORE_COLLECTION).get();
+      const firestoreIds = new Set<string>();
+
+      snapshot.forEach((doc) => {
+        const data = doc.data() as SignalLogRecord;
+        if (data && data.id) {
+          firestoreIds.add(data.id);
+          const existing = this.logs.get(data.id);
+          if (!existing || (data.updatedAt || data.timestamp) >= (existing.updatedAt || existing.timestamp)) {
+            this.logs.set(data.id, data);
+          }
+        }
+      });
+
+      // Purge any log entries from memory that are missing in Firestore (indicating cross-pod/user deletion)
+      for (const id of this.logs.keys()) {
+        if (!firestoreIds.has(id)) {
+          this.logs.delete(id);
+        }
+      }
+
+      this.lastFirestoreSync = Date.now();
+      this.flushToDisk();
+    } catch (err) {
+      logger.debug('[SignalLogger] Firestore synchronization deferred:', { reason: String(err) });
+    }
+  }
+
+  /**
    * Initializes signal log state from local disk and Firestore
    */
   public static async init(): Promise<void> {
@@ -132,31 +169,8 @@ export class SignalLogger {
       logger.warn('[SignalLogger] Could not read local signal log file:', { error: String(err) });
     }
 
-    // 2. Fetch/merge from Firestore Admin if available
-    const firestore = getFirestoreAdmin();
-    if (firestore) {
-      try {
-        const snapshot = await firestore.collection(FIRESTORE_COLLECTION).get();
-        let firestoreCount = 0;
-        snapshot.forEach((doc) => {
-          const data = doc.data() as SignalLogRecord;
-          if (data && data.id) {
-            // Firestore data takes precedence if newer
-            const existing = this.logs.get(data.id);
-            if (!existing || (data.updatedAt || data.timestamp) >= (existing.updatedAt || existing.timestamp)) {
-              this.logs.set(data.id, data);
-            }
-            firestoreCount++;
-          }
-        });
-        if (firestoreCount > 0) {
-          logger.info(`[SignalLogger] Restored/merged ${firestoreCount} signal records from Firebase Firestore.`);
-          this.flushToDisk();
-        }
-      } catch (err) {
-        logger.debug('[SignalLogger] Firestore query deferred:', { reason: String(err) });
-      }
-    }
+    // 2. Sync from Firestore Admin if available
+    await this.syncFromFirestore();
 
     this.isInitialized = true;
   }
@@ -339,6 +353,12 @@ export class SignalLogger {
    */
   public static async getSignalLogs(limit = 100): Promise<SignalLogRecord[]> {
     await this.init();
+
+    const now = Date.now();
+    if (now - this.lastFirestoreSync > 5000) {
+      await this.syncFromFirestore();
+    }
+
     const sorted = Array.from(this.logs.values()).sort((a, b) => b.timestamp - a.timestamp);
     return sorted.slice(0, limit);
   }

@@ -836,18 +836,47 @@ export class ScannerPersistence {
           }
         }
 
-        // Merge with local signals
-        const map = new Map<string, PersistedSentSignal>();
+        const firestoreActiveIds = new Set(signals.map((s) => s.id));
         const localActive = this.localData.sentSignals.filter((s) => 
           s.status === 'ACTIVE' || s.status === 'TP1_HIT' || s.status === 'TP2_HIT' || s.status === 'WAITING_ENTRY'
         );
-        for (const s of localActive) {
-          map.set(s.id, s);
+
+        const missingFromActive = localActive.filter((s) => !firestoreActiveIds.has(s.id));
+        let localUpdated = false;
+
+        if (missingFromActive.length > 0) {
+          await Promise.all(
+            missingFromActive.map(async (localSig) => {
+              try {
+                const docRef = firestore.collection(FIRESTORE_SIGNALS_COL).doc(localSig.id);
+                const docSnap = await docRef.get();
+                if (!docSnap.exists) {
+                  // Completely deleted in Firestore -> remove locally
+                  this.localData.sentSignals = this.localData.sentSignals.filter((s) => s.id !== localSig.id);
+                  localUpdated = true;
+                } else {
+                  // Updated to terminal status in Firestore -> sync status locally
+                  const fsData = docSnap.data();
+                  if (fsData && fsData.status) {
+                    const target = this.localData.sentSignals.find((s) => s.id === localSig.id);
+                    if (target) {
+                      target.status = fsData.status;
+                      localUpdated = true;
+                    }
+                  }
+                }
+              } catch (docErr) {
+                logger.warn(`[ScannerPersistence] Failed to reconcile missing active signal ${localSig.id}:`, docErr);
+              }
+            })
+          );
         }
-        for (const s of signals) {
-          map.set(s.id, s);
+
+        if (localUpdated) {
+          this.saveLocalData();
         }
-        return Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp);
+
+        return signals.sort((a, b) => b.timestamp - a.timestamp);
       } catch (err) {
         logger.warn('[ScannerPersistence] Firestore getActiveSignals failed, using local:', { error: String(err) });
       }

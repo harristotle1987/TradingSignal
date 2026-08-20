@@ -80,6 +80,7 @@ const STOCK_UNIVERSE = [
 
 export class SignalEngine {
   public activeSignals = new Map<string, TradingSignal>();
+  private lastActiveSignalsSyncTime = 0;
   private readonly DUPLICATE_COOLDOWN_MS = 8 * 60 * 1000; // 8 minutes duplicate cooldown
 
   /**
@@ -1399,39 +1400,38 @@ export class SignalEngine {
 
   /**
    * Retrieves active signals list (sorted by TOP TRADEs first, then by score descending).
-   * Dynamically synchronizes active signals from persistent Firebase/disk storage on cold starts.
+   * Dynamically synchronizes active signals from persistent Firebase/disk storage periodically.
    */
   async getActiveSignals(): Promise<TradingSignal[]> {
     const now = Date.now();
 
-    // If the memory map is empty (e.g. on a cold serverless invocation), try to restore from persistence
-    if (this.activeSignals.size === 0) {
+    // Re-synchronize from persistence if memory map is empty or more than 5 seconds have elapsed
+    if (this.activeSignals.size === 0 || now - this.lastActiveSignalsSyncTime > 5000) {
       try {
-        const persisted = await ScannerPersistence.getSentSignalsToday();
+        const persisted = await ScannerPersistence.getActiveSignals();
+        const persistedSymbols = new Set<string>();
+
         for (const s of persisted) {
-          // ACTIVE signals do not expire by time. WAITING_ENTRY expire by time.
           const isWaitingAndNotExpired = s.status === 'WAITING_ENTRY' && (now - s.timestamp <= serverConfig.getConfig().signalExpirationMs);
-          if (s.status === 'ACTIVE' || isWaitingAndNotExpired) {
+          if (s.status === 'ACTIVE' || s.status === 'TP1_HIT' || s.status === 'TP2_HIT' || isWaitingAndNotExpired) {
+            persistedSymbols.add(s.symbol.toUpperCase());
+
             // Enforce that we do NOT load any signal with duplicate TPs
             const tp1 = s.tp1;
             const tp2 = s.tp2;
             const tp3 = s.tp3;
             if (tp1 !== undefined && tp2 !== undefined && tp3 !== undefined) {
               if (tp1 === tp2 || tp2 === tp3 || tp1 === tp3) {
-                logger.warn(`[SignalEngine] Restored signal ${s.symbol} has duplicate TPs; excluding from active list until repaired.`, { id: s.id, tp1, tp2, tp3 });
                 continue;
               }
               // Enforce correct geometry
               if (s.direction === 'BUY' && (s.entryPrice >= tp1 || tp1 >= tp2 || tp2 >= tp3)) {
-                logger.warn(`[SignalEngine] Restored BUY signal ${s.symbol} has invalid geometry; excluding from active list until repaired.`, { entry: s.entryPrice, tp1, tp2, tp3 });
                 continue;
               }
               if (s.direction === 'SELL' && (s.entryPrice <= tp1 || tp1 <= tp2 || tp2 <= tp3)) {
-                logger.warn(`[SignalEngine] Restored SELL signal ${s.symbol} has invalid geometry; excluding from active list until repaired.`, { entry: s.entryPrice, tp1, tp2, tp3 });
                 continue;
               }
             } else {
-              logger.warn(`[SignalEngine] Restored signal ${s.symbol} is missing TPs; excluding from active list until repaired.`);
               continue;
             }
 
@@ -1467,6 +1467,15 @@ export class SignalEngine {
             this.activeSignals.set(sig.symbol, sig);
           }
         }
+
+        // Clean up any in-memory active signal that was deleted/modified to terminal status in persistence
+        for (const symbol of this.activeSignals.keys()) {
+          if (!persistedSymbols.has(symbol.toUpperCase())) {
+            this.activeSignals.delete(symbol);
+          }
+        }
+
+        this.lastActiveSignalsSyncTime = now;
       } catch (err) {
         logger.warn('[SignalEngine] Failed to restore active signals from persistence:', { error: String(err) });
       }
