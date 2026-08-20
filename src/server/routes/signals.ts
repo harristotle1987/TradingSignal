@@ -705,6 +705,11 @@ router.delete('/signals/log/:id', async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
     const success = await SignalLogger.deleteLog(id);
+    
+    // Also remove from active signals cache and persistent sent signals
+    signalEngine.removeActiveSignal(id);
+    await ScannerPersistence.deleteSentSignal(id);
+
     if (success) {
       res.status(200).json({
         success: true,
@@ -736,6 +741,8 @@ router.delete('/signals/log/:id', async (req: Request, res: Response) => {
 router.delete('/signals/log', async (_req: Request, res: Response) => {
   try {
     await SignalLogger.clearLogs();
+    signalEngine.clearSignals();
+    await ScannerPersistence.clearSentSignals();
     res.status(200).json({
       success: true,
       message: 'Dedicated signal logs cleared successfully',

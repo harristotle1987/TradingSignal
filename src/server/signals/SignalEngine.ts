@@ -1499,6 +1499,19 @@ export class SignalEngine {
     this.activeSignals.clear();
   }
 
+  /**
+   * Removes an individual active signal by ID or snapshot ID.
+   */
+  removeActiveSignal(id: string): boolean {
+    for (const [symbol, sig] of this.activeSignals.entries()) {
+      if (sig.id === id || sig.snapshotId === id) {
+        this.activeSignals.delete(symbol);
+        return true;
+      }
+    }
+    return false;
+  }
+
   // --- Logger Diagnostic Trace Helper ---
 
   private logDiagnosticTrace(

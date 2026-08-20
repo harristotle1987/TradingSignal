@@ -459,6 +459,54 @@ export class ScannerPersistence {
   }
 
   /**
+   * Deletes a single sent signal by ID or snapshotId from memory, disk, and Firestore.
+   */
+  static async deleteSentSignal(id: string): Promise<boolean> {
+    this.init();
+
+    const initialLength = this.localData.sentSignals.length;
+    this.localData.sentSignals = this.localData.sentSignals.filter((s) => s.id !== id && s.snapshotId !== id);
+    const deletedLocally = this.localData.sentSignals.length < initialLength;
+    if (deletedLocally) {
+      this.saveLocalData();
+    }
+
+    let deletedInFirestore = false;
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      try {
+        const query = await firestore
+          .collection(FIRESTORE_SIGNALS_COL)
+          .doc(id)
+          .get();
+
+        if (query.exists) {
+          await firestore.collection(FIRESTORE_SIGNALS_COL).doc(id).delete();
+          deletedInFirestore = true;
+        } else {
+          // Try querying by snapshotId
+          const snapshotById = await firestore
+            .collection(FIRESTORE_SIGNALS_COL)
+            .where('snapshotId', '==', id)
+            .get();
+          if (!snapshotById.empty) {
+            const batch = firestore.batch();
+            snapshotById.docs.forEach((doc) => {
+              batch.delete(doc.ref);
+            });
+            await batch.commit();
+            deletedInFirestore = true;
+          }
+        }
+      } catch (err) {
+        logger.warn('[ScannerPersistence] Firestore deleteSentSignal failed:', { error: String(err) });
+      }
+    }
+
+    return deletedLocally || deletedInFirestore;
+  }
+
+  /**
    * Retrieves all signals sent today (UTC).
    */
   static async getSentSignalsToday(): Promise<PersistedSentSignal[]> {
