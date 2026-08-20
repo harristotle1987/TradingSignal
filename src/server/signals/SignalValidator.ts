@@ -16,6 +16,10 @@ import { NormalizedCandle, NormalizedTicker, SignalDirection, SignalValidationRe
 import { logger } from '../logger.js';
 import { TechnicalIndicators } from './TechnicalIndicators.js';
 import { AtrTpGenerator } from './AtrTpGenerator.js';
+import { Gate30DataFreshness } from './Gate30DataFreshness.js';
+import { Gate31NewsRiskClassification } from './Gate31NewsRiskClassification.js';
+import { Gate34ExecutionFrictionStressTest } from './Gate34ExecutionFrictionStressTest.js';
+import { serverConfig } from '../config.js';
 
 export interface ValidationContext {
   symbol: string;
@@ -142,12 +146,33 @@ export class SignalValidator {
       };
     }
 
-    // 7. Confluence & Quality Score Check (INSUFFICIENT_CONFLUENCE)
-    if (ctx.score < 70) {
+    // 7. Gate 31 Asset-Aware News Risk Classification
+    const newsRiskResult = Gate31NewsRiskClassification.evaluate(ctx.symbol, now);
+    if (newsRiskResult.classification === 'BLOCK') {
+      return {
+        isValid: false,
+        validationReason: 'HIGH_NEWS_RISK',
+        detailedMessage: `REJECTED: BLOCK_NEWS_EVENT. Trading blocked due to major scheduled market-moving event (${newsRiskResult.reasons.join('; ')})`,
+        snapshotId,
+        validatedAt: now,
+      };
+    }
+
+    // 8. Confluence & Quality Score Check (INSUFFICIENT_CONFLUENCE with Gate 31 CAUTION threshold elevation)
+    const thresholds = serverConfig.getConfig().thresholds;
+    const requiredMinScore = newsRiskResult.classification === 'CAUTION'
+      ? Math.max(thresholds.minimumScore, newsRiskResult.minRequiredConfirmationScore)
+      : thresholds.minimumScore;
+
+    if (ctx.score < requiredMinScore) {
+      const reasonMsg = newsRiskResult.classification === 'CAUTION'
+        ? `REJECTED: SCORE_BELOW_CAUTION_NEWS_THRESHOLD. Score ${ctx.score} is below elevated CAUTION news threshold of ${requiredMinScore}`
+        : `REJECTED: SCORE_BELOW_THRESHOLD. Deterministic score ${ctx.score}/100 is below minimum actionable threshold of ${thresholds.minimumScore}`;
+
       return {
         isValid: false,
         validationReason: 'INSUFFICIENT_CONFLUENCE',
-        detailedMessage: `Deterministic score ${ctx.score}/100 is below the minimum actionable threshold of 70 (90+ = EXCEPTIONAL, 80-89 = STRONG, 70-79 = VALID)`,
+        detailedMessage: reasonMsg,
         snapshotId,
         validatedAt: now,
       };
@@ -174,45 +199,39 @@ export class SignalValidator {
 
     // Reject if ticker is stale or flagged as not fresh
     if (ticker.status === 'STALE' || !ticker.isFresh) {
-      return { isValid: false, message: `Market ticker data is stale or flagged as not fresh (status: ${ticker.status}, isFresh: ${ticker.isFresh})` };
+      return { isValid: false, message: `REJECTED: DATA_STALE. Market ticker data is stale or flagged as not fresh (status: ${ticker.status}, isFresh: ${ticker.isFresh})` };
     }
 
-    const tickerAgeMs = now - ticker.timestamp;
+    const candles1h = ctx.candlesMap['1h'] || ctx.candlesMap['15m'] || ctx.candlesMap['5m'] || Object.values(ctx.candlesMap)[0];
 
-    // Reject live ticker older than 2 minutes (120s) or in future > 30s
-    if (tickerAgeMs < -30000) {
-      return { isValid: false, message: `Ticker timestamp is in the future (${ticker.timestamp} vs current ${now})` };
-    }
-    if (tickerAgeMs > 120000) {
-      return { isValid: false, message: `Live ticker data is stale (age: ${(tickerAgeMs / 1000).toFixed(0)}s > 120s)` };
-    }
+    const gate30Res = Gate30DataFreshness.evaluate({
+      symbol: ctx.symbol,
+      timeframe: '1h',
+      executionRequirement: 'EXECUTABLE_SIGNAL',
+      quote: {
+        price: ticker.price,
+        timestamp: ticker.timestamp,
+        bid: ticker.bid,
+        ask: ticker.ask,
+        provider: ticker.provider,
+      },
+      candles: candles1h,
+      nowMs: now,
+    });
 
-    // Verify 1H candle freshness (must be within 3 hours)
-    const htf1h = ctx.candlesMap['1h'];
-    if (htf1h && htf1h.length > 0) {
-      const last1h = htf1h[htf1h.length - 1];
-      const candleAgeMs = now - last1h.timestamp;
-      if (candleAgeMs > 3 * 60 * 60 * 1000) {
-        return { isValid: false, message: `1H candle history is stale (age: ${(candleAgeMs / 3600000).toFixed(1)}h > 3h)` };
-      }
-    }
-
-    // Verify 15m candle freshness if present (must be within 60 minutes)
-    const tf15m = ctx.candlesMap['15m'];
-    if (tf15m && tf15m.length > 0) {
-      const last15m = tf15m[tf15m.length - 1];
-      const candleAgeMs = now - last15m.timestamp;
-      if (candleAgeMs > 60 * 60 * 1000) {
-        return { isValid: false, message: `15m candle history is stale (age: ${(candleAgeMs / 60000).toFixed(0)}m > 60m)` };
-      }
+    if (!gate30Res.isValid) {
+      return {
+        isValid: false,
+        message: `REJECTED: DATA_STALE. ${gate30Res.rejectionReason || 'Failed Gate 30 Freshness Check'}`,
+      };
     }
 
     return { isValid: true, message: 'OK' };
   }
 
-  private static verifyCandleIntegrity(candlesMap: Record<string, NormalizedCandle[]>): { isValid: boolean; message: string } {
+  public static verifyCandleIntegrity(candlesMap: Record<string, NormalizedCandle[]>): { isValid: boolean; message: string } {
     if (!candlesMap['1h'] || candlesMap['1h'].length < 25) {
-      return { isValid: false, message: 'Insufficient 1H candle history (minimum 25 candles required)' };
+      return { isValid: false, message: 'REJECTED: INSUFFICIENT_DATA. Insufficient 1H candle history (minimum 25 candles required)' };
     }
 
     for (const [tf, candles] of Object.entries(candlesMap)) {
@@ -224,7 +243,7 @@ export class SignalValidator {
         // 1. Positive and Finite
         if (!Number.isFinite(c.open) || !Number.isFinite(c.high) || !Number.isFinite(c.low) || !Number.isFinite(c.close) ||
             c.open <= 0 || c.high <= 0 || c.low <= 0 || c.close <= 0) {
-          return { isValid: false, message: `Corrupted candle values in timeframe ${tf} at index ${i}` };
+          return { isValid: false, message: `REJECTED: CORRUPTED_DATA. Corrupted candle values in timeframe ${tf} at index ${i}` };
         }
 
         // 2. High/Low bounds integrity with floating tolerance
@@ -232,15 +251,15 @@ export class SignalValidator {
         const minOC = Math.min(c.open, c.close);
 
         if (c.high < maxOC - 1e-6) {
-          return { isValid: false, message: `Candle high (${c.high}) < max(open, close) (${maxOC}) in timeframe ${tf}` };
+          return { isValid: false, message: `REJECTED: CORRUPTED_DATA. Candle high (${c.high}) < max(open, close) (${maxOC}) in timeframe ${tf}` };
         }
         if (c.low > minOC + 1e-6) {
-          return { isValid: false, message: `Candle low (${c.low}) > min(open, close) (${minOC}) in timeframe ${tf}` };
+          return { isValid: false, message: `REJECTED: CORRUPTED_DATA. Candle low (${c.low}) > min(open, close) (${minOC}) in timeframe ${tf}` };
         }
 
         // 3. Ascending timestamp verification
         if (i > 0 && c.timestamp <= candles[i - 1].timestamp) {
-          return { isValid: false, message: `Non-ascending candle timestamps detected in timeframe ${tf}` };
+          return { isValid: false, message: `REJECTED: CORRUPTED_DATA. Non-ascending candle timestamps detected in timeframe ${tf}` };
         }
       }
     }
@@ -248,7 +267,7 @@ export class SignalValidator {
     return { isValid: true, message: 'OK' };
   }
 
-  private static verifyCrossPrice(symbol: string, primaryPrice: number, secondaryPrice: number, secondarySource: string): { isValid: boolean; message: string } {
+  public static verifyCrossPrice(symbol: string, primaryPrice: number, secondaryPrice: number, secondarySource: string): { isValid: boolean; message: string } {
     const diffPct = (Math.abs(primaryPrice - secondaryPrice) / primaryPrice) * 100;
     const cleanSym = symbol.trim().toUpperCase();
 
@@ -263,7 +282,7 @@ export class SignalValidator {
     if (diffPct > maxAllowedPct) {
       return {
         isValid: false,
-        message: `Material price mismatch: Primary quote (${primaryPrice}) disagrees with ${secondarySource} (${secondaryPrice}) by ${diffPct.toFixed(3)}% (max allowed: ${maxAllowedPct}%)`,
+        message: `REJECTED: PRICE_MISMATCH. Material price mismatch: Primary quote (${primaryPrice}) disagrees with ${secondarySource} (${secondaryPrice}) by ${diffPct.toFixed(3)}% (max allowed: ${maxAllowedPct}%)`,
       };
     }
 
@@ -316,44 +335,44 @@ export class SignalValidator {
     // 1. Geometric Side & Ordering Validation
     if (direction === 'BUY') {
       if (adjustedSL >= livePrice) {
-        return { isValid: false, message: `BUY signal stop-loss (${adjustedSL}) must be strictly below entry price (${livePrice})` };
+        return { isValid: false, message: `REJECTED: INVALID_SL_TP. BUY signal stop-loss (${adjustedSL}) must be strictly below entry price (${livePrice})` };
       }
       if (adjustedTP <= livePrice) {
-        return { isValid: false, message: `BUY signal take-profit (${adjustedTP}) must be strictly above entry price (${livePrice})` };
+        return { isValid: false, message: `REJECTED: INVALID_SL_TP. BUY signal take-profit (${adjustedTP}) must be strictly above entry price (${livePrice})` };
       }
       if (adjustedTp1 !== undefined && adjustedTp2 !== undefined && adjustedTp3 !== undefined) {
         if (adjustedTp1 <= livePrice) {
-          return { isValid: false, message: `BUY signal TP1 (${adjustedTp1}) must be strictly above entry price (${livePrice})` };
+          return { isValid: false, message: `REJECTED: INVALID_SL_TP. BUY signal TP1 (${adjustedTp1}) must be strictly above entry price (${livePrice})` };
         }
         if (adjustedTp2 <= adjustedTp1) {
-          return { isValid: false, message: `BUY signal TP2 (${adjustedTp2}) must be strictly above TP1 (${adjustedTp1})` };
+          return { isValid: false, message: `REJECTED: INVALID_SL_TP. BUY signal TP2 (${adjustedTp2}) must be strictly above TP1 (${adjustedTp1})` };
         }
         if (adjustedTp3 <= adjustedTp2) {
-          return { isValid: false, message: `BUY signal TP3 (${adjustedTp3}) must be strictly above TP2 (${adjustedTp2})` };
+          return { isValid: false, message: `REJECTED: INVALID_SL_TP. BUY signal TP3 (${adjustedTp3}) must be strictly above TP2 (${adjustedTp2})` };
         }
         if (adjustedTp1 === adjustedTp2 || adjustedTp2 === adjustedTp3 || adjustedTp1 === adjustedTp3) {
-          return { isValid: false, message: `Take-profit targets must be distinct: TP1 (${adjustedTp1}), TP2 (${adjustedTp2}), TP3 (${adjustedTp3})` };
+          return { isValid: false, message: `REJECTED: INVALID_SL_TP. Take-profit targets must be distinct: TP1 (${adjustedTp1}), TP2 (${adjustedTp2}), TP3 (${adjustedTp3})` };
         }
       }
     } else {
       if (adjustedSL <= livePrice) {
-        return { isValid: false, message: `SELL signal stop-loss (${adjustedSL}) must be strictly above entry price (${livePrice})` };
+        return { isValid: false, message: `REJECTED: INVALID_SL_TP. SELL signal stop-loss (${adjustedSL}) must be strictly above entry price (${livePrice})` };
       }
       if (adjustedTP >= livePrice) {
-        return { isValid: false, message: `SELL signal take-profit (${adjustedTP}) must be strictly below entry price (${livePrice})` };
+        return { isValid: false, message: `REJECTED: INVALID_SL_TP. SELL signal take-profit (${adjustedTP}) must be strictly below entry price (${livePrice})` };
       }
       if (adjustedTp1 !== undefined && adjustedTp2 !== undefined && adjustedTp3 !== undefined) {
         if (adjustedTp1 >= livePrice) {
-          return { isValid: false, message: `SELL signal TP1 (${adjustedTp1}) must be strictly below entry price (${livePrice})` };
+          return { isValid: false, message: `REJECTED: INVALID_SL_TP. SELL signal TP1 (${adjustedTp1}) must be strictly below entry price (${livePrice})` };
         }
         if (adjustedTp2 >= adjustedTp1) {
-          return { isValid: false, message: `SELL signal TP2 (${adjustedTp2}) must be strictly below TP1 (${adjustedTp1})` };
+          return { isValid: false, message: `REJECTED: INVALID_SL_TP. SELL signal TP2 (${adjustedTp2}) must be strictly below TP1 (${adjustedTp1})` };
         }
         if (adjustedTp3 >= adjustedTp2) {
-          return { isValid: false, message: `SELL signal TP3 (${adjustedTp3}) must be strictly below TP2 (${adjustedTp2})` };
+          return { isValid: false, message: `REJECTED: INVALID_SL_TP. SELL signal TP3 (${adjustedTp3}) must be strictly below TP2 (${adjustedTp2})` };
         }
         if (adjustedTp1 === adjustedTp2 || adjustedTp2 === adjustedTp3 || adjustedTp1 === adjustedTp3) {
-          return { isValid: false, message: `Take-profit targets must be distinct: TP1 (${adjustedTp1}), TP2 (${adjustedTp2}), TP3 (${adjustedTp3})` };
+          return { isValid: false, message: `REJECTED: INVALID_SL_TP. Take-profit targets must be distinct: TP1 (${adjustedTp1}), TP2 (${adjustedTp2}), TP3 (${adjustedTp3})` };
         }
       }
     }
@@ -368,17 +387,17 @@ export class SignalValidator {
     }
 
     if (risk <= 0 || reward <= 0) {
-      return { isValid: false, message: 'Stop-loss or take-profit distance is zero/near-zero' };
+      return { isValid: false, message: 'REJECTED: INVALID_SL_TP. Stop-loss or take-profit distance is zero/near-zero' };
     }
 
     // Calculate ATR for dynamic volatility-based validation
     const htf1h = candlesMap['1h'];
     if (!htf1h || htf1h.length < 14) {
-      return { isValid: false, message: 'Missing/invalid ATR data (insufficient 1H candle history) = NO SIGNAL' };
+      return { isValid: false, message: 'REJECTED: INSUFFICIENT_ATR. Missing/invalid ATR data (insufficient 1H candle history) = NO SIGNAL' };
     }
     const atr = TechnicalIndicators.calculateATR(htf1h, 14);
     if (!atr || isNaN(atr) || atr <= 0) {
-      return { isValid: false, message: 'Missing/invalid ATR data (calculated ATR is zero or invalid) = NO SIGNAL' };
+      return { isValid: false, message: 'REJECTED: INSUFFICIENT_ATR. Missing/invalid ATR data (calculated ATR is zero or invalid) = NO SIGNAL' };
     }
 
     // Use 0.85 * ATR as the minimum noise hurdle to prevent tight SL hit by normal market noise
@@ -389,7 +408,7 @@ export class SignalValidator {
     if (risk < minSafeStopDistance) {
       return {
         isValid: false,
-        message: `Expected stop-loss distance (${risk.toFixed(precision)}) is below minimum volatility noise floor (${minSafeStopDistance.toFixed(precision)}, derived as 0.85 * ATR of ${atr.toFixed(precision)}) - vulnerable to market noise`,
+        message: `REJECTED: VOLATILITY_NOISE_FLOOR. Expected stop-loss distance (${risk.toFixed(precision)}) is below minimum volatility noise floor (${minSafeStopDistance.toFixed(precision)}, derived as 0.85 * ATR of ${atr.toFixed(precision)}) - vulnerable to market noise`,
       };
     }
 
@@ -402,26 +421,26 @@ export class SignalValidator {
       if (tp1Dist < minSafeTargetDistance * 0.5) {
         return {
           isValid: false,
-          message: `Expected TP1 distance (${tp1Dist.toFixed(precision)}) is below minimum conservative target distance (${(minSafeTargetDistance * 0.5).toFixed(precision)}, derived as 0.5 * 1.80 * ATR)`,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP1 distance (${tp1Dist.toFixed(precision)}) is below minimum conservative target distance (${(minSafeTargetDistance * 0.5).toFixed(precision)}, derived as 0.5 * 1.80 * ATR)`,
         };
       }
       if (tp2Dist < minSafeTargetDistance) {
         return {
           isValid: false,
-          message: `Expected TP2 distance (${tp2Dist.toFixed(precision)}) is below minimum primary target distance (${minSafeTargetDistance.toFixed(precision)}, derived as 1.80 * ATR)`,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP2 distance (${tp2Dist.toFixed(precision)}) is below minimum primary target distance (${minSafeTargetDistance.toFixed(precision)}, derived as 1.80 * ATR)`,
         };
       }
       if (tp3Dist < minSafeTargetDistance * 1.5) {
         return {
           isValid: false,
-          message: `Expected TP3 distance (${tp3Dist.toFixed(precision)}) is below minimum extended target distance (${(minSafeTargetDistance * 1.5).toFixed(precision)}, derived as 1.5 * 1.80 * ATR)`,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP3 distance (${tp3Dist.toFixed(precision)}) is below minimum extended target distance (${(minSafeTargetDistance * 1.5).toFixed(precision)}, derived as 1.5 * 1.80 * ATR)`,
         };
       }
     } else {
       if (reward < minSafeTargetDistance) {
         return {
           isValid: false,
-          message: `Expected take-profit distance (${reward.toFixed(precision)}) is below minimum volatility profit expansion hurdle (${minSafeTargetDistance.toFixed(precision)}, derived as 1.80 * ATR of ${atr.toFixed(precision)})`,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected take-profit distance (${reward.toFixed(precision)}) is below minimum volatility profit expansion hurdle (${minSafeTargetDistance.toFixed(precision)}, derived as 1.80 * ATR of ${atr.toFixed(precision)})`,
         };
       }
     }
@@ -444,14 +463,15 @@ export class SignalValidator {
       };
     }
 
-    // 5. Net Risk / Reward Ratio Check: Minimum 1.5:1
+    // 5. Net Risk / Reward Ratio Check: Minimum from config
     const rawRR = reward / risk;
     const adjustedNetRR = Number(rawRR.toFixed(2));
 
-    if (adjustedNetRR < 1.5) {
+    const thresholds = serverConfig.getConfig().thresholds;
+    if (adjustedNetRR < thresholds.minimumRR) {
       return {
         isValid: false,
-        message: `Risk/Reward ratio (${adjustedNetRR}:1) is below 1.5:1 minimum hurdle`,
+        message: `REJECTED: RR_BELOW_THRESHOLD. Risk/Reward ratio (${adjustedNetRR}:1) is below ${thresholds.minimumRR}:1 minimum hurdle`,
       };
     }
 
@@ -482,14 +502,14 @@ export class SignalValidator {
     if (netEV <= 0) {
       return {
         isValid: false,
-        message: `Expected Value rejected: Positive statistical edge not established (Net EV: ${netEV.toFixed(4)} <= 0 for estimated win rate ${(pWin * 100).toFixed(1)}%)`,
+        message: `REJECTED: NEGATIVE_EXPECTANCY. Expected Value rejected: Positive statistical edge not established (Net EV: ${netEV.toFixed(4)} <= 0 for estimated win rate ${(pWin * 100).toFixed(1)}%)`,
       };
     }
 
     if (expectancyRatio < 0.01) {
       return {
         isValid: false,
-        message: `Expected Value rejected: Expectancy ratio (${(expectancyRatio * 100).toFixed(1)}%) below minimum positive risk-adjusted hurdle`,
+        message: `REJECTED: NEGATIVE_EXPECTANCY. Expected Value rejected: Expectancy ratio (${(expectancyRatio * 100).toFixed(1)}%) below minimum positive risk-adjusted hurdle`,
       };
     }
 
@@ -506,60 +526,26 @@ export class SignalValidator {
     rawRisk: number,
     rawReward: number
   ): { isValid: boolean; message: string; netRR?: number; totalRoundTripFriction?: number } {
-    const cleanSym = symbol.trim().toUpperCase();
-    const isCrypto = cleanSym.includes('USDT') || (cleanSym.includes('USD') && price > 100 && !cleanSym.includes('EUR') && !cleanSym.includes('GBP'));
-    const isForex = cleanSym.length === 6 && (cleanSym.includes('USD') || cleanSym.includes('EUR') || cleanSym.includes('GBP') || cleanSym.includes('JPY') || cleanSym.includes('CHF') || cleanSym.includes('CAD') || cleanSym.includes('AUD') || cleanSym.includes('NZD'));
-    const isJPY = cleanSym.includes('JPY');
+    // Gate 34 — Execution Friction Stress Test
+    const dummyStopLoss = price - rawRisk;
+    const dummyTakeProfit = price + rawReward;
 
-    let totalRoundTripFriction = 0;
+    const res = Gate34ExecutionFrictionStressTest.evaluate(symbol, price, dummyStopLoss, dummyTakeProfit);
 
-    if (isForex) {
-      const pipMultiplier = isJPY ? 100 : 10000;
-      // Spread: ~1.2-1.5 pips, Slippage: ~0.5 pips, Broker Commission Buffer: ~0.3 pips
-      const totalFrictionPips = isJPY ? 2.5 : 2.0;
-      totalRoundTripFriction = totalFrictionPips / pipMultiplier;
-    } else if (isCrypto) {
-      // Spread (~0.04%) + Slippage (~0.05%) + 2x Taker Fees (0.06% * 2 = 0.12%) => Total ~0.21%
-      totalRoundTripFriction = price * 0.0021;
-    } else {
-      // Stocks: Spread ($0.04) + Slippage ($0.02) + SEC/Finra/Clearing fees ($0.01) => $0.07 per share
-      totalRoundTripFriction = Math.max(0.07, price * 0.0006);
-    }
-
-    // Safety buffer check: Expected reward movement must be at least 3.5x total round-trip friction
-    if (rawReward < totalRoundTripFriction * 3.5) {
+    if (!res.isPassed) {
       return {
         isValid: false,
-        message: `Execution cost rejected: Expected reward move (${rawReward.toFixed(4)}) is too small relative to round-trip spread, slippage & fee friction (${totalRoundTripFriction.toFixed(4)}) - insufficient safety buffer`,
-      };
-    }
-
-    // Friction consumption ratio: Friction must not consume > 25% of gross profit
-    const frictionRatio = totalRoundTripFriction / rawReward;
-    if (frictionRatio > 0.25) {
-      return {
-        isValid: false,
-        message: `Execution cost rejected: Estimated friction consumes ${(frictionRatio * 100).toFixed(1)}% of gross expected target (max allowed: 25.0%)`,
-      };
-    }
-
-    // Net R:R after friction
-    const netReward = rawReward - totalRoundTripFriction;
-    const netRisk = rawRisk + totalRoundTripFriction;
-    const netRR = netRisk > 0 ? Number((netReward / netRisk).toFixed(2)) : 0;
-
-    if (netRR < 1.75) {
-      return {
-        isValid: false,
-        message: `Net Risk/Reward ratio after spread, slippage and fee friction (${netRR}:1) falls below 1.75:1 minimum executable threshold`,
+        message: res.reasons[0] || `REJECTED: EXECUTION_FRICTION_STRESS_TEST_FAILED (${res.rejectionReason})`,
+        netRR: res.normal.netRR,
+        totalRoundTripFriction: res.normal.totalFrictionPrice,
       };
     }
 
     return {
       isValid: true,
       message: 'OK',
-      netRR,
-      totalRoundTripFriction,
+      netRR: res.normal.netRR,
+      totalRoundTripFriction: res.normal.totalFrictionPrice,
     };
   }
 

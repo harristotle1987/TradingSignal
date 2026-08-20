@@ -12,6 +12,8 @@
 import { TradingSignal, RankTier, NormalizedCandle } from '../../types/index.js';
 import { ScoringResult, ScoringEngine } from './ScoringEngine.js';
 import { ValidationResult } from './SignalValidator.js';
+import { Gate27RegimeThresholds } from './Gate27RegimeThresholds.js';
+import { serverConfig } from '../config.js';
 import { logger } from '../logger.js';
 
 export interface ValidatedCandidate {
@@ -41,10 +43,11 @@ export class TradeRankingEngine {
   };
 
   /**
-   * Evaluates, ranks, and filters validated candidates based on the final scoring rubric.
+   * Evaluates, ranks, and filters validated candidates based on the centralized scoring policy.
    */
   static rankOpportunities(candidates: ValidatedCandidate[]): RankingResult {
     const rejectedCandidates: Array<{ symbol: string; reason: string }> = [];
+    const thresholds = serverConfig.getConfig().thresholds;
 
     // 1. Calculate Composite Score
     const scoredCandidates = candidates.map((cand) => ({
@@ -58,11 +61,28 @@ export class TradeRankingEngine {
     for (const cand of scoredCandidates) {
       const score = Math.round(cand.compositeScore);
       
-      // Strict rejection threshold (<75)
-      if (score < 75) {
+      // Resolve regime-adaptive threshold
+      const adaptiveThreshold = Gate27RegimeThresholds.resolveThreshold({
+        symbol: cand.signal.symbol,
+        actualScore: score,
+        regime: cand.signal.marketRegime || cand.scoring.marketRegime,
+        strategy: cand.signal.strategy,
+        assetClass: cand.signal.assetClass,
+      });
+
+      if (!adaptiveThreshold.isExecutable) {
         rejectedCandidates.push({
           symbol: cand.signal.symbol,
-          reason: `Quality score (${score}/100) below minimum actionable threshold of 75.`,
+          reason: `REJECTED: REGIME_UNTRADEABLE. Market regime '${cand.signal.marketRegime || 'UNKNOWN'}' is classified as UNKNOWN / NO SIGNAL under Gate 27 policy.`,
+        });
+        continue;
+      }
+
+      const effectiveThreshold = adaptiveThreshold.resolvedThreshold;
+      if (score < effectiveThreshold) {
+        rejectedCandidates.push({
+          symbol: cand.signal.symbol,
+          reason: `REJECTED: SCORE_BELOW_REGIME_THRESHOLD. Quality score (${score}/100) below regime-adaptive threshold (${effectiveThreshold}) for regime '${adaptiveThreshold.normalizedRegime}' & strategy '${cand.signal.strategy}' (margin: ${adaptiveThreshold.marginAboveThreshold >= 0 ? '+' : ''}${adaptiveThreshold.marginAboveThreshold}).`,
         });
         continue;
       }
@@ -71,7 +91,7 @@ export class TradeRankingEngine {
       let rankTier: RankTier = 'SUGGESTION';
       if (score >= 90) rankTier = 'BEST_TRADE'; // A+
       else if (score >= 82) rankTier = 'SECOND_BEST'; // A
-      else rankTier = 'SUGGESTION'; // B (75-81)
+      else rankTier = 'SUGGESTION'; // B (effectiveThreshold - 81)
 
       validCandidates.push({ ...cand, compositeScore: score, rankTier });
     }

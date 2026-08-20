@@ -16,6 +16,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { logger } from '../logger.js';
+import { serverConfig } from '../config.js';
 import { TradingSignal, RankTier } from '../../types/index.js';
 
 export interface DailyCapState {
@@ -46,7 +47,7 @@ export interface PersistedSentSignal {
   strategy: string;
   timeframe: string;
   dataSource: string;
-  status: 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'SUPERSEDED' | 'AMBIGUOUS' | 'REJECTED';
+  status: 'WAITING_ENTRY' | 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'SUPERSEDED' | 'AMBIGUOUS' | 'REJECTED';
   tp1Status?: 'PENDING' | 'HIT';
   tp2Status?: 'PENDING' | 'HIT';
   tp3Status?: 'PENDING' | 'HIT';
@@ -60,12 +61,20 @@ export interface PersistedSentSignal {
   tp3HitPrice?: number;
   stopLossHitPrice?: number;
   timestamp: number;
+  expiresAt?: number;
   notificationSent: boolean;
   notificationTimestamp: number;
   date: string;
   estimatedWinRate?: number;
   aiAssessment?: string;
   entryHitTimestamp?: string | null;
+  displayPrice?: number;
+  bid?: number;
+  ask?: number;
+  executionSide?: 'ASK' | 'BID';
+  executionPrice?: number;
+  spread?: number;
+  entryTriggerTimestamp?: string | null;
   tp1HitTimestamp?: number;
   tp2HitTimestamp?: number;
   tp3HitTimestamp?: number;
@@ -139,7 +148,7 @@ export class ScannerPersistence {
     capState: {
       date: new Date().toISOString().split('T')[0],
       dailySignalCount: 0,
-      dailySignalCap: 5,
+      dailySignalCap: serverConfig.getConfig().thresholds.dailySignalCap,
       lastScanTime: 0,
     },
     sentSignals: [],
@@ -200,7 +209,7 @@ export class ScannerPersistence {
       this.localData.capState = {
         date: today,
         dailySignalCount: 0,
-        dailySignalCap: this.localData.capState.dailySignalCap || 5,
+        dailySignalCap: this.localData.capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap,
         lastScanTime: this.localData.capState.lastScanTime,
       };
       this.saveLocalData();
@@ -399,8 +408,9 @@ export class ScannerPersistence {
       strategy: signal.strategy,
       timeframe: signal.timeframe,
       dataSource: signal.dataSource,
-      status: 'ACTIVE',
+      status: signal.status || 'WAITING_ENTRY',
       timestamp: signal.timestamp || now,
+      expiresAt: signal.expiresAt || ((signal.timestamp || now) + serverConfig.getConfig().signalExpirationMs),
       notificationSent: true,
       notificationTimestamp: now,
       date: today,
@@ -419,6 +429,31 @@ export class ScannerPersistence {
         await firestore.collection(FIRESTORE_SIGNALS_COL).doc(persisted.id).set(persisted);
       } catch (err) {
         logger.warn('[ScannerPersistence] Firestore recordSentSignal failed:', { error: String(err) });
+      }
+    }
+  }
+
+  /**
+   * Clears/deletes all sent signals.
+   */
+  static async clearSentSignals(): Promise<void> {
+    this.init();
+    this.localData.sentSignals = [];
+    this.saveLocalData();
+
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      try {
+        const query = await firestore.collection(FIRESTORE_SIGNALS_COL).get();
+        if (!query.empty) {
+          const batch = firestore.batch();
+          query.docs.forEach((doc) => {
+            batch.delete(doc.ref);
+          });
+          await batch.commit();
+        }
+      } catch (err) {
+        logger.warn('[ScannerPersistence] Firestore clearSentSignals failed:', { error: String(err) });
       }
     }
   }
@@ -742,7 +777,7 @@ export class ScannerPersistence {
         }
 
         // Also query other potential non-terminal progressive statuses to ensure active monitoring of progressive levels
-        const activeOrProgressive = ['TP1_HIT', 'TP2_HIT'];
+        const activeOrProgressive = ['TP1_HIT', 'TP2_HIT', 'WAITING_ENTRY'];
         for (const stat of activeOrProgressive) {
           const q = await firestore
             .collection(FIRESTORE_SIGNALS_COL)
@@ -756,7 +791,7 @@ export class ScannerPersistence {
         // Merge with local signals
         const map = new Map<string, PersistedSentSignal>();
         const localActive = this.localData.sentSignals.filter((s) => 
-          s.status === 'ACTIVE' || s.status === 'TP1_HIT' || s.status === 'TP2_HIT'
+          s.status === 'ACTIVE' || s.status === 'TP1_HIT' || s.status === 'TP2_HIT' || s.status === 'WAITING_ENTRY'
         );
         for (const s of localActive) {
           map.set(s.id, s);
@@ -771,7 +806,7 @@ export class ScannerPersistence {
     }
 
     return this.localData.sentSignals
-      .filter((s) => s.status === 'ACTIVE' || s.status === 'TP1_HIT' || s.status === 'TP2_HIT')
+      .filter((s) => s.status === 'ACTIVE' || s.status === 'TP1_HIT' || s.status === 'TP2_HIT' || s.status === 'WAITING_ENTRY')
       .sort((a, b) => b.timestamp - a.timestamp);
   }
 

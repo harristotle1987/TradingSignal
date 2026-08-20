@@ -155,6 +155,7 @@ console.log('\n--- TEST 4: Confidence Modifier & Safety Invariants ---');
     dataSource: 'Bitget',
     status: 'ACTIVE',
     score: 80,
+    marketRegime: 'STRONG_TREND',
     relativeStrengthScore: 92,
     relativeRank: 1,
     assetClassRank: 'SOLUSDT #1 of 3 CRYPTO',
@@ -166,6 +167,7 @@ console.log('\n--- TEST 4: Confidence Modifier & Safety Invariants ---');
     scoring: {
       isValid: true,
       score: 80,
+      marketRegime: 'STRONG_TREND',
       direction: 'BUY',
       timeframesAligned: 3,
       confluenceReasons: [],

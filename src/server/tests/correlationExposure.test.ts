@@ -129,6 +129,7 @@ console.log('\n--- TEST 4: TradeRankingEngine Composite Score Integration ---');
     dataSource: 'Bitget',
     status: 'ACTIVE',
     score: 85,
+    marketRegime: 'STRONG_TREND',
     correlationScore: 88,
     correlationCluster: 'CRYPTO_RISK_CLUSTER',
     clusterExposure: 2,

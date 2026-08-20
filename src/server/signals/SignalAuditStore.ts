@@ -27,16 +27,21 @@ export interface SignalAuditRecord {
   direction?: 'BUY' | 'SELL';
   timeframe: string;
   primaryStrategy: string;
+  strategy?: string;
   passedStrategies: string[];
   failedStrategies: string[];
   marketRegime: string;
+  regime?: string;
+  threshold?: number;
+  actualScore?: number;
+  marginAboveThreshold?: number;
   atr: number;
   dataFreshnessSeconds: number;
   providerAgreement: boolean;
   providerAgreementPct?: number;
   expectedRR: number;
   score: number;
-  status: 'ACCEPTED' | 'REJECTED';
+  status: 'ACCEPTED' | 'REJECTED' | 'CANDIDATE' | 'WATCHING';
   rejectionReason: string | null;
   fingerprint: string;
 }

@@ -35,6 +35,9 @@ import { SignalLogger } from './SignalLogger.js';
 import { CooldownManager } from './CooldownManager.js';
 import { SignalFingerprint } from './SignalFingerprint.js';
 import { SignalAuditStore } from './SignalAuditStore.js';
+import { OpportunityFunnelStore } from './Gate26OpportunityFunnel.js';
+import { Gate35SignalFunnelAnalytics } from './Gate35SignalFunnelAnalytics.js';
+import { Gate36ConfigurableSignalFrequency } from './Gate36ConfigurableSignalFrequency.js';
 import {
   ScannerPersistence,
   DailyCapState,
@@ -44,6 +47,7 @@ import {
 } from './ScannerPersistence.js';
 import { PushNotificationService } from '../notifications/PushNotificationService.js';
 import { logger } from '../logger.js';
+import { serverConfig } from '../config.js';
 import { TradingSignal, SignalDirection } from '../../types/index.js';
 
 export interface ScannerSettings {
@@ -121,7 +125,7 @@ export class HourlyScannerService {
     if (!settings.enabled) return;
     if (this.isScanning) return;
 
-    const capState = await ScannerPersistence.getCapState(5);
+    const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
     const now = Date.now();
     const validIntervals = [15, 30, 45, 60];
     const intervalMinutes = validIntervals.includes(Number(settings.intervalMinutes))
@@ -154,7 +158,7 @@ export class HourlyScannerService {
    */
   async triggerAutomatedScan(isExternal = true): Promise<ManualScanResult> {
     const settings = ScannerPersistence.getSettings();
-    const capState = await ScannerPersistence.getCapState(5);
+    const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
     const now = Date.now();
 
     if (!settings.enabled) {
@@ -171,7 +175,7 @@ export class HourlyScannerService {
         signalsFound: 0,
         qualifiedSetups: [],
         rejectedCount: 0,
-        rejectionReasons: ['Automated scanner is disabled in settings.'],
+        rejectionReasons: ['REJECTED: SCANNER_DISABLED. Automated scanner is disabled in settings.'],
         capState,
       };
     }
@@ -203,7 +207,7 @@ export class HourlyScannerService {
         signalsFound: 0,
         qualifiedSetups: [],
         rejectedCount: 0,
-        rejectionReasons: [`Interval not due. Configured: ${intervalMinutes}m. Time elapsed: ${Math.floor(timeElapsed / 60000)}m.`],
+        rejectionReasons: [`REJECTED: INTERVAL_NOT_DUE. Interval not due. Configured: ${intervalMinutes}m. Time elapsed: ${Math.floor(timeElapsed / 60000)}m.`],
         capState,
       };
     }
@@ -231,12 +235,12 @@ export class HourlyScannerService {
     const lockResult = await ScannerPersistence.tryAcquireLock(instanceId);
 
     if (!lockResult.acquired) {
-      const capState = await ScannerPersistence.getCapState(5);
+      const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
       logger.warn(`[Hourly Scanner] Concurrency lock check: ${lockResult.reason || 'Scan already running'}`);
       return {
         success: false,
         status: 'SCAN_ALREADY_RUNNING',
-        message: 'SCAN_ALREADY_RUNNING: Another scan cycle is currently in progress.',
+        message: 'REJECTED: SCAN_ALREADY_RUNNING. Another scan cycle is currently in progress.',
         timestamp: Date.now(),
         lastScanTime: capState.lastScanTime,
         candidatesEvaluated: 0,
@@ -245,7 +249,7 @@ export class HourlyScannerService {
         signalsFound: 0,
         qualifiedSetups: [],
         rejectedCount: 0,
-        rejectionReasons: ['SCAN_ALREADY_RUNNING: Concurrent scan execution prevented.'],
+        rejectionReasons: ['REJECTED: SCAN_ALREADY_RUNNING. Concurrent scan execution prevented.'],
         capState,
       };
     }
@@ -260,16 +264,22 @@ export class HourlyScannerService {
     logger.info('================================================================');
 
     try {
-      // 0. Evaluate active signals lifecycle (TP/SL/Expiration hits)
+      // 0. Evaluate active signals lifecycle (TP/SL/Expiration hits) and Adaptive Opportunity Funnel
       const lifecycleEval = await SignalLifecycleManager.evaluateActiveSignals();
       if (lifecycleEval.evaluatedCount > 0) {
         logger.info(`[Hourly Scanner] Lifecycle evaluation complete: ${lifecycleEval.evaluatedCount} active signals evaluated. TP Hits: ${lifecycleEval.tpHitCount}, SL Hits: ${lifecycleEval.slHitCount}, Expired: ${lifecycleEval.expiredCount}.`);
       }
 
+      // Evaluate Opportunity Funnel items (Gate 26)
+      const funnelReport = OpportunityFunnelStore.evaluateAll();
+      if (funnelReport.totalActive > 0) {
+        logger.info(`[Hourly Scanner] Opportunity Funnel evaluation: ${funnelReport.totalActive} active tracked candidates (${funnelReport.watchingCount} watching, ${funnelReport.qualifiedCount} qualified, ${funnelReport.promotedCount} promoted).`);
+      }
+
       // 1. Check current Daily Cap state
-      const capState = await ScannerPersistence.getCapState(5);
+      const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
       const currentDailyCount = capState.dailySignalCount;
-      const dailyCap = capState.dailySignalCap || 5;
+      const dailyCap = capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap;
       const settings = ScannerPersistence.getSettings();
 
       if (currentDailyCount >= dailyCap) {
@@ -278,7 +288,7 @@ export class HourlyScannerService {
         return {
           success: true,
           status: 'SKIPPED_CAP_REACHED',
-          message: `Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving risk limits.`,
+          message: `REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving risk limits.`,
           timestamp: Date.now(),
           lastScanTime: scanStartTime,
           candidatesEvaluated: 0,
@@ -287,7 +297,7 @@ export class HourlyScannerService {
           signalsFound: 0,
           qualifiedSetups: [],
           rejectedCount: 0,
-          rejectionReasons: [`Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving portfolio risk limits.`],
+          rejectionReasons: [`REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving portfolio risk limits.`],
           capState,
         };
       }
@@ -323,6 +333,22 @@ export class HourlyScannerService {
 
       logger.info(`[Hourly Scanner] Raw candidate setups gathered: ${rawCandidates.length}. Applying mandatory qualification filters...`);
 
+      // GATE 36: Separate candidate count tracking (candidates do NOT consume signal slots)
+      Gate36ConfigurableSignalFrequency.recordCandidateCount(rawCandidates.length);
+
+      // Log raw candidates entering funnel
+      for (const sig of rawCandidates) {
+        Gate35SignalFunnelAnalytics.recordCandidate({
+          symbol: sig.symbol,
+          direction: sig.direction,
+          stage: 'STAGE_2',
+          score: sig.score ?? sig.confidenceScore ?? 0,
+          regime: (sig as any).marketRegime || 'UNKNOWN',
+          strategy: sig.strategy || 'MULTI_STRATEGY',
+        });
+      }
+
+      const thresholds = serverConfig.getConfig().thresholds;
       // 3. Stage A: Mandatory Condition Hurdle
       const qualifiedByQuality: TradingSignal[] = [];
       for (const sig of rawCandidates) {
@@ -330,68 +356,122 @@ export class HourlyScannerService {
         const winRate = sig.estimatedWinRate ?? 0;
         const rr = sig.riskRewardRatio ?? 0;
 
-        // Condition 1: Score >= 75
-        if (score < 75) {
+        // Condition 1: Score >= threshold
+        if (score < thresholds.signalThreshold) {
+          const reason = `REJECTED: SCORE_BELOW_THRESHOLD. Score (${score}/100) below mandatory ${thresholds.signalThreshold} hurdle (85+ = BEST TRADE, 75-84 = HIGH QUALITY).`;
           rejectedDuringScan.push({
             symbol: sig.symbol,
             direction: sig.direction,
             score,
-            reason: `Score (${score}/100) below mandatory 75 hurdle (85+ = BEST TRADE, 75-84 = HIGH QUALITY).`,
+            reason,
+          });
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            stage: 'GATE_4',
+            score,
+            strategy: sig.strategy,
+            rejectionReason: reason,
           });
           continue;
         }
 
-        // Condition 2: Estimated win rate > 30%
-        if (winRate <= 30) {
+        // Condition 2: Estimated win rate > threshold
+        if (winRate <= thresholds.minimumWinProbability) {
+          const reason = `REJECTED: WIN_RATE_BELOW_THRESHOLD. Estimated win-rate (${winRate}%) <= mandatory ${thresholds.minimumWinProbability}% threshold.`;
           rejectedDuringScan.push({
             symbol: sig.symbol,
             direction: sig.direction,
             score,
-            reason: `Estimated win-rate (${winRate}%) below mandatory >30% threshold.`,
+            reason,
+          });
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            stage: 'GATE_4',
+            score,
+            strategy: sig.strategy,
+            rejectionReason: reason,
           });
           continue;
         }
 
-        // Condition 3: Minimum 1:2 (2.0:1) Risk/Reward ratio
-        if (rr < 2.0) {
+        // Condition 3: Minimum Risk/Reward ratio
+        if (rr < thresholds.minimumNetRR) {
+          const reason = `REJECTED: NET_RR_BELOW_THRESHOLD. Risk/Reward ratio (${rr}:1) below mandatory ${thresholds.minimumNetRR}:1 minimum.`;
           rejectedDuringScan.push({
             symbol: sig.symbol,
             direction: sig.direction,
             score,
-            reason: `Risk/Reward ratio (${rr}:1) below mandatory 2.0:1 minimum.`,
+            reason,
+          });
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            stage: 'GATE_9',
+            score,
+            strategy: sig.strategy,
+            rejectionReason: reason,
           });
           continue;
         }
 
         // Condition 4: Valid live provider price & status
         if (sig.status !== 'ACTIVE' || sig.validationReason === 'MARKET_DATA_UNAVAILABLE' || sig.validationReason === 'STALE_DATA') {
+          const reason = `REJECTED: DATA_STALE. Market data state is ${sig.status} (${sig.validationReason || 'Provider unverified'}). Stale or synthetic data rejected.`;
           rejectedDuringScan.push({
             symbol: sig.symbol,
             direction: sig.direction,
             score,
-            reason: `Market data state is ${sig.status} (${sig.validationReason || 'Provider unverified'}). Stale or synthetic data rejected.`,
+            reason,
+          });
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            stage: 'GATE_0',
+            score,
+            strategy: sig.strategy,
+            rejectionReason: reason,
           });
           continue;
         }
 
         // Condition 5: Valid structural stop loss and take profit
         if (sig.stopLoss === sig.entryPrice || sig.takeProfit === sig.entryPrice) {
+          const reason = `REJECTED: INVALID_SL_TP. Invalid price boundaries: StopLoss or TakeProfit equals Entry price.`;
           rejectedDuringScan.push({
             symbol: sig.symbol,
             direction: sig.direction,
             score,
-            reason: `Invalid price boundaries: StopLoss or TakeProfit equals Entry price.`,
+            reason,
+          });
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            stage: 'GATE_8',
+            score,
+            strategy: sig.strategy,
+            rejectionReason: reason,
           });
           continue;
         }
 
         // Condition 6: Execution friction buffer check
-        if (sig.estimatedFriction && sig.estimatedFriction.netRiskRewardRatio < 1.8) {
+        if (sig.estimatedFriction && sig.estimatedFriction.netRiskRewardRatio < thresholds.minimumRR) {
+          const reason = `REJECTED: NET_RR_BELOW_THRESHOLD. Net R:R after spread/slippage friction (${sig.estimatedFriction.netRiskRewardRatio.toFixed(2)}:1) is degraded below ${thresholds.minimumRR}:1.`;
           rejectedDuringScan.push({
             symbol: sig.symbol,
             direction: sig.direction,
             score,
-            reason: `Net R:R after spread/slippage friction (${sig.estimatedFriction.netRiskRewardRatio.toFixed(2)}:1) is degraded below 1.8.`,
+            reason,
+          });
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            stage: 'GATE_9',
+            score,
+            strategy: sig.strategy,
+            rejectionReason: reason,
           });
           continue;
         }
@@ -433,7 +513,7 @@ export class HourlyScannerService {
               symbol: sig.symbol,
               direction: sig.direction,
               score: currentScore,
-              reason: `Duplicate setup: ${sig.symbol} ${sig.direction} already sent today (Score: ${prevScore}, R:R: ${prevRR}:1). No material improvement detected.`,
+              reason: `REJECTED: DUPLICATE_FINGERPRINT. Duplicate setup: ${sig.symbol} ${sig.direction} already sent today (Score: ${prevScore}, R:R: ${prevRR}:1). No material improvement detected.`,
             });
             continue;
           }
@@ -464,6 +544,27 @@ export class HourlyScannerService {
         const cluster = TradeRankingEngine.getAssetCluster(sig.symbol);
         const score = sig.score ?? sig.confidenceScore ?? 0;
 
+        // GATE 36: Check correlation cluster allocation limit
+        const clusterCheck = await Gate36ConfigurableSignalFrequency.evaluateClusterAllocation(sig.symbol);
+        if (!clusterCheck.allowed) {
+          const reason = clusterCheck.reason || `REJECTED: CORRELATION_CLUSTER_ALLOCATION_FULL. Cluster [${clusterCheck.cluster}] reached daily cluster allocation limit.`;
+          rejectedDuringScan.push({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            score,
+            reason,
+          });
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            stage: 'RANKING',
+            score,
+            strategy: sig.strategy,
+            rejectionReason: reason,
+          });
+          continue;
+        }
+
         if (cluster) {
           const clusterKey = `${cluster}_${sig.direction}`;
 
@@ -473,7 +574,7 @@ export class HourlyScannerService {
               symbol: sig.symbol,
               direction: sig.direction,
               score,
-              reason: `Correlated exposure: Risk cluster [${cluster}] (${sig.direction}) already occupied by higher-scoring setup in this scan cycle.`,
+              reason: `REJECTED: CORRELATION_EXPOSURE. Correlated exposure: Risk cluster [${cluster}] (${sig.direction}) already occupied by higher-scoring setup in this scan cycle.`,
             });
             continue;
           }
@@ -489,7 +590,7 @@ export class HourlyScannerService {
                 symbol: sig.symbol,
                 direction: sig.direction,
                 score,
-                reason: `Correlated exposure: Active setup for ${priorActive.symbol} (${priorActive.score}/100) already covers cluster [${cluster}]. Preserving daily cap for diversified opportunities.`,
+                reason: `REJECTED: CORRELATION_EXPOSURE. Correlated exposure: Active setup for ${priorActive.symbol} (${priorActive.score}/100) already covers cluster [${cluster}]. Preserving daily cap for diversified opportunities.`,
               });
               continue;
             }
@@ -508,11 +609,20 @@ export class HourlyScannerService {
       const selectedSetups: TradingSignal[] = [];
       for (const sig of qualifiedUncorrelated) {
         if (selectedSetups.length >= remainingAllowance) {
+          const reason = `REJECTED: DAILY_CAP_REACHED. Daily automated notification cap (5/day) reached. Remaining slots full.`;
           rejectedDuringScan.push({
             symbol: sig.symbol,
             direction: sig.direction,
             score: sig.score ?? sig.confidenceScore,
-            reason: `Daily automated notification cap (5/day) reached. Remaining slots full.`,
+            reason,
+          });
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            stage: 'RANKING',
+            score: sig.score ?? sig.confidenceScore,
+            strategy: sig.strategy,
+            rejectionReason: reason,
           });
           continue;
         }
@@ -548,6 +658,18 @@ export class HourlyScannerService {
         // Record sent signal
         await ScannerPersistence.recordSentSignal(sig);
         await SignalLogger.logSignal(sig, 'TREND');
+
+        // GATE 36: Record notification count
+        Gate36ConfigurableSignalFrequency.recordNotificationCount(1);
+
+        // Record Funnel Analytics Final Signal
+        Gate35SignalFunnelAnalytics.recordCandidate({
+          symbol: sig.symbol,
+          direction: sig.direction,
+          stage: 'FINAL_SIGNAL',
+          score: sig.score ?? sig.confidenceScore ?? 80,
+          strategy: sig.strategy,
+        });
 
         // Record Fingerprint, Cooldown, and Accepted Audit Explanation
         const fp = SignalFingerprint.recordFingerprint({
@@ -653,7 +775,7 @@ export class HourlyScannerService {
       // 10. Update last scan timestamp
       await ScannerPersistence.updateLastScanTime(Date.now());
 
-      const finalCapState = await ScannerPersistence.getCapState(5);
+      const finalCapState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
       logger.info(`================================================================`);
       logger.info(`[Hourly Scanner] Scan cycle complete. Dispatched ${dispatchedCount} new setups. Today's total: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`);
       logger.info(`================================================================`);
@@ -682,12 +804,12 @@ export class HourlyScannerService {
       };
     } catch (err) {
       logger.error('[Hourly Scanner] Critical failure during scan execution:', { error: String(err) });
-      const capState = await ScannerPersistence.getCapState(5);
+      const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
       const errMsg = err instanceof Error ? err.message : String(err);
       return {
         success: false,
         status: 'ERROR',
-        message: `Scan execution error: ${errMsg}`,
+        message: `REJECTED: SCAN_ERROR. Scan execution error: ${errMsg}`,
         timestamp: Date.now(),
         lastScanTime: capState.lastScanTime,
         candidatesEvaluated: 0,
@@ -696,7 +818,7 @@ export class HourlyScannerService {
         signalsFound: 0,
         qualifiedSetups: [],
         rejectedCount: 0,
-        rejectionReasons: [`Scan execution error: ${errMsg}`],
+        rejectionReasons: [`REJECTED: SCAN_ERROR. Scan execution error: ${errMsg}`],
         capState,
       };
     } finally {
@@ -717,7 +839,7 @@ export class HourlyScannerService {
       recentRejected: PersistedRejectedCandidate[];
     }
   > {
-    const capState = await ScannerPersistence.getCapState(5);
+    const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
     const settings = ScannerPersistence.getSettings();
     const sentSignalsToday = await ScannerPersistence.getSentSignalsToday();
     const recentNotifications = await ScannerPersistence.getNotificationHistory(10);
@@ -788,7 +910,7 @@ export class HourlyScannerService {
     rejectedToday: PersistedRejectedCandidate[];
     capState: DailyCapState;
   }> {
-    const capState = await ScannerPersistence.getCapState(5);
+    const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
     const notifications = await ScannerPersistence.getNotificationHistory(30);
     const sentSignalsToday = await ScannerPersistence.getSentSignalsToday();
     const rejectedToday = await ScannerPersistence.getRejectedCandidatesToday(30);

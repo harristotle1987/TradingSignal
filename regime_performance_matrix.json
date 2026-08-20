@@ -1,5 +1,5 @@
 {
-  "lastUpdated": 1787146537710,
+  "lastUpdated": 1787242437896,
   "trades": [
     {
       "tradeId": "test_tiny_0",
@@ -14,7 +14,7 @@
       "rMultiple": 2,
       "mae": 0.3,
       "mfe": 2.1,
-      "timestamp": 1787146537702
+      "timestamp": 1787242437889
     },
     {
       "tradeId": "test_tiny_1",
@@ -29,7 +29,7 @@
       "rMultiple": 2,
       "mae": 0.3,
       "mfe": 2.1,
-      "timestamp": 1787142937702
+      "timestamp": 1787238837889
     },
     {
       "tradeId": "test_tiny_2",
@@ -44,7 +44,7 @@
       "rMultiple": 2,
       "mae": 0.3,
       "mfe": 2.1,
-      "timestamp": 1787139337702
+      "timestamp": 1787235237889
     },
     {
       "tradeId": "test_tiny_3",
@@ -59,7 +59,7 @@
       "rMultiple": 2,
       "mae": 0.3,
       "mfe": 2.1,
-      "timestamp": 1787135737702
+      "timestamp": 1787231637889
     },
     {
       "tradeId": "test_tiny_4",
@@ -74,7 +74,7 @@
       "rMultiple": -1,
       "mae": 0.3,
       "mfe": 2.1,
-      "timestamp": 1787132137702
+      "timestamp": 1787228037889
     },
     {
       "tradeId": "test_sig_0",
@@ -89,7 +89,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787146537703
+      "timestamp": 1787242437890
     },
     {
       "tradeId": "test_sig_1",
@@ -104,7 +104,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787144737703
+      "timestamp": 1787240637890
     },
     {
       "tradeId": "test_sig_2",
@@ -119,7 +119,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787142937703
+      "timestamp": 1787238837890
     },
     {
       "tradeId": "test_sig_3",
@@ -134,7 +134,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787141137703
+      "timestamp": 1787237037890
     },
     {
       "tradeId": "test_sig_4",
@@ -149,7 +149,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787139337704
+      "timestamp": 1787235237890
     },
     {
       "tradeId": "test_sig_5",
@@ -164,7 +164,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787137537704
+      "timestamp": 1787233437891
     },
     {
       "tradeId": "test_sig_6",
@@ -179,7 +179,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787135737704
+      "timestamp": 1787231637891
     },
     {
       "tradeId": "test_sig_7",
@@ -194,7 +194,7 @@
       "rMultiple": -1,
       "mae": 0.9,
       "mfe": 0.4,
-      "timestamp": 1787133937704
+      "timestamp": 1787229837891
     },
     {
       "tradeId": "test_sig_8",
@@ -209,7 +209,7 @@
       "rMultiple": -1,
       "mae": 0.9,
       "mfe": 0.4,
-      "timestamp": 1787132137704
+      "timestamp": 1787228037891
     },
     {
       "tradeId": "test_sig_9",
@@ -224,7 +224,7 @@
       "rMultiple": -1,
       "mae": 0.9,
       "mfe": 0.4,
-      "timestamp": 1787130337705
+      "timestamp": 1787226237891
     },
     {
       "tradeId": "test_sig_10",
@@ -239,7 +239,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787128537705
+      "timestamp": 1787224437891
     },
     {
       "tradeId": "test_sig_11",
@@ -254,7 +254,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787126737705
+      "timestamp": 1787222637891
     },
     {
       "tradeId": "test_sig_12",
@@ -269,7 +269,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787124937705
+      "timestamp": 1787220837891
     },
     {
       "tradeId": "test_sig_13",
@@ -284,7 +284,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787123137705
+      "timestamp": 1787219037891
     },
     {
       "tradeId": "test_sig_14",
@@ -299,7 +299,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787121337705
+      "timestamp": 1787217237891
     },
     {
       "tradeId": "test_sig_15",
@@ -314,7 +314,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787119537705
+      "timestamp": 1787215437892
     },
     {
       "tradeId": "test_sig_16",
@@ -329,7 +329,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787117737705
+      "timestamp": 1787213637892
     },
     {
       "tradeId": "test_sig_17",
@@ -344,7 +344,7 @@
       "rMultiple": -1,
       "mae": 0.9,
       "mfe": 0.4,
-      "timestamp": 1787115937706
+      "timestamp": 1787211837892
     },
     {
       "tradeId": "test_sig_18",
@@ -359,7 +359,7 @@
       "rMultiple": -1,
       "mae": 0.9,
       "mfe": 0.4,
-      "timestamp": 1787114137706
+      "timestamp": 1787210037892
     },
     {
       "tradeId": "test_sig_19",
@@ -374,7 +374,7 @@
       "rMultiple": -1,
       "mae": 0.9,
       "mfe": 0.4,
-      "timestamp": 1787112337706
+      "timestamp": 1787208237892
     },
     {
       "tradeId": "test_sig_20",
@@ -389,7 +389,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787110537706
+      "timestamp": 1787206437892
     },
     {
       "tradeId": "test_sig_21",
@@ -404,7 +404,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787108737706
+      "timestamp": 1787204637892
     },
     {
       "tradeId": "test_sig_22",
@@ -419,7 +419,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787106937706
+      "timestamp": 1787202837892
     },
     {
       "tradeId": "test_sig_23",
@@ -434,7 +434,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787105137706
+      "timestamp": 1787201037893
     },
     {
       "tradeId": "test_sig_24",
@@ -449,7 +449,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787103337706
+      "timestamp": 1787199237893
     },
     {
       "tradeId": "test_sig_25",
@@ -464,7 +464,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787101537706
+      "timestamp": 1787197437893
     },
     {
       "tradeId": "test_sig_26",
@@ -479,7 +479,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787099737707
+      "timestamp": 1787195637893
     },
     {
       "tradeId": "test_sig_27",
@@ -494,7 +494,7 @@
       "rMultiple": -1,
       "mae": 0.9,
       "mfe": 0.4,
-      "timestamp": 1787097937707
+      "timestamp": 1787193837893
     },
     {
       "tradeId": "test_sig_28",
@@ -509,7 +509,7 @@
       "rMultiple": -1,
       "mae": 0.9,
       "mfe": 0.4,
-      "timestamp": 1787096137707
+      "timestamp": 1787192037893
     },
     {
       "tradeId": "test_sig_29",
@@ -524,7 +524,7 @@
       "rMultiple": -1,
       "mae": 0.9,
       "mfe": 0.4,
-      "timestamp": 1787094337707
+      "timestamp": 1787190237893
     },
     {
       "tradeId": "test_sig_30",
@@ -539,7 +539,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787092537707
+      "timestamp": 1787188437893
     },
     {
       "tradeId": "test_sig_31",
@@ -554,7 +554,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787090737707
+      "timestamp": 1787186637894
     },
     {
       "tradeId": "test_sig_32",
@@ -569,7 +569,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787088937707
+      "timestamp": 1787184837894
     },
     {
       "tradeId": "test_sig_33",
@@ -584,7 +584,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787087137707
+      "timestamp": 1787183037894
     },
     {
       "tradeId": "test_sig_34",
@@ -599,7 +599,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787085337708
+      "timestamp": 1787181237894
     },
     {
       "tradeId": "test_sig_35",
@@ -614,7 +614,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787083537708
+      "timestamp": 1787179437894
     },
     {
       "tradeId": "test_sig_36",
@@ -629,7 +629,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787081737708
+      "timestamp": 1787177637894
     },
     {
       "tradeId": "test_sig_37",
@@ -644,7 +644,7 @@
       "rMultiple": -1,
       "mae": 0.9,
       "mfe": 0.4,
-      "timestamp": 1787079937708
+      "timestamp": 1787175837894
     },
     {
       "tradeId": "test_sig_38",
@@ -659,7 +659,7 @@
       "rMultiple": -1,
       "mae": 0.9,
       "mfe": 0.4,
-      "timestamp": 1787078137708
+      "timestamp": 1787174037894
     },
     {
       "tradeId": "test_sig_39",
@@ -674,7 +674,7 @@
       "rMultiple": -1,
       "mae": 0.9,
       "mfe": 0.4,
-      "timestamp": 1787076337708
+      "timestamp": 1787172237895
     },
     {
       "tradeId": "test_sig_40",
@@ -689,7 +689,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787074537709
+      "timestamp": 1787170437895
     },
     {
       "tradeId": "test_sig_41",
@@ -704,7 +704,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787072737709
+      "timestamp": 1787168637895
     },
     {
       "tradeId": "test_sig_42",
@@ -719,7 +719,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787070937709
+      "timestamp": 1787166837895
     },
     {
       "tradeId": "test_sig_43",
@@ -734,7 +734,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787069137709
+      "timestamp": 1787165037895
     },
     {
       "tradeId": "test_sig_44",
@@ -749,7 +749,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787067337709
+      "timestamp": 1787163237895
     },
     {
       "tradeId": "test_sig_45",
@@ -764,7 +764,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787065537710
+      "timestamp": 1787161437896
     },
     {
       "tradeId": "test_sig_46",
@@ -779,7 +779,7 @@
       "rMultiple": 2,
       "mae": 0.2,
       "mfe": 2.2,
-      "timestamp": 1787063737710
+      "timestamp": 1787159637896
     },
     {
       "tradeId": "test_sig_47",
@@ -794,7 +794,7 @@
       "rMultiple": -1,
       "mae": 0.9,
       "mfe": 0.4,
-      "timestamp": 1787061937710
+      "timestamp": 1787157837896
     },
     {
       "tradeId": "test_sig_48",
@@ -809,7 +809,7 @@
       "rMultiple": -1,
       "mae": 0.9,
       "mfe": 0.4,
-      "timestamp": 1787060137710
+      "timestamp": 1787156037896
     },
     {
       "tradeId": "test_sig_49",
@@ -824,7 +824,7 @@
       "rMultiple": -1,
       "mae": 0.9,
       "mfe": 0.4,
-      "timestamp": 1787058337710
+      "timestamp": 1787154237896
     }
   ]
 }

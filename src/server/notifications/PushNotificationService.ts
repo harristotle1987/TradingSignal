@@ -18,6 +18,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { logger } from '../logger.js';
+import { serverConfig } from '../config.js';
 import { TradingSignal } from '../../types/index.js';
 
 export interface StoredPushSubscription {
@@ -308,6 +309,7 @@ export class PushNotificationService {
       score,
       rankTier: isBestTrade ? 'BEST_TRADE' : 'HIGH_QUALITY',
       timestamp: signal.timestamp || Date.now(),
+      expiresAt: signal.expiresAt || ((signal.timestamp || Date.now()) + serverConfig.getConfig().signalExpirationMs),
       requireInteraction: true,
     });
 

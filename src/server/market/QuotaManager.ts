@@ -32,6 +32,33 @@ export class QuotaManager {
   }
 
   /**
+   * Evaluates current API budget health status for a provider:
+   * - CONSTRAINED: Provider is locked in backoff, or request count is at/above lowThreshold.
+   * - MODERATE: Request count is >= 50% of maxPerMinute.
+   * - HEALTHY: Request count is low and provider is unconstrained.
+   */
+  public getBudgetStatus(providerId: string = 'twelvedata'): 'HEALTHY' | 'MODERATE' | 'CONSTRAINED' {
+    const cleanProvider = providerId.toLowerCase();
+    const now = Date.now();
+
+    const lockedTime = this.lockedUntil.get(cleanProvider) || 0;
+    if (now < lockedTime) {
+      return 'CONSTRAINED';
+    }
+
+    this.cleanupLogs(cleanProvider, now);
+    const logs = this.requestLogs.get(cleanProvider) || [];
+    const quota = this.providerQuotas[cleanProvider] || { maxPerMinute: 10, lowThreshold: 8 };
+
+    if (logs.length >= quota.lowThreshold) {
+      return 'CONSTRAINED';
+    } else if (logs.length >= Math.floor(quota.maxPerMinute * 0.5)) {
+      return 'MODERATE';
+    }
+    return 'HEALTHY';
+  }
+
+  /**
    * Evaluates if a request should proceed or be blocked due to lock/cooldown or low quota.
    */
   public canMakeRequest(providerId: string, critical: boolean): boolean {

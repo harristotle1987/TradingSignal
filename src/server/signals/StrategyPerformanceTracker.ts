@@ -554,6 +554,41 @@ export class StrategyPerformanceTracker {
   }
 
   /**
+   * Resets the tracker to an uninitialized, empty state.
+   * Useful for testing and sandbox isolation.
+   */
+  public static clearState(): void {
+    this.state = {
+      version: 2,
+      lastUpdated: Date.now(),
+      disclaimer: PERFORMANCE_LEGAL_DISCLAIMER,
+      overall: {
+        totalTrades: 0,
+        wins: 0,
+        losses: 0,
+        breakevens: 0,
+        winRatePct: 50.0,
+        rollingWinRatePct: 50.0,
+        profitFactor: 1.5,
+        totalRealizedR: 0,
+        avgR: 0,
+        expectancyR: 0.5,
+        maxDrawdownR: 0,
+        maxLosingStreak: 0,
+        currentStreak: 0,
+      },
+      byStrategy: {},
+      byAsset: {},
+      byAssetClass: {},
+      byTimeframe: {},
+      byRegime: {},
+      byConfidenceRange: {},
+      recentTrades: [],
+    };
+    this.isInitialized = true;
+  }
+
+  /**
    * Retrieves full performance state and analytics.
    */
   static getPerformanceMetrics(): StrategyPerformanceState {

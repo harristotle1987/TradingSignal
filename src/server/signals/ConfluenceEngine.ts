@@ -8,6 +8,7 @@
 
 import { NormalizedTicker, NormalizedCandle, SignalDirection } from '../../types/index.js';
 import { TechnicalIndicators } from './TechnicalIndicators.js';
+import { serverConfig } from '../config.js';
 
 export interface ConfluenceAnalysisResult {
   hasSetup: boolean;
@@ -51,12 +52,12 @@ export class ConfluenceEngine {
       return this.createRejection(
         symbol,
         entryPrice,
-        `Market ticker data is ${ticker.status} or stale (${ticker.errorMessage || 'Stale price timestamp'})`
+        `REJECTED: DATA_STALE. Market ticker data is ${ticker.status} or stale (${ticker.errorMessage || 'Stale price timestamp'})`
       );
     }
 
     if (!entryPrice || isNaN(entryPrice) || entryPrice <= 0) {
-      return this.createRejection(symbol, 0, 'Invalid market price (price <= 0)');
+      return this.createRejection(symbol, 0, 'REJECTED: CORRUPTED_DATA. Invalid market price (price <= 0)');
     }
 
     // 2. Validate candle availability
@@ -64,7 +65,7 @@ export class ConfluenceEngine {
       return this.createRejection(
         symbol,
         entryPrice,
-        `Insufficient candle data for multi-timeframe analysis (HTF: ${htfCandles?.length || 0}, LTF: ${ltfCandles?.length || 0})`
+        `REJECTED: INSUFFICIENT_DATA. Insufficient candle data for multi-timeframe analysis (HTF: ${htfCandles?.length || 0}, LTF: ${ltfCandles?.length || 0})`
       );
     }
 
@@ -78,7 +79,7 @@ export class ConfluenceEngine {
     const htfRsiSeries = TechnicalIndicators.calculateRSI(sortedHtf, 14);
 
     if (htfEma9Series.length === 0 || htfEma21Series.length === 0 || htfRsiSeries.length === 0) {
-      return this.createRejection(symbol, entryPrice, 'Failed to compute HTF indicator series');
+      return this.createRejection(symbol, entryPrice, 'REJECTED: INDICATOR_CALC_FAILED. Failed to compute HTF indicator series');
     }
 
     const htfEma9 = htfEma9Series[htfEma9Series.length - 1];
@@ -92,7 +93,7 @@ export class ConfluenceEngine {
     const ltfMacd = TechnicalIndicators.calculateMACD(sortedLtf, 12, 26, 9);
 
     if (ltfEma9Series.length === 0 || ltfEma21Series.length === 0 || ltfRsiSeries.length === 0 || !ltfMacd) {
-      return this.createRejection(symbol, entryPrice, 'Failed to compute LTF indicator series');
+      return this.createRejection(symbol, entryPrice, 'REJECTED: INDICATOR_CALC_FAILED. Failed to compute LTF indicator series');
     }
 
     const ltfEma9 = ltfEma9Series[ltfEma9Series.length - 1];
@@ -143,7 +144,7 @@ export class ConfluenceEngine {
       return this.createRejection(
         symbol,
         entryPrice,
-        `No valid multi-timeframe confluence setup detected for ${symbol}. (HTF RSI: ${htfRsi.toFixed(1)}, LTF RSI: ${ltfRsi.toFixed(1)})`
+        `REJECTED: INSUFFICIENT_CONFLUENCE. No valid multi-timeframe confluence setup detected for ${symbol}. (HTF RSI: ${htfRsi.toFixed(1)}, LTF RSI: ${ltfRsi.toFixed(1)})`
       );
     }
 
@@ -151,7 +152,9 @@ export class ConfluenceEngine {
     // Dynamic ATR multiplier
     const minPipDistance = entryPrice < 10 ? 0.0012 : entryPrice * 0.0015;
     const slDistance = Math.max(1.5 * atr, minPipDistance);
-    const tpDistance = slDistance * 2.0;
+    
+    const thresholds = serverConfig.getConfig().thresholds;
+    const tpDistance = slDistance * thresholds.minimumNetRR;
 
     let stopLoss = 0;
     let takeProfit = 0;
@@ -166,14 +169,14 @@ export class ConfluenceEngine {
 
     const riskAmount = Math.abs(entryPrice - stopLoss);
     const rewardAmount = Math.abs(takeProfit - entryPrice);
-    const riskRewardRatio = riskAmount > 0 ? Number((rewardAmount / riskAmount).toFixed(2)) : 2.0;
+    const riskRewardRatio = riskAmount > 0 ? Number((rewardAmount / riskAmount).toFixed(2)) : thresholds.minimumNetRR;
 
     // 8. Confidence Score Calculation
     let confidence = 75;
     if (htfEma9 > htfEma21 && direction === 'BUY') confidence += 5;
     if (htfEma9 < htfEma21 && direction === 'SELL') confidence += 5;
     if (ltfRsi >= 40 && ltfRsi <= 60) confidence += 4;
-    if (riskRewardRatio >= 2.0) confidence += 4;
+    if (riskRewardRatio >= thresholds.minimumNetRR) confidence += 4;
     const confidenceScore = Math.min(92, confidence);
 
     return {

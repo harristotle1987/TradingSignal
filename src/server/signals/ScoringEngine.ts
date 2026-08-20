@@ -2,7 +2,10 @@ import { NormalizedCandle, SignalDirection } from '../../types/index.js';
 import { TechnicalIndicators } from './TechnicalIndicators.js';
 import { StrategyEngine, MarketRegime } from './StrategyEngine.js';
 import { StrategyPerformanceTracker } from './StrategyPerformanceTracker.js';
+import { Gate28ConfirmationDiversity } from './Gate28ConfirmationDiversity.js';
+import { Gate34ExecutionFrictionStressTest, FrictionStressTestResult } from './Gate34ExecutionFrictionStressTest.js';
 import { logger } from '../logger.js';
+import { serverConfig } from '../config.js';
 
 export interface ScoringFactors {
   higherTfTrendScore: number;     // 0 - 20 (4H / 1D major direction)
@@ -56,6 +59,12 @@ export interface ScoringResult {
     spreadPipsOrPoints: number;
     feeBufferPct: number;
     netRiskRewardRatio: number;
+    grossRiskRewardRatio?: number;
+    normalNetRiskRewardRatio?: number;
+    adverseNetRiskRewardRatio?: number;
+    frictionToProfitPct?: number;
+    isExecutionPassed?: boolean;
+    stressTestDetails?: FrictionStressTestResult;
   };
   hypotheticalRisk: {
     suggestedRiskAmount: number;
@@ -158,6 +167,7 @@ export class ScoringEngine {
     crossCheckAgreementPct: number
   ): ScoringResult {
     const cleanSymbol = symbol.trim().toUpperCase();
+    const thresholds = serverConfig.getConfig().thresholds;
 
     // 1. Gather available timeframe candles
     const tf15m = candlesMap['15m'] || [];
@@ -165,14 +175,14 @@ export class ScoringEngine {
 
     // Require 15m and 1h candles as primary baseline
     if (tf15m.length < 20 || tf1h.length < 20) {
-      return this.createRejection('Insufficient candle data in primary baseline (15m/1h required with min 20 candles)');
+      return this.createRejection('REJECTED: INSUFFICIENT_DATA. Insufficient candle data in primary baseline (15m/1h required with min 20 candles)');
     }
 
     // 2. Evaluate Strategy Agreement and Market Classification
     const strategyEval = StrategyEngine.evaluate(cleanSymbol, entryPrice, candlesMap);
     if (!strategyEval.hasStrongConfluence || !strategyEval.dominantDirection) {
       return this.createRejection(
-        strategyEval.rejectionReason || 'Failed strategy confluence agreement',
+        strategyEval.rejectionReason || 'REJECTED: INSUFFICIENT_STRATEGY_AGREEMENT. Failed strategy confluence agreement',
         strategyEval.marketRegime,
         strategyEval.regimeDetails
       );
@@ -216,7 +226,7 @@ export class ScoringEngine {
       atr_15m <= 0 ||
       atr_1h <= 0
     ) {
-      return this.createRejection('Failed to compute authoritative baseline technical indicators (insufficient candle depth)', marketRegime, regimeDetails);
+      return this.createRejection('REJECTED: INSUFFICIENT_DATA. Failed to compute authoritative baseline technical indicators (insufficient candle depth)', marketRegime, regimeDetails);
     }
 
     const lastEma9_15m = ema9_15m[ema9_15m.length - 1];
@@ -311,9 +321,9 @@ export class ScoringEngine {
       higherTfTrendScore = 8;
     }
 
-    if (timeframesAligned < 3) {
+    if (timeframesAligned < thresholds.minimumTimeframeAlignment) {
       return this.createRejection(
-        `Insufficient timeframe confirmation: only ${timeframesAligned}/${totalTfsEvaluated} aligned (minimum 3 required)`,
+        `REJECTED: INSUFFICIENT_TIMEFRAME_ALIGNMENT. Insufficient timeframe confirmation: only ${timeframesAligned}/${totalTfsEvaluated} aligned (minimum ${thresholds.minimumTimeframeAlignment} required)`,
         marketRegime,
         regimeDetails
       );
@@ -444,7 +454,7 @@ export class ScoringEngine {
 
     if (vm1h.isDeadMarket || vm1h.isErratic || vm1h.atrRatio < 0.45 || vm1h.atrRatio > 2.8) {
       return this.createRejection(
-        `Volatility filter rejected: ATR ratio (${vm1h.atrRatio}x) outside executable safety bounds`,
+        `REJECTED: INSUFFICIENT_ATR. Volatility filter rejected: ATR ratio (${vm1h.atrRatio}x) outside executable safety bounds`,
         marketRegime,
         regimeDetails
       );
@@ -518,6 +528,29 @@ export class ScoringEngine {
     const totalScore = Math.min(100, Math.max(0, Math.round(rawTotalScore * calibrationFactor)));
 
     // =========================================================================
+    // GATE 28: Independent Confirmation Diversity Evaluation
+    // Requires confirmations from AT LEAST 3 distinct categories
+    // =========================================================================
+    const diversityResult = Gate28ConfirmationDiversity.evaluate(confluenceReasons, {
+      htfEma9: lastEma9_1h,
+      htfEma21: lastEma21_1h,
+      htfRsi: lastRsi_1h,
+      ltfEma9: lastEma9_15m,
+      ltfEma21: lastEma21_15m,
+      ltfRsi: lastRsi_15m,
+      macd: macd_15m,
+      atr: atr_15m,
+    });
+
+    if (!diversityResult.isValid) {
+      return this.createRejection(
+        diversityResult.rejectionReason || 'REJECTED: INSUFFICIENT_CONFIRMATION_DIVERSITY. Setup fails independent confirmation diversity requirement (minimum 3 categories required)',
+        marketRegime,
+        regimeDetails
+      );
+    }
+
+    // =========================================================================
     // SL / TP Geometry & Risk/Reward Hurdle
     // =========================================================================
     const profile = this.getAssetExecutionProfile(cleanSymbol, entryPrice, atr_15m);
@@ -566,10 +599,10 @@ export class ScoringEngine {
     const calculatedReward = (Math.abs(tp1 - entryPrice) + Math.abs(tp2 - entryPrice) + Math.abs(tp3 - entryPrice)) / 3;
     const rawRR = calculatedRisk > 0 ? Number((calculatedReward / calculatedRisk).toFixed(2)) : 0;
 
-    // Minimum R:R ratio is 1.5:1
-    if (rawRR < 1.5) {
+    // Minimum R:R ratio from config
+    if (rawRR < thresholds.minimumRR) {
       return this.createRejection(
-        `Risk/Reward ratio (${rawRR}:1) is below minimum 1.5:1 requirement`,
+        `REJECTED: RR_BELOW_THRESHOLD. Risk/Reward ratio (${rawRR}:1) is below minimum ${thresholds.minimumRR}:1 requirement`,
         marketRegime,
         regimeDetails
       );
@@ -577,9 +610,9 @@ export class ScoringEngine {
 
     // Historical Win Rate & Positive Expectancy Calculation
     const estimatedWinRate = this.estimateWinRate(totalScore, rawRR, strategyEval.agreeingStrategiesCount);
-    if (estimatedWinRate <= 30) {
+    if (estimatedWinRate <= thresholds.minimumWinProbability) {
       return this.createRejection(
-        `Estimated win rate (${estimatedWinRate}%) is at or below 30% threshold`,
+        `REJECTED: WIN_RATE_BELOW_THRESHOLD. Estimated win rate (${estimatedWinRate}%) is at or below ${thresholds.minimumWinProbability}% threshold`,
         marketRegime,
         regimeDetails
       );
@@ -588,7 +621,7 @@ export class ScoringEngine {
     const expectancy = this.calculateExpectancy(estimatedWinRate, rawRR);
     if (expectancy <= 0) {
       return this.createRejection(
-        `Negative mathematical expectancy (${expectancy}R per trade). Setup discarded.`,
+        `REJECTED: NEGATIVE_EXPECTANCY. Negative mathematical expectancy (${expectancy}R per trade). Setup discarded.`,
         marketRegime,
         regimeDetails
       );
@@ -604,20 +637,26 @@ export class ScoringEngine {
     else if (totalScore >= 80) qualityTier = 'HIGH_QUALITY';
     else if (totalScore >= 70) qualityTier = 'VALID';
 
-    if (totalScore < 70) {
+    if (totalScore < thresholds.minimumScore) {
       return this.createRejection(
-        `Deterministic quality score ${totalScore}/100 is below minimum actionable threshold of 70 (90+ = EXCEPTIONAL, 80-89 = STRONG, 70-79 = VALID)`,
+        `REJECTED: SCORE_BELOW_THRESHOLD. Deterministic quality score ${totalScore}/100 is below minimum actionable threshold of ${thresholds.minimumScore} (90+ = EXCEPTIONAL, 80-89 = STRONG, 70-79 = VALID)`,
         marketRegime,
         regimeDetails
       );
     }
 
-    // Friction Hurdle
+    // Friction Hurdle & Gate 34 Execution Friction Stress Test
     const spreadUnits = profile.estimatedSpreadUnits;
     const feePct = profile.estimatedFeeBufferPct;
-    const netReward = calculatedReward - (spreadUnits / profile.pipMultiplier) - (entryPrice * feePct * 2);
-    const netRisk = calculatedRisk + (spreadUnits / profile.pipMultiplier) + (entryPrice * feePct * 2);
-    const netRR = netRisk > 0 ? Number((netReward / netRisk).toFixed(2)) : rawRR;
+
+    const stressTest = Gate34ExecutionFrictionStressTest.evaluate(
+      symbol,
+      entryPrice,
+      stopLoss,
+      takeProfit
+    );
+
+    const netRR = stressTest.normal.netRR;
 
     const targetDistance = Number((calculatedReward * profile.pipMultiplier).toFixed(1));
     const stopDistance = Number((calculatedRisk * profile.pipMultiplier).toFixed(1));
@@ -672,6 +711,12 @@ export class ScoringEngine {
         spreadPipsOrPoints: spreadUnits,
         feeBufferPct: feePct,
         netRiskRewardRatio: netRR,
+        grossRiskRewardRatio: stressTest.grossRR,
+        normalNetRiskRewardRatio: stressTest.normal.netRR,
+        adverseNetRiskRewardRatio: stressTest.adverse.netRR,
+        frictionToProfitPct: parseFloat((stressTest.normal.frictionRatio * 100).toFixed(1)),
+        isExecutionPassed: stressTest.isPassed,
+        stressTestDetails: stressTest,
       },
       hypotheticalRisk,
       passedStrategies: strategyEval.strategyResults?.filter(s => s.passed).map(s => s.name) || [],
@@ -705,6 +750,7 @@ export class ScoringEngine {
     precision: number
   ): { tp1: number; tp2: number; tp3: number } {
     const risk = Math.abs(entryPrice - stopLoss);
+    const thresholds = serverConfig.getConfig().thresholds;
     
     // Ensure we have a non-zero ATR and minPracticalTargetDistance
     const cleanAtr = atr_15m > 0 ? atr_15m : entryPrice * 0.01;
@@ -759,7 +805,7 @@ export class ScoringEngine {
       tp2 = Math.max(baseTp2, tp1 + minStep);
 
       // Verify the minimum risk/reward requirement is met for TP2 (primary target)
-      const minRequiredReward = risk * 2.0;
+      const minRequiredReward = risk * thresholds.minimumNetRR;
       if (tp2 < entryPrice + minRequiredReward) {
         tp2 = entryPrice + minRequiredReward;
       }
@@ -798,7 +844,7 @@ export class ScoringEngine {
       tp2 = Math.min(baseTp2, tp1 - minStep);
 
       // Verify the minimum risk/reward requirement is met for TP2 (primary target)
-      const minRequiredReward = risk * 2.0;
+      const minRequiredReward = risk * thresholds.minimumNetRR;
       if (tp2 > entryPrice - minRequiredReward) {
         tp2 = entryPrice - minRequiredReward;
       }

@@ -5,27 +5,39 @@
  */
 
 import { ConfluenceAnalysisResult } from './ConfluenceEngine.js';
+import { Gate33AiAssessmentPolicy, AiQualitativeClassification } from './Gate33AiAssessmentPolicy.js';
 import { serverConfig } from '../config.js';
 import { logger } from '../logger.js';
 
 export interface NvidiaEvaluationResult {
   aiAssessment: string;
-  refinedConfidence: number;
+  classification: AiQualitativeClassification;
+  refinedConfidence: number; // Strictly equals deterministic confidenceScore — NO AI +2 BOOST!
   isAiValidated: boolean;
+  neverBoostConfidenceEnforced: true;
+  neverInventProbabilityEnforced: true;
+  neverOverrideDeterministicEnforced: true;
+  neverGeneratePricesEnforced: true;
 }
 
 export class NvidiaAIService {
   /**
    * Evaluates the technical confluence result using NVIDIA AI API if configured.
+   * Enforces Gate 33: AI Assessment is Qualitative, NOT Statistical Probability.
    */
   static async evaluate(analysis: ConfluenceAnalysisResult): Promise<NvidiaEvaluationResult> {
     const apiKey = serverConfig.getNvidiaApiKey();
 
     if (!apiKey || apiKey.trim().length === 0) {
+      const policyRes = Gate33AiAssessmentPolicy.classifyResponse(
+        `NVIDIA AI Standby (API key unconfigured). Algorithmic engine calculated ${analysis.direction} signal with ${analysis.confidenceScore}% confidence.`,
+        analysis.confidenceScore,
+        false
+      );
+
       return {
-        aiAssessment: `NVIDIA AI Status: Standby (NVIDIA_API_KEY environment variable unconfigured). Algorithmic engine calculated ${analysis.direction} signal with ${analysis.confidenceScore}% confidence.`,
-        refinedConfidence: analysis.confidenceScore,
-        isAiValidated: false,
+        ...policyRes,
+        classification: 'UNAVAILABLE',
       };
     }
 
@@ -43,11 +55,11 @@ export class NvidiaAIService {
         messages: [
           {
             role: 'system',
-            content: 'You are an institutional trading risk analyst evaluating pre-calculated technical metrics. Do NOT generate prices. Respond in 1 brief sentence.',
+            content: 'You are an institutional trading risk analyst evaluating pre-calculated technical metrics. Do NOT generate prices or probabilities. Respond in 1 brief qualitative sentence.',
           },
           {
             role: 'user',
-            content: `Evaluate: Symbol: ${analysis.symbol}, Direction: ${analysis.direction}, Entry: ${analysis.entryPrice}, SL: ${analysis.stopLoss}, TP: ${analysis.takeProfit}, R:R: ${analysis.riskRewardRatio}:1, Confidence: ${analysis.confidenceScore}%. Factors: ${analysis.confluenceReasons.join(' | ')}.${metricsText}`,
+            content: `Evaluate: Symbol: ${analysis.symbol}, Direction: ${analysis.direction}, Entry: ${analysis.entryPrice}, SL: ${analysis.stopLoss}, TP: ${analysis.takeProfit}, R:R: ${analysis.riskRewardRatio}:1, Score: ${analysis.confidenceScore}%. Factors: ${analysis.confluenceReasons.join(' | ')}.${metricsText}`,
           },
         ],
         temperature: 0.1,
@@ -70,37 +82,29 @@ export class NvidiaAIService {
 
       if (!response.ok) {
         logger.info('NVIDIA AI API returned non-200 response', { status: response.status });
-        return {
-          aiAssessment: `NVIDIA AI API returned HTTP ${response.status}. Algorithmic technical confluence validated.`,
-          refinedConfidence: analysis.confidenceScore,
-          isAiValidated: false,
-        };
+        return Gate33AiAssessmentPolicy.classifyResponse(
+          `NVIDIA AI API returned HTTP ${response.status}. Algorithmic technical confluence validated.`,
+          analysis.confidenceScore,
+          false
+        );
       }
 
       const json = await response.json();
       const content = json?.choices?.[0]?.message?.content?.trim();
 
-      if (content) {
-        return {
-          aiAssessment: `NVIDIA AI Assessment: ${content}`,
-          refinedConfidence: Math.min(95, analysis.confidenceScore + 2),
-          isAiValidated: true,
-        };
-      }
-
-      return {
-        aiAssessment: 'NVIDIA AI verified setup confluence.',
-        refinedConfidence: analysis.confidenceScore,
-        isAiValidated: true,
-      };
+      return Gate33AiAssessmentPolicy.classifyResponse(
+        content || 'NVIDIA AI qualitative review completed.',
+        analysis.confidenceScore,
+        true
+      );
     } catch (err) {
       const isAbort = err instanceof Error && err.name === 'AbortError';
       logger.info('NVIDIA AI evaluation fallback', { reason: isAbort ? 'Timed out (6s)' : String(err) });
-      return {
-        aiAssessment: `NVIDIA AI ${isAbort ? 'UNAVAILABLE (Request Timed Out)' : 'Offline'}. Algorithmic confluence validated.`,
-        refinedConfidence: analysis.confidenceScore,
-        isAiValidated: false,
-      };
+      return Gate33AiAssessmentPolicy.classifyResponse(
+        `NVIDIA AI ${isAbort ? 'UNAVAILABLE (Request Timed Out)' : 'Offline'}. Algorithmic confluence validated.`,
+        analysis.confidenceScore,
+        false
+      );
     }
   }
 }

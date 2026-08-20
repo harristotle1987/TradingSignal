@@ -114,6 +114,7 @@ export type SignalValidationReason =
   | 'INVALID_ENTRY'
   | 'INVALID_SL_TP'
   | 'INSUFFICIENT_CONFLUENCE'
+  | 'HIGH_NEWS_RISK'
   | 'MARKET_DATA_UNAVAILABLE';
 
 export type RankTier = 'BEST_TRADE' | 'SECOND_BEST' | 'SUGGESTION';
@@ -142,7 +143,7 @@ export interface TradingSignal {
   timestamp: number;
   validatedAt: number;
   dataSource: string;
-  status: 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'REJECTED' | 'SUPERSEDED' | 'AMBIGUOUS';
+  status: 'WAITING_ENTRY' | 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'REJECTED' | 'SUPERSEDED' | 'AMBIGUOUS';
   tp1Status?: 'PENDING' | 'HIT';
   tp2Status?: 'PENDING' | 'HIT';
   tp3Status?: 'PENDING' | 'HIT';
@@ -228,9 +229,19 @@ export interface SignalsListResponse {
   timestamp: number;
 }
 
+export type OpportunityFunnelStage =
+  | 'WATCHING'
+  | 'CANDIDATE'
+  | 'CONFIRMED'
+  | 'WAITING_ENTRY'
+  | 'ACTIVE';
+
 export type SignalLogStatus = 
+  | 'WATCHING'
   | 'CANDIDATE' 
   | 'CONFIRMED' 
+  | 'WAITING_ENTRY'
+  | 'ENTRY_CONFIRMED'
   | 'ACTIVE' 
   | 'TP1_REACHED' 
   | 'TP2_REACHED' 
@@ -240,6 +251,51 @@ export type SignalLogStatus =
   | 'INVALIDATED' 
   | 'CLOSED' 
   | 'AMBIGUOUS';
+
+export interface OpportunityFunnelItem {
+  id: string;
+  symbol: string;
+  direction: SignalDirection;
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit: number;
+  tp1?: number;
+  tp2?: number;
+  tp3?: number;
+  riskRewardRatio: number;
+  score: number;
+  confidenceScore?: number;
+  stage: OpportunityFunnelStage;
+  status: 'WATCHING' | 'QUALIFIED' | 'PROMOTED' | 'INVALIDATED' | 'EXPIRED';
+  hardGatesPassed: boolean;
+  passedSoftConditions: string[];
+  missingSoftConditions: string[];
+  rejectionReason?: string;
+  marketRegime?: string;
+  strategy?: string;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+  promotedAt?: number;
+  invalidationReason?: string;
+  signalId?: string;
+}
+
+export interface FunnelEvaluationReport {
+  timestamp: number;
+  watchingCount: number;
+  qualifiedCount: number;
+  promotedCount: number;
+  invalidatedCount: number;
+  expiredCount: number;
+  totalActive: number;
+  thresholds: {
+    watchingThreshold: number;
+    qualifiedCandidateThreshold: number;
+    signalThreshold: number;
+  };
+  items: OpportunityFunnelItem[];
+}
 
 export interface SignalLogRecord {
   id: string;
@@ -271,6 +327,7 @@ export interface SignalLogRecord {
   isTopTrade?: boolean;
   isBestTrade?: boolean;
   entryHitTimestamp?: string | null;
+  expiresAt?: number;
   updatedAt?: number;
 }
 
@@ -303,6 +360,7 @@ export interface SignalHistoryItem {
   dataSource?: string;
   reason?: string;
   timestamp: number;
+  expiresAt?: number;
   entryHitTimestamp?: string | null;
   marketType?: 'Crypto' | 'Forex' | 'Stocks';
   marketRegime?: string;

@@ -19,7 +19,15 @@ export interface SignalOutcomeRecord {
   tp3HitTimestamp?: number;
   slHitTimestamp?: number;
   entryHitTimestamp?: string | null;
+  displayPrice?: number;
+  bid?: number;
+  ask?: number;
+  executionSide?: 'ASK' | 'BID';
+  executionPrice?: number;
+  spread?: number;
+  entryTriggerTimestamp?: string | null;
   expiredTimestamp?: number;
+  expiresAt?: number;
   finalOutcome?: 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'AMBIGUOUS';
   status: 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'AMBIGUOUS';
   tp1Status?: 'PENDING' | 'HIT';

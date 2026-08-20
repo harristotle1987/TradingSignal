@@ -35,7 +35,7 @@ async function runPerformanceTestSuite() {
   // TEST 1: Outcome Tracking & Multi-Dimensional Performance Aggregation
   // -------------------------------------------------------------------------
   console.log('--- TEST 1: Multi-Dimensional Trade Outcome & Metrics Aggregation ---');
-  StrategyPerformanceTracker.init();
+  StrategyPerformanceTracker.clearState();
 
   // Record 10 trade outcomes for strat_1 on BTCUSDT
   for (let i = 0; i < 7; i++) {

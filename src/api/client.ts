@@ -299,6 +299,38 @@ class ApiClient {
       body: JSON.stringify(payload),
     });
   }
+
+  /**
+   * Fetch active Gate 27 regime-adaptive threshold policy and recent evaluation logs
+   */
+  async getRegimeThresholds(): Promise<{
+    success: boolean;
+    policy: any;
+    recentEvaluations: any[];
+    timestamp: number;
+  }> {
+    return this.fetchJson<any>('/api/signals/regime-thresholds');
+  }
+
+  /**
+   * Evaluate adaptive threshold for a specific candidate setup
+   */
+  async evaluateRegimeThreshold(params: {
+    symbol: string;
+    actualScore: number;
+    regime?: string;
+    strategy?: string;
+    assetClass?: string;
+  }): Promise<{
+    success: boolean;
+    evaluation: any;
+    timestamp: number;
+  }> {
+    return this.fetchJson<any>('/api/signals/regime-thresholds/evaluate', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
 }
 
 export const api = new ApiClient();

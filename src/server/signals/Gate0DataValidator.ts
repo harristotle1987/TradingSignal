@@ -24,6 +24,7 @@
 
 import { NormalizedCandle, NormalizedTicker } from '../../types/index.js';
 import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
+import { Gate30DataFreshness, FreshnessPolicyResult } from './Gate30DataFreshness.js';
 import { logger } from '../logger.js';
 
 export type DataStatus = 'VALID' | 'STALE' | 'INVALID' | 'INSUFFICIENT';
@@ -46,6 +47,7 @@ export interface Gate0ValidationResult {
   identification: Gate0MarketDataIdentification;
   reasons: string[];
   validatedAt: number;
+  gate30Result?: FreshnessPolicyResult;
   secondaryPriceComparison?: {
     secondaryProvider: string;
     secondaryPrice: number;
@@ -134,55 +136,43 @@ export class Gate0DataValidator {
       };
     }
 
-    // 2. Validate Price Freshness (STALE check)
-    const dataAgeMs = now - timestamp;
+    // 2. Validate Price Freshness & Series Integrity via Gate 30 Policy Engine
+    const gate30Res = Gate30DataFreshness.evaluate({
+      symbol: cleanSymbol,
+      assetClass: assetClass as any,
+      provider: identification.provider,
+      timeframe: tf,
+      executionRequirement: 'EXECUTABLE_SIGNAL',
+      quote: params.liveTicker ? {
+        price: params.liveTicker.price,
+        timestamp: params.liveTicker.timestamp,
+        bid: params.liveTicker.bid,
+        ask: params.liveTicker.ask,
+        provider: params.liveTicker.provider,
+      } : null,
+      candles: params.candles,
+      nowMs: now,
+    });
+
+    const dataAgeMs = gate30Res.quoteAgeMs ?? (gate30Res.candleAgeMs ?? 0);
     const freshnessMs = Math.max(0, dataAgeMs);
     const freshnessSec = Number((freshnessMs / 1000).toFixed(1));
 
-    // Reject data older than 120s (if live ticker) or in future > 30s
-    if (dataAgeMs < -30000) {
-      reasons.push(`Timestamp is in future (${timestamp} vs current ${now})`);
+    if (!gate30Res.isValid) {
+      const status: DataStatus = (gate30Res.isFutureTimestamp || gate30Res.hasDuplicates || gate30Res.hasImpossibleGaps)
+        ? 'INVALID'
+        : 'STALE';
+
+      reasons.push(gate30Res.rejectionReason || 'Failed Gate 30 Asset-Aware Freshness Validation');
       return {
-        dataStatus: 'INVALID',
+        dataStatus: status,
         dataConfidence: 0,
         freshnessMs,
         freshnessSec,
         identification,
         reasons,
         validatedAt: now,
-      };
-    }
-
-    if (params.liveTicker && (dataAgeMs > 120000 || params.liveTicker.status === 'STALE' || !params.liveTicker.isFresh)) {
-      reasons.push(`Live ticker data is stale (age: ${freshnessSec}s > 120s max threshold)`);
-      return {
-        dataStatus: 'STALE',
-        dataConfidence: 0,
-        freshnessMs,
-        freshnessSec,
-        identification,
-        reasons,
-        validatedAt: now,
-      };
-    }
-
-    // Candle freshness check
-    const lastCandle = params.candles[params.candles.length - 1];
-    const candleAgeMs = now - lastCandle.timestamp;
-    const maxCandleAgeMs = this.getCandleMaxAgeMs(tf);
-
-    if (candleAgeMs > maxCandleAgeMs) {
-      const ageHours = (candleAgeMs / (3600 * 1000)).toFixed(1);
-      const maxHours = (maxCandleAgeMs / (3600 * 1000)).toFixed(1);
-      reasons.push(`Latest candle is stale for ${tf} (age: ${ageHours}h > ${maxHours}h max threshold)`);
-      return {
-        dataStatus: 'STALE',
-        dataConfidence: 15,
-        freshnessMs,
-        freshnessSec,
-        identification,
-        reasons,
-        validatedAt: now,
+        gate30Result: gate30Res,
       };
     }
 
@@ -311,7 +301,9 @@ export class Gate0DataValidator {
     }
 
     // Deduct for candle age
-    const candleAgeRatio = candleAgeMs / maxCandleAgeMs;
+    const candleAgeMs = gate30Res.candleAgeMs ?? 0;
+    const maxCandleAgeMs = gate30Res.maxAllowedCandleAgeMs;
+    const candleAgeRatio = maxCandleAgeMs > 0 ? candleAgeMs / maxCandleAgeMs : 0;
     if (candleAgeRatio > 0.5) {
       confidence -= Math.floor((candleAgeRatio - 0.5) * 40); // deduct up to 20 points
     }
@@ -332,6 +324,7 @@ export class Gate0DataValidator {
       identification,
       reasons: ['Market data verified: Valid, current, internally consistent, and matched to symbol/timeframe.'],
       validatedAt: now,
+      gate30Result: gate30Res,
       secondaryPriceComparison: secondaryComparison,
     };
   }

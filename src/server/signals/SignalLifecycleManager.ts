@@ -24,8 +24,10 @@ import { NormalizedTicker, NormalizedCandle } from '../../types/index.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
 import { ScannerPersistence, PersistedSentSignal } from './ScannerPersistence.js';
 import { StrategyPerformanceTracker } from './StrategyPerformanceTracker.js';
+import { serverConfig } from '../config.js';
 import { SignalLogger, SignalLogStatus } from './SignalLogger.js';
 import { SignalOutcomeLogger, SignalOutcomeRecord } from './SignalOutcomeLogger.js';
+import { Gate29ExecutableEntryValidation } from './Gate29ExecutableEntryValidation.js';
 import { MarketRegime } from './StrategyEngine.js';
 import { logger } from '../logger.js';
 
@@ -90,6 +92,14 @@ export interface PriceEvaluationResult {
   tp2Status: 'PENDING' | 'HIT';
   tp3Status: 'PENDING' | 'HIT';
   slStatus: 'ACTIVE' | 'HIT';
+  entryHitTimestamp?: string;
+  displayPrice?: number;
+  bid?: number;
+  ask?: number;
+  executionSide?: 'ASK' | 'BID';
+  executionPrice?: number;
+  spread?: number;
+  entryTriggerTimestamp?: string;
   tp1HitAt?: string;
   tp2HitAt?: string;
   tp3HitAt?: string;
@@ -113,7 +123,8 @@ export class SignalLifecycleManager {
     sig: PersistedSentSignal,
     price: number,
     timestampMs: number = Date.now(),
-    updateSymbol?: string
+    updateSymbol?: string,
+    quoteDetails?: { bid?: number | null; ask?: number | null }
   ): PriceEvaluationResult {
     const symbol = sig.symbol;
 
@@ -182,6 +193,103 @@ export class SignalLifecycleManager {
     const EPSILON = 1e-8;
 
     let currentStatus = sig.status;
+    let entryHitTimestamp = sig.entryHitTimestamp ?? undefined;
+
+    const statusStr = currentStatus as string;
+    let tp1Status: 'PENDING' | 'HIT' = sig.tp1Status || (statusStr === 'TP1_HIT' || statusStr === 'TP2_HIT' || statusStr === 'TP3_HIT' || statusStr === 'COMPLETED' ? 'HIT' : 'PENDING');
+    let tp2Status: 'PENDING' | 'HIT' = sig.tp2Status || (statusStr === 'TP2_HIT' || statusStr === 'TP3_HIT' || statusStr === 'COMPLETED' ? 'HIT' : 'PENDING');
+    let tp3Status: 'PENDING' | 'HIT' = sig.tp3Status || (statusStr === 'TP3_HIT' || statusStr === 'COMPLETED' ? 'HIT' : 'PENDING');
+    let slStatus: 'ACTIVE' | 'HIT' = sig.slStatus || (statusStr === 'SL_HIT' || statusStr === 'STOPPED_OUT' ? 'HIT' : 'ACTIVE');
+
+    let tp1HitAt = sig.tp1HitAt;
+    let tp2HitAt = sig.tp2HitAt;
+    let tp3HitAt = sig.tp3HitAt;
+    let stopLossHitAt = sig.stopLossHitAt;
+
+    let tp1HitPrice = sig.tp1HitPrice;
+    let tp2HitPrice = sig.tp2HitPrice;
+    let tp3HitPrice = sig.tp3HitPrice;
+    let stopLossHitPrice = sig.stopLossHitPrice;
+
+    let displayPrice = sig.displayPrice;
+    let bid = sig.bid;
+    let ask = sig.ask;
+    let executionSide = sig.executionSide;
+    let executionPrice = sig.executionPrice;
+    let spread = sig.spread;
+    let entryTriggerTimestamp = sig.entryTriggerTimestamp;
+
+    if (currentStatus === 'WAITING_ENTRY') {
+      const validationRes = Gate29ExecutableEntryValidation.validateEntry(
+        sig.direction,
+        sig.entryPrice,
+        {
+          price,
+          bid: quoteDetails?.bid,
+          ask: quoteDetails?.ask,
+          timestamp: timestampMs,
+        },
+        timestampMs
+      );
+
+      if (validationRes.isEntryConfirmed) {
+        currentStatus = 'ACTIVE';
+        displayPrice = validationRes.displayPrice;
+        bid = validationRes.bid;
+        ask = validationRes.ask;
+        executionSide = validationRes.executionSide;
+        executionPrice = validationRes.executionPrice;
+        spread = validationRes.spread;
+        entryTriggerTimestamp = validationRes.entryTriggerTimestamp;
+        entryHitTimestamp = entryHitTimestamp || entryTriggerTimestamp || hitAtIso;
+
+        sig.displayPrice = displayPrice;
+        sig.bid = bid;
+        sig.ask = ask;
+        sig.executionSide = executionSide;
+        sig.executionPrice = executionPrice;
+        sig.spread = spread;
+        sig.entryTriggerTimestamp = entryTriggerTimestamp;
+
+        logger.info(`[ENTRY_CONFIRMED] symbol=${symbol} direction=${sig.direction} execSide=${executionSide} execPrice=${executionPrice} entryPrice=${sig.entryPrice} spread=${spread} previousStatus=WAITING_ENTRY newStatus=ACTIVE timestamp=${entryHitTimestamp}`);
+
+        transitions.push({
+          nextState: 'ACTIVE',
+          eventTime: timestampMs,
+          eventSource: 'LIVE_STREAM',
+          timeframeUsed: 'tick',
+          isRecovered: false,
+        });
+      } else {
+        // If entry is not confirmed yet, do not evaluate TP/SL
+        return {
+          symbol,
+          previousStatus: sig.status,
+          newStatus: currentStatus,
+          tp1Status,
+          tp2Status,
+          tp3Status,
+          slStatus,
+          entryHitTimestamp,
+          displayPrice: validationRes.displayPrice,
+          bid: validationRes.bid,
+          ask: validationRes.ask,
+          executionSide: validationRes.executionSide,
+          executionPrice: validationRes.executionPrice,
+          spread: validationRes.spread,
+          entryTriggerTimestamp: undefined,
+          tp1HitAt,
+          tp2HitAt,
+          tp3HitAt,
+          stopLossHitAt,
+          tp1HitPrice,
+          tp2HitPrice,
+          tp3HitPrice,
+          stopLossHitPrice,
+          transitions: [],
+        };
+      }
+    }
 
     // If signal is in terminal state, do not process further updates
     if (
@@ -213,22 +321,6 @@ export class SignalLifecycleManager {
         transitions: [],
       };
     }
-
-    const statusStr = currentStatus as string;
-    let tp1Status: 'PENDING' | 'HIT' = sig.tp1Status || (statusStr === 'TP1_HIT' || statusStr === 'TP2_HIT' || statusStr === 'TP3_HIT' || statusStr === 'COMPLETED' ? 'HIT' : 'PENDING');
-    let tp2Status: 'PENDING' | 'HIT' = sig.tp2Status || (statusStr === 'TP2_HIT' || statusStr === 'TP3_HIT' || statusStr === 'COMPLETED' ? 'HIT' : 'PENDING');
-    let tp3Status: 'PENDING' | 'HIT' = sig.tp3Status || (statusStr === 'TP3_HIT' || statusStr === 'COMPLETED' ? 'HIT' : 'PENDING');
-    let slStatus: 'ACTIVE' | 'HIT' = sig.slStatus || (statusStr === 'SL_HIT' || statusStr === 'STOPPED_OUT' ? 'HIT' : 'ACTIVE');
-
-    let tp1HitAt = sig.tp1HitAt;
-    let tp2HitAt = sig.tp2HitAt;
-    let tp3HitAt = sig.tp3HitAt;
-    let stopLossHitAt = sig.stopLossHitAt;
-
-    let tp1HitPrice = sig.tp1HitPrice;
-    let tp2HitPrice = sig.tp2HitPrice;
-    let tp3HitPrice = sig.tp3HitPrice;
-    let stopLossHitPrice = sig.stopLossHitPrice;
 
     const isBuy = sig.direction === 'BUY';
     const sl = sig.stopLoss;
@@ -395,6 +487,14 @@ export class SignalLifecycleManager {
       tp2Status,
       tp3Status,
       slStatus,
+      entryHitTimestamp,
+      displayPrice,
+      bid,
+      ask,
+      executionSide,
+      executionPrice,
+      spread,
+      entryTriggerTimestamp,
       tp1HitAt,
       tp2HitAt,
       tp3HitAt,
@@ -512,14 +612,14 @@ export class SignalLifecycleManager {
           }
         }
 
-        // Check TTL Expiration (Default 24 hours) - ONLY if not yet entry triggered or progressed
+        // Check TTL Expiration - ONLY if not yet entry triggered or progressed
         const ageMs = now - sig.timestamp;
-        const maxTtlMs = 24 * 60 * 60 * 1000;
+        const maxTtlMs = serverConfig.getConfig().signalExpirationMs;
         const hasQueuedProgress = queuedTransitions.length > 0;
         const isEntryTriggered = Boolean(timestamps.entryHitTimestamp);
-        const isProgressedState = sig.status === 'TP1_HIT' || sig.status === 'TP2_HIT' || sig.status === 'TP3_HIT' || sig.status === 'SL_HIT' || sig.status === 'STOPPED_OUT' || sig.status === 'COMPLETED';
+        const isProgressedState = currentState === 'ACTIVE' || currentState === 'TP1_HIT' || currentState === 'TP2_HIT' || currentState === 'TP3_HIT' || currentState === 'SL_HIT' || currentState === 'STOPPED_OUT' || currentState === 'COMPLETED';
 
-        if (ageMs > maxTtlMs && !isEntryTriggered && !hasQueuedProgress && !isProgressedState) {
+        if (ageMs >= maxTtlMs && !isEntryTriggered && !hasQueuedProgress && !isProgressedState) {
           logger.info(`[SignalLifecycle] Signal ${sig.id} (${sig.symbol}) reached TTL expiration (${(ageMs / 3600000).toFixed(1)}h) without entry trigger.`);
           await this.transitionSignalProgressive(sig, {
             nextState: 'EXPIRED',
@@ -648,6 +748,13 @@ export class SignalLifecycleManager {
     candles: NormalizedCandle[],
     timestamps: {
       entryHitTimestamp?: string | null;
+      displayPrice?: number;
+      bid?: number;
+      ask?: number;
+      executionSide?: 'ASK' | 'BID';
+      executionPrice?: number;
+      spread?: number;
+      entryTriggerTimestamp?: string | null;
       tp1HitTimestamp?: number;
       tp2HitTimestamp?: number;
       tp3HitTimestamp?: number;
@@ -660,7 +767,7 @@ export class SignalLifecycleManager {
     let currentState: PersistedSentSignal['status'] = sig.status;
     const transitions: ProgressiveTransitionStep[] = [];
 
-    if (currentState !== 'ACTIVE' && currentState !== 'TP1_HIT' && currentState !== 'TP2_HIT') {
+    if (currentState !== 'WAITING_ENTRY' && currentState !== 'ACTIVE' && currentState !== 'TP1_HIT' && currentState !== 'TP2_HIT') {
       return { finalState: currentState, transitions: [] };
     }
 
@@ -672,7 +779,7 @@ export class SignalLifecycleManager {
     const tp3 = sig.tp3 ?? sig.takeProfit;
 
     for (const candle of candles) {
-      if (currentState === 'SL_HIT' || currentState === 'TP3_HIT' || currentState === 'AMBIGUOUS') {
+      if (currentState === 'SL_HIT' || currentState === 'TP3_HIT' || currentState === 'AMBIGUOUS' || currentState === 'EXPIRED') {
         break;
       }
 
@@ -681,6 +788,69 @@ export class SignalLifecycleManager {
       const open = candle.open;
       const time = candle.timestamp;
       const timeframe = candle.timeframe || '1m';
+
+      // Check TTL Expiration
+      const maxTtlMs = serverConfig.getConfig().signalExpirationMs;
+      const ageMs = time - sig.timestamp;
+      
+      if (currentState === 'WAITING_ENTRY' && ageMs >= maxTtlMs) {
+        currentState = 'EXPIRED';
+        transitions.push({
+          nextState: 'EXPIRED',
+          eventTime: time,
+          eventSource: 'HISTORICAL_BACKFILL',
+          timeframeUsed: timeframe,
+          isRecovered: true,
+        });
+        break;
+      }
+
+      if (currentState === 'WAITING_ENTRY') {
+        const quotePrice = isBuy ? low : high;
+        const validationRes = Gate29ExecutableEntryValidation.validateEntry(
+          sig.direction,
+          entry,
+          { price: quotePrice, timestamp: time },
+          time
+        );
+        
+        if (validationRes.isEntryConfirmed) {
+          // Check if it also hit SL in the same candle (invalidating entry)
+          const touchesSl = isBuy ? low <= sl : high >= sl;
+          if (touchesSl) {
+            // Ambiguous entry + SL
+            currentState = 'AMBIGUOUS';
+            transitions.push({
+              nextState: 'AMBIGUOUS',
+              eventTime: time,
+              eventSource: 'HISTORICAL_BACKFILL',
+              timeframeUsed: timeframe,
+              isRecovered: true,
+              ambiguousDetails: `Both Entry level (${entry}) and Stop Loss (${sl}) touched inside candle at ${time} before confirmation`,
+            });
+            break;
+          } else {
+            currentState = 'ACTIVE';
+            timestamps.entryHitTimestamp = new Date(time).toISOString();
+            timestamps.displayPrice = validationRes.displayPrice;
+            timestamps.bid = validationRes.bid;
+            timestamps.ask = validationRes.ask;
+            timestamps.executionSide = validationRes.executionSide;
+            timestamps.executionPrice = validationRes.executionPrice;
+            timestamps.spread = validationRes.spread;
+            timestamps.entryTriggerTimestamp = validationRes.entryTriggerTimestamp;
+            transitions.push({
+              nextState: 'ACTIVE',
+              eventTime: time,
+              eventSource: 'HISTORICAL_BACKFILL',
+              timeframeUsed: timeframe,
+              isRecovered: true,
+            });
+          }
+        } else {
+          continue; // Wait until entry is hit before checking SL/TP
+        }
+      }
 
       if (isBuy) {
         // Next target price needed for BUY
@@ -960,6 +1130,13 @@ export class SignalLifecycleManager {
     ticker: NormalizedTicker,
     timestamps: {
       entryHitTimestamp?: string | null;
+      displayPrice?: number;
+      bid?: number;
+      ask?: number;
+      executionSide?: 'ASK' | 'BID';
+      executionPrice?: number;
+      spread?: number;
+      entryTriggerTimestamp?: string | null;
       tp1HitTimestamp?: number;
       tp2HitTimestamp?: number;
       tp3HitTimestamp?: number;
@@ -984,6 +1161,7 @@ export class SignalLifecycleManager {
     const activeSigState: PersistedSentSignal = {
       ...sig,
       status: currentState,
+      entryHitTimestamp: timestamps.entryHitTimestamp ?? sig.entryHitTimestamp,
       tp1Status: timestamps.tp1Status ?? sig.tp1Status,
       tp2Status: timestamps.tp2Status ?? sig.tp2Status,
       tp3Status: timestamps.tp3Status ?? sig.tp3Status,
@@ -998,7 +1176,24 @@ export class SignalLifecycleManager {
       stopLossHitPrice: timestamps.stopLossHitPrice ?? sig.stopLossHitPrice,
     };
 
-    const result = this.evaluateSignalPriceUpdate(activeSigState, ticker.price, ticker.timestamp || Date.now(), ticker.symbol);
+    const result = this.evaluateSignalPriceUpdate(
+      activeSigState,
+      ticker.price,
+      ticker.timestamp || Date.now(),
+      ticker.symbol,
+      { bid: ticker.bid, ask: ticker.ask }
+    );
+
+    if (result.entryHitTimestamp) {
+      timestamps.entryHitTimestamp = result.entryHitTimestamp;
+    }
+    if (result.displayPrice !== undefined) timestamps.displayPrice = result.displayPrice;
+    if (result.bid !== undefined) timestamps.bid = result.bid;
+    if (result.ask !== undefined) timestamps.ask = result.ask;
+    if (result.executionSide) timestamps.executionSide = result.executionSide;
+    if (result.executionPrice !== undefined) timestamps.executionPrice = result.executionPrice;
+    if (result.spread !== undefined) timestamps.spread = result.spread;
+    if (result.entryTriggerTimestamp) timestamps.entryTriggerTimestamp = result.entryTriggerTimestamp;
 
     timestamps.tp1Status = result.tp1Status;
     timestamps.tp2Status = result.tp2Status;
@@ -1025,6 +1220,13 @@ export class SignalLifecycleManager {
     step: ProgressiveTransitionStep,
     timestamps: {
       entryHitTimestamp?: string | null;
+      displayPrice?: number;
+      bid?: number;
+      ask?: number;
+      executionSide?: 'ASK' | 'BID';
+      executionPrice?: number;
+      spread?: number;
+      entryTriggerTimestamp?: string | null;
       tp1HitTimestamp?: number;
       tp2HitTimestamp?: number;
       tp3HitTimestamp?: number;
@@ -1116,6 +1318,13 @@ export class SignalLifecycleManager {
     // 2. Update scanner persistence status & rich historical metadata (single call)
     await ScannerPersistence.updateSignalStatus(sig.id, nextState, {
       entryHitTimestamp: timestamps.entryHitTimestamp,
+      displayPrice: timestamps.displayPrice,
+      bid: timestamps.bid,
+      ask: timestamps.ask,
+      executionSide: timestamps.executionSide,
+      executionPrice: timestamps.executionPrice,
+      spread: timestamps.spread,
+      entryTriggerTimestamp: timestamps.entryTriggerTimestamp,
       tp1HitTimestamp: timestamps.tp1HitTimestamp,
       tp2HitTimestamp: timestamps.tp2HitTimestamp,
       tp3HitTimestamp: timestamps.tp3HitTimestamp,
@@ -1165,6 +1374,13 @@ export class SignalLifecycleManager {
       tp2: sig.tp2 ?? sig.takeProfit,
       tp3: sig.tp3 ?? sig.takeProfit,
       entryHitTimestamp: timestamps.entryHitTimestamp,
+      displayPrice: timestamps.displayPrice,
+      bid: timestamps.bid,
+      ask: timestamps.ask,
+      executionSide: timestamps.executionSide,
+      executionPrice: timestamps.executionPrice,
+      spread: timestamps.spread,
+      entryTriggerTimestamp: timestamps.entryTriggerTimestamp,
       tp1HitTimestamp: timestamps.tp1HitTimestamp,
       tp2HitTimestamp: timestamps.tp2HitTimestamp,
       tp3HitTimestamp: timestamps.tp3HitTimestamp,
@@ -1182,6 +1398,7 @@ export class SignalLifecycleManager {
       tp3HitPrice: timestamps.tp3HitPrice,
       stopLossHitPrice: timestamps.stopLossHitPrice,
       expiredTimestamp: nextStateStr === 'EXPIRED' ? (timestamps.expiredTimestamp || now) : undefined,
+      expiresAt: sig.expiresAt || (sig.timestamp + serverConfig.getConfig().signalExpirationMs),
       finalOutcome: (nextStateStr === 'SL_HIT' || nextStateStr === 'STOPPED_OUT') ? 'SL_HIT' : (nextStateStr === 'COMPLETED' || nextStateStr === 'TP3_HIT') ? 'TP3_HIT' : (finalOutcome as any),
       status: nextState as any,
       timestamp: sig.timestamp,

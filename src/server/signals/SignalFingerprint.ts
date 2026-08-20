@@ -10,6 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from '../logger.js';
+import { serverConfig } from '../config.js';
 
 export interface FingerprintRecord {
   fingerprint: string;
@@ -22,7 +23,6 @@ export interface FingerprintRecord {
 }
 
 const FINGERPRINT_FILE_PATH = path.join(process.cwd(), 'signal_fingerprints.json');
-const DEFAULT_EXPIRATION_MS = 24 * 60 * 60 * 1000; // 24 hours duplicate prevention window
 
 export class SignalFingerprint {
   private static records: Map<string, FingerprintRecord> = new Map();
@@ -37,7 +37,7 @@ export class SignalFingerprint {
         if (Array.isArray(parsed)) {
           const now = Date.now();
           for (const rec of parsed) {
-            if (now - rec.timestamp < DEFAULT_EXPIRATION_MS) {
+            if (now - rec.timestamp < serverConfig.getConfig().signalExpirationMs) {
               this.records.set(rec.fingerprint, rec);
             }
           }
@@ -108,7 +108,7 @@ export class SignalFingerprint {
    */
   public static checkDuplicateFingerprint(
     fingerprint: string,
-    windowMs: number = DEFAULT_EXPIRATION_MS
+    windowMs: number = serverConfig.getConfig().signalExpirationMs
   ): { isDuplicate: boolean; previousRecord?: FingerprintRecord } {
     this.init();
     const now = Date.now();

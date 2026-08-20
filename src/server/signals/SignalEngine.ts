@@ -20,6 +20,7 @@ import { MarketSessionManager } from '../market/MarketSessionManager.js';
 import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 import { ScoringEngine, ScoringResult } from './ScoringEngine.js';
 import { Gate0DataValidator } from './Gate0DataValidator.js';
+import { serverConfig } from '../config.js';
 import { Gate1MarketRegime } from './Gate1MarketRegime.js';
 import { Gate2MTFConfluence } from './Gate2MTFConfluence.js';
 import { Gate3MarketStructure } from './Gate3MarketStructure.js';
@@ -38,6 +39,7 @@ import { Gate17CorrelationExposure } from './Gate17CorrelationExposure.js';
 import { Gate18RegimeStrategySelection } from './Gate18RegimeStrategySelection.js';
 import { Gate20ProbabilityCalibration } from './Gate20ProbabilityCalibration.js';
 import { Gate21WalkForwardValidation } from './Gate21WalkForwardValidation.js';
+import { Gate32AdaptiveCandidateSelection, Stage2CandidateInput } from './Gate32AdaptiveCandidateSelection.js';
 import { TargetQualityEvaluator, calculateTargetRr } from './TargetQualityEvaluator.js';
 import { Gate22MonteCarloSimulation } from './Gate22MonteCarloSimulation.js';
 import { NvidiaAIService } from './NvidiaAIService.js';
@@ -50,6 +52,9 @@ import { MarketStructureDetector } from './MarketStructureDetector.js';
 import { CorrelationFilter } from './CorrelationFilter.js';
 import { SignalAuditStore } from './SignalAuditStore.js';
 import { ScannerPersistence } from './ScannerPersistence.js';
+import { OpportunityFunnelStore, OpportunityFunnelEngine } from './Gate26OpportunityFunnel.js';
+import { Gate27RegimeThresholds } from './Gate27RegimeThresholds.js';
+import { Gate35SignalFunnelAnalytics } from './Gate35SignalFunnelAnalytics.js';
 import { logger } from '../logger.js';
 
 const CRYPTO_UNIVERSE = [
@@ -323,12 +328,23 @@ export class SignalEngine {
         };
       }
 
-      // Rank Stage 2 candidates descending by preliminary score
-      stage2Candidates.sort((a, b) => b.preliminaryScore - a.preliminaryScore);
-      // Advance at most top candidates to Stage 3 to strictly protect API limits while capturing best opportunities
-      const maxDeepCandidates = assetCategory === 'FOREX' ? 2 : 5;
-      const topCandidates = stage2Candidates.slice(0, maxDeepCandidates);
-      logger.info(`[Stage 3 Dispatch] Advancing top ${topCandidates.length} assets to Deep MTF Analysis: ${topCandidates.map(c => `${c.asset} (${c.preliminaryScore}pt)`).join(', ')}`);
+      // Gate 32 — Adaptive Deep-Candidate Selection Engine
+      // Replaces fixed candidate limits with adaptive budget-aware selection & cluster expansion
+      const candidateInputs: Stage2CandidateInput[] = stage2Candidates.map((c) => ({
+        asset: c.asset,
+        assetClass: SymbolNormalizer.getAssetClassification(c.asset),
+        preliminaryScore: c.preliminaryScore,
+        direction: c.direction,
+        htf1hCandles: c.htf1h,
+      }));
+
+      const adaptiveSelection = Gate32AdaptiveCandidateSelection.selectCandidates(candidateInputs);
+      const selectedAssetNames = new Set(adaptiveSelection.selectedCandidates.map((sc) => sc.asset));
+      const topCandidates = stage2Candidates.filter((c) => selectedAssetNames.has(c.asset));
+
+      logger.info(
+        `[Stage 3 Dispatch] ${adaptiveSelection.explanation} Advancing ${topCandidates.length} assets to Deep MTF Analysis: ${topCandidates.map((c) => `${c.asset} (${c.preliminaryScore}pt)`).join(', ')}`
+      );
 
       // Stage 3: Deep Multi-Timeframe Analysis & Gate 8 Hardened Validation
       const candidates: ValidatedCandidate[] = [];
@@ -479,6 +495,8 @@ export class SignalEngine {
           const gate9 = Gate9RiskManagement.calculate(baselinePrice, scoring.direction, setupCandles);
           logger.info(`[Gate 9 Risk] ${asset}: RR=${gate9.rrRatio.toFixed(2)}, EV=${gate9.expectedValue.toFixed(2)}, SCORE=${gate9.riskScore}`);
 
+          const thresholds = serverConfig.getConfig().thresholds;
+
           // -----------------------------------------------------------------
           // DIRECTIONAL CONFIRMATION MODEL (2 OF 3 REQUIRED: Trend, Structure, Momentum)
           // -----------------------------------------------------------------
@@ -493,13 +511,13 @@ export class SignalEngine {
 
           if (directionalPasses < 2) {
             scoring.isValid = false;
-            scoring.rejectionReason = `Directional Confirmation Failed: Required 2 of 3 (Trend, Structure, Momentum) to pass, but only ${directionalPasses} passed (Trend:${trendPass}, Structure:${structurePass}, Momentum:${momentumPass})`;
+            scoring.rejectionReason = `REJECTED: DIRECTIONAL_CONFIRMATION_FAILED. Directional Confirmation Failed: Required 2 of 3 (Trend, Structure, Momentum) to pass, but only ${directionalPasses} passed (Trend:${trendPass}, Structure:${structurePass}, Momentum:${momentumPass})`;
           } else if (gate7.tradingAllowed === 'NO') {
             scoring.isValid = false;
-            scoring.rejectionReason = `Gate 7 Market Context Blocked: ${gate7.reasons.join('; ')}`;
-          } else if (gate9.rrRatio < 1.5) {
+            scoring.rejectionReason = `REJECTED: MARKET_CONTEXT_BLOCKED. Gate 7 Market Context Blocked: ${gate7.reasons.join('; ')}`;
+          } else if (gate9.rrRatio < thresholds.minimumRR) {
             scoring.isValid = false;
-            scoring.rejectionReason = `Gate 9 Risk/Reward Hurdle Failed: R:R ${gate9.rrRatio.toFixed(2)} is below minimum required 1.5:1 ratio`;
+            scoring.rejectionReason = `REJECTED: NET_RR_BELOW_THRESHOLD. R:R ${gate9.rrRatio.toFixed(2)} is below minimum required ${thresholds.minimumRR}:1 ratio`;
           } else {
             // Apply weighted composite scoring:
             // Weights: Trend (25), Structure (20), Momentum (20), Volatility (15), Volume (10), Multi-TF (10)
@@ -522,9 +540,9 @@ export class SignalEngine {
             // Combine composite score with baseline score
             scoring.score = Math.min(100, Math.max(scoring.score, compositeScore));
 
-            if (scoring.score < 70) {
+            if (scoring.score < thresholds.minimumScore) {
               scoring.isValid = false;
-              scoring.rejectionReason = `Composite signal score ${scoring.score}/100 is below the minimum required threshold of 70`;
+              scoring.rejectionReason = `REJECTED: SCORE_BELOW_THRESHOLD. Composite signal score ${scoring.score}/100 is below the minimum required threshold of ${thresholds.minimumScore}`;
             } else {
               // Update SL/TP levels from Risk Management
               scoring.stopLoss = gate9.sl;
@@ -586,6 +604,15 @@ export class SignalEngine {
 
         if (!scoring.isValid) {
           logger.info(`[Stage 3 Scoring] ${asset} rejected: ${scoring.rejectionReason}`);
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            symbol: asset,
+            direction: scoring.direction,
+            stage: 'GATE_3',
+            score: scoring.score || 0,
+            regime: scoring.marketRegime || 'UNKNOWN',
+            strategy: primaryStrategyName,
+            rejectionReason: scoring.rejectionReason || 'Failed scoring criteria',
+          });
           SignalAuditStore.logAudit({
             symbol: asset,
             direction: scoring.direction,
@@ -627,8 +654,17 @@ export class SignalEngine {
           });
 
           if (!structCheck.hasChanged) {
-            const reason = `Asset in cooldown (${assetCooldown.remainingMinutes}m remaining): ${structCheck.reason}`;
+            const reason = `REJECTED: ASSET_COOLDOWN. Asset in cooldown (${assetCooldown.remainingMinutes}m remaining): ${structCheck.reason}`;
             logger.info(`[Stage 3 Cooldown] Rejected ${asset}: ${reason}`);
+            Gate35SignalFunnelAnalytics.recordCandidate({
+              symbol: asset,
+              direction: scoring.direction,
+              stage: 'GATE_8',
+              score: scoring.score,
+              regime: scoring.marketRegime,
+              strategy: primaryStrategyName,
+              rejectionReason: reason,
+            });
             SignalAuditStore.logAudit({
               symbol: asset,
               direction: scoring.direction,
@@ -654,8 +690,17 @@ export class SignalEngine {
         // 2. Strategy Cooldown Check
         const stratCooldown = CooldownManager.isStrategyInCooldown(asset, primaryStrategyName);
         if (stratCooldown.inCooldown) {
-          const reason = `Strategy [${primaryStrategyName}] in cooldown on ${asset} (${stratCooldown.remainingMinutes}m remaining)`;
+          const reason = `REJECTED: STRATEGY_COOLDOWN. Strategy [${primaryStrategyName}] in cooldown on ${asset} (${stratCooldown.remainingMinutes}m remaining)`;
           logger.info(`[Stage 3 Strategy Cooldown] Rejected ${asset}: ${reason}`);
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            symbol: asset,
+            direction: scoring.direction,
+            stage: 'GATE_8',
+            score: scoring.score,
+            regime: scoring.marketRegime,
+            strategy: primaryStrategyName,
+            rejectionReason: reason,
+          });
           SignalAuditStore.logAudit({
             symbol: asset,
             direction: scoring.direction,
@@ -680,8 +725,17 @@ export class SignalEngine {
         // 3. Duplicate Fingerprint Check
         const fpCheck = SignalFingerprint.checkDuplicateFingerprint(fp);
         if (fpCheck.isDuplicate) {
-          const reason = `Duplicate signal fingerprint match [${fp}]. Identical setup previously emitted within 24h.`;
+          const reason = `REJECTED: DUPLICATE_FINGERPRINT. Duplicate signal fingerprint match [${fp}]. Identical setup previously emitted within 24h.`;
           logger.info(`[Stage 3 Fingerprint] Rejected ${asset}: ${reason}`);
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            symbol: asset,
+            direction: scoring.direction,
+            stage: 'GATE_8',
+            score: scoring.score,
+            regime: scoring.marketRegime,
+            strategy: primaryStrategyName,
+            rejectionReason: reason,
+          });
           SignalAuditStore.logAudit({
             symbol: asset,
             direction: scoring.direction,
@@ -725,6 +779,15 @@ export class SignalEngine {
 
         if (!validation.isValid) {
           logger.warn(`[Stage 3 Validation Rejected] ${asset}: [${validation.validationReason}] ${validation.detailedMessage}`);
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            symbol: asset,
+            direction: scoring.direction,
+            stage: 'GATE_9',
+            score: scoring.score,
+            regime: scoring.marketRegime,
+            strategy: primaryStrategyName,
+            rejectionReason: validation.detailedMessage || validation.validationReason,
+          });
           SignalAuditStore.logAudit({
             symbol: asset,
             direction: scoring.direction,
@@ -772,8 +835,9 @@ export class SignalEngine {
         const winRate = ScoringEngine.estimateWinRate(scoring.score, finalRR, scoring.agreeingStrategiesCount);
         const expectancy = ScoringEngine.calculateExpectancy(winRate, finalRR);
         
-        if (winRate <= 30) {
-          const reason = `Estimated win rate (${winRate}% <= 30% threshold)`;
+        const thresholds = serverConfig.getConfig().thresholds;
+        if (winRate <= thresholds.minimumWinProbability) {
+          const reason = `REJECTED: WIN_RATE_BELOW_THRESHOLD. Estimated win rate (${winRate}% <= ${thresholds.minimumWinProbability}% threshold)`;
           logger.info(`[Stage 3 AI] Rejected ${asset} due to ${reason}`);
           SignalAuditStore.logAudit({
             symbol: asset,
@@ -797,55 +861,7 @@ export class SignalEngine {
         }
 
         if (expectancy <= 0) {
-          const reason = `Non-positive expectancy (${expectancy}R <= 0)`;
-          logger.info(`[Stage 3 AI] Rejected ${asset} due to ${reason}`);
-          SignalAuditStore.logAudit({
-            symbol: asset,
-            direction: scoring.direction,
-            timeframe: 'Multi-TF Realism Setup',
-            primaryStrategy: primaryStrategyName,
-            passedStrategies: scoring.passedStrategies || [],
-            failedStrategies: scoring.failedStrategies || [],
-            marketRegime: scoring.marketRegime,
-            atr: scoring.technicalMetrics?.atr || 0,
-            dataFreshnessSeconds,
-            providerAgreement: crossCheck.agreementPct >= 99.5,
-            providerAgreementPct: crossCheck.agreementPct,
-            expectedRR: finalRR,
-            score: scoring.score,
-            status: 'REJECTED',
-            rejectionReason: reason,
-            fingerprint: fp,
-          });
-          continue;
-        }
-
-        if (scoring.score < 75) {
-          const reason = `Quality score below minimum actionable threshold (${scoring.score}/100 < 75)`;
-          logger.info(`[Stage 3 AI] Rejected ${asset} due to ${reason}`);
-          SignalAuditStore.logAudit({
-            symbol: asset,
-            direction: scoring.direction,
-            timeframe: 'Multi-TF Realism Setup',
-            primaryStrategy: primaryStrategyName,
-            passedStrategies: scoring.passedStrategies || [],
-            failedStrategies: scoring.failedStrategies || [],
-            marketRegime: scoring.marketRegime,
-            atr: scoring.technicalMetrics?.atr || 0,
-            dataFreshnessSeconds,
-            providerAgreement: crossCheck.agreementPct >= 99.5,
-            providerAgreementPct: crossCheck.agreementPct,
-            expectedRR: finalRR,
-            score: scoring.score,
-            status: 'REJECTED',
-            rejectionReason: reason,
-            fingerprint: fp,
-          });
-          continue;
-        }
-
-        if (aiResult.refinedConfidence < 70) {
-          const reason = `Low AI confidence (${aiResult.refinedConfidence}% < 70% threshold)`;
+          const reason = `REJECTED: NEGATIVE_EXPECTANCY. Non-positive expectancy (${expectancy}R <= 0)`;
           logger.info(`[Stage 3 AI] Rejected ${asset} due to ${reason}`);
           SignalAuditStore.logAudit({
             symbol: asset,
@@ -869,6 +885,142 @@ export class SignalEngine {
         }
 
         const classification = SymbolNormalizer.getAssetClassification(asset);
+
+        // GATE 27: Regime-Adaptive Signal Threshold Resolution
+        const adaptiveThreshold = Gate27RegimeThresholds.resolveThreshold({
+          symbol: asset,
+          actualScore: scoring.score,
+          regime: scoring.marketRegime,
+          strategy: primaryStrategyName,
+          assetClass: classification,
+        });
+
+        // 1. Hard Rejection for UNKNOWN / Untradeable Regimes (Gate 27 policy: UNKNOWN -> NO SIGNAL)
+        if (!adaptiveThreshold.isExecutable) {
+          const reason = `REJECTED: REGIME_UNTRADEABLE. Market regime '${scoring.marketRegime}' is UNKNOWN or untradeable under Gate 27 policy (NO SIGNAL).`;
+          logger.info(`[Gate 27 Policy] Rejected ${asset} due to ${reason}`);
+          SignalAuditStore.logAudit({
+            symbol: asset,
+            direction: scoring.direction,
+            timeframe: 'Multi-TF Realism Setup',
+            primaryStrategy: primaryStrategyName,
+            strategy: primaryStrategyName,
+            passedStrategies: scoring.passedStrategies || [],
+            failedStrategies: scoring.failedStrategies || [],
+            marketRegime: scoring.marketRegime,
+            regime: scoring.marketRegime,
+            threshold: adaptiveThreshold.resolvedThreshold,
+            actualScore: scoring.score,
+            marginAboveThreshold: adaptiveThreshold.marginAboveThreshold,
+            atr: scoring.technicalMetrics?.atr || 0,
+            dataFreshnessSeconds,
+            providerAgreement: crossCheck.agreementPct >= 99.5,
+            providerAgreementPct: crossCheck.agreementPct,
+            expectedRR: finalRR,
+            score: scoring.score,
+            status: 'REJECTED',
+            rejectionReason: reason,
+            fingerprint: fp,
+          });
+          continue;
+        }
+
+        // 2. Regime-Adaptive Threshold Evaluation
+        const effectiveSignalThreshold = adaptiveThreshold.resolvedThreshold;
+        const marginAboveThreshold = adaptiveThreshold.marginAboveThreshold;
+
+        if (scoring.score < effectiveSignalThreshold) {
+          const effectiveWatchingThreshold = Math.max(68, effectiveSignalThreshold - 8);
+          const effectiveCandidateThreshold = Math.max(72, effectiveSignalThreshold - 4);
+          const isWatching = scoring.score >= effectiveWatchingThreshold;
+          const funnelStage = scoring.score >= effectiveCandidateThreshold ? 'CONFIRMED' : 'WATCHING';
+          const reason = `REJECTED: SCORE_BELOW_REGIME_THRESHOLD. Score (${scoring.score}/100) below regime-adaptive threshold (${effectiveSignalThreshold}) for regime '${adaptiveThreshold.normalizedRegime}' & strategy '${primaryStrategyName}' (margin: ${marginAboveThreshold >= 0 ? '+' : ''}${marginAboveThreshold})`;
+          
+          if (isWatching) {
+            // GATE 26 & 27: Register in Opportunity Funnel for continuous monitoring with adaptive target
+            const funnelItem = OpportunityFunnelStore.addOrUpdate({
+              id: `opp_${now}_${asset}_${Math.random().toString(36).substring(2, 6)}`,
+              symbol: asset,
+              direction: scoring.direction,
+              entryPrice: finalEntry,
+              stopLoss: finalSL,
+              takeProfit: finalTP,
+              tp1: scoring.tp1,
+              tp2: scoring.tp2,
+              tp3: scoring.tp3,
+              riskRewardRatio: finalRR,
+              score: scoring.score,
+              confidenceScore: aiResult.refinedConfidence,
+              stage: funnelStage,
+              status: funnelStage === 'CONFIRMED' ? 'QUALIFIED' : 'WATCHING',
+              hardGatesPassed: true,
+              passedSoftConditions: scoring.confluenceReasons || [],
+              missingSoftConditions: [`Missing confirmation trigger to reach ${effectiveSignalThreshold} regime threshold`],
+              rejectionReason: `Placed in ${funnelStage} stage (Score: ${scoring.score}/${effectiveSignalThreshold}, margin: ${marginAboveThreshold >= 0 ? '+' : ''}${marginAboveThreshold}). Not emitted as trade signal.`,
+              marketRegime: scoring.marketRegime,
+              strategy: primaryStrategyName,
+              createdAt: now,
+              updatedAt: now,
+              expiresAt: now + serverConfig.getConfig().signalExpirationMs,
+            });
+            logger.info(`[Gate 26 Funnel] Registered ${asset} as ${funnelStage} (Score: ${scoring.score}, Target: ${effectiveSignalThreshold})`, { id: funnelItem.id, symbol: asset, stage: funnelStage, margin: marginAboveThreshold });
+          }
+
+          logger.info(`[Stage 3 AI] Rejected ${asset} due to ${reason}`);
+          SignalAuditStore.logAudit({
+            symbol: asset,
+            direction: scoring.direction,
+            timeframe: 'Multi-TF Realism Setup',
+            primaryStrategy: primaryStrategyName,
+            strategy: primaryStrategyName,
+            passedStrategies: scoring.passedStrategies || [],
+            failedStrategies: scoring.failedStrategies || [],
+            marketRegime: scoring.marketRegime,
+            regime: scoring.marketRegime,
+            threshold: effectiveSignalThreshold,
+            actualScore: scoring.score,
+            marginAboveThreshold,
+            atr: scoring.technicalMetrics?.atr || 0,
+            dataFreshnessSeconds,
+            providerAgreement: crossCheck.agreementPct >= 99.5,
+            providerAgreementPct: crossCheck.agreementPct,
+            expectedRR: finalRR,
+            score: scoring.score,
+            status: isWatching ? (funnelStage === 'CONFIRMED' ? 'CANDIDATE' : 'WATCHING') : 'REJECTED',
+            rejectionReason: reason,
+            fingerprint: fp,
+          });
+          continue;
+        }
+
+        if (thresholds.AIConfirmationMode === 'REQUIRED' && (aiResult.classification === 'QUALITATIVE_CONTRADICTION' || !aiResult.isAiValidated)) {
+          const reason = `REJECTED: AI_QUALITATIVE_CONTRADICTION. AI qualitative assessment returned ${aiResult.classification} ('${aiResult.aiAssessment}')`;
+          logger.info(`[Stage 3 AI] Rejected ${asset} due to ${reason}`);
+          SignalAuditStore.logAudit({
+            symbol: asset,
+            direction: scoring.direction,
+            timeframe: 'Multi-TF Realism Setup',
+            primaryStrategy: primaryStrategyName,
+            strategy: primaryStrategyName,
+            passedStrategies: scoring.passedStrategies || [],
+            failedStrategies: scoring.failedStrategies || [],
+            marketRegime: scoring.marketRegime,
+            regime: scoring.marketRegime,
+            threshold: effectiveSignalThreshold,
+            actualScore: scoring.score,
+            marginAboveThreshold,
+            atr: scoring.technicalMetrics?.atr || 0,
+            dataFreshnessSeconds,
+            providerAgreement: crossCheck.agreementPct >= 99.5,
+            providerAgreementPct: crossCheck.agreementPct,
+            expectedRR: finalRR,
+            score: scoring.score,
+            status: 'REJECTED',
+            rejectionReason: reason,
+            fingerprint: fp,
+          });
+          continue;
+        }
         const providerName = classification === 'CRYPTO'
           ? 'Bitget Live Feed'
           : (classification === 'FOREX' ? 'Twelve Data' : 'Finnhub');
@@ -950,11 +1102,11 @@ export class SignalEngine {
           estimatedFriction: scoring.estimatedFriction,
           suggestedRiskAmount: scoring.hypotheticalRisk.suggestedRiskAmount,
           suggestedPositionSize: scoring.hypotheticalRisk.suggestedPositionSize,
-          expiresAt: now + (4 * 60 * 60 * 1000),
+          expiresAt: now + serverConfig.getConfig().signalExpirationMs,
           timestamp: now,
           validatedAt: validation.validatedAt,
           dataSource: `${providerName} with Live Price & Sentiment Cross-Validation`,
-          status: 'ACTIVE',
+          status: 'WAITING_ENTRY',
           validationReason: 'VALID',
           aiAssessment: aiResult.aiAssessment,
           score: scoring.score,
@@ -1171,14 +1323,28 @@ export class SignalEngine {
 
           CooldownManager.recordSignalEmit(sig.symbol, sig.strategy, sig.timestamp);
 
+          const regime = sig.marketRegime || 'TRENDING';
+          const adaptiveRes = Gate27RegimeThresholds.resolveThreshold({
+            symbol: sig.symbol,
+            actualScore: sig.score,
+            regime,
+            strategy: sig.strategy,
+            assetClass: sig.assetClass,
+          });
+
           SignalAuditStore.logAudit({
             symbol: sig.symbol,
             direction: sig.direction,
             timeframe: sig.timeframe,
             primaryStrategy: sig.strategy,
+            strategy: sig.strategy,
             passedStrategies: [sig.strategy],
             failedStrategies: [],
-            marketRegime: 'TRENDING',
+            marketRegime: regime,
+            regime,
+            threshold: adaptiveRes.resolvedThreshold,
+            actualScore: sig.score,
+            marginAboveThreshold: adaptiveRes.marginAboveThreshold,
             atr: 0,
             dataFreshnessSeconds: 0,
             providerAgreement: true,
@@ -1243,8 +1409,9 @@ export class SignalEngine {
       try {
         const persisted = await ScannerPersistence.getSentSignalsToday();
         for (const s of persisted) {
-          // If active and not expired yet (using same 2-hour threshold)
-          if (s.status === 'ACTIVE' && (now - s.timestamp <= 2 * 60 * 60 * 1000)) {
+          // ACTIVE signals do not expire by time. WAITING_ENTRY expire by time.
+          const isWaitingAndNotExpired = s.status === 'WAITING_ENTRY' && (now - s.timestamp <= serverConfig.getConfig().signalExpirationMs);
+          if (s.status === 'ACTIVE' || isWaitingAndNotExpired) {
             // Enforce that we do NOT load any signal with duplicate TPs
             const tp1 = s.tp1;
             const tp2 = s.tp2;
@@ -1289,12 +1456,13 @@ export class SignalEngine {
               strategy: s.strategy,
               timeframe: s.timeframe,
               dataSource: s.dataSource,
-              status: 'ACTIVE',
+              status: s.status as any,
               timestamp: s.timestamp,
               validatedAt: s.timestamp,
               confluenceReasons: [],
               estimatedWinRate: s.estimatedWinRate,
               aiAssessment: s.aiAssessment,
+              expiresAt: s.expiresAt || (s.timestamp + serverConfig.getConfig().signalExpirationMs),
             };
             this.activeSignals.set(sig.symbol, sig);
           }
@@ -1307,7 +1475,8 @@ export class SignalEngine {
     const active: TradingSignal[] = [];
 
     for (const [symbol, signal] of this.activeSignals.entries()) {
-      if (now - signal.timestamp > 2 * 60 * 60 * 1000) {
+      const isWaitingAndExpired = signal.status === 'WAITING_ENTRY' && (now - signal.timestamp > serverConfig.getConfig().signalExpirationMs);
+      if (isWaitingAndExpired) {
         this.activeSignals.delete(symbol);
       } else {
         active.push(signal);

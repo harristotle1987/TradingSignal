@@ -1,8 +1,10 @@
 import { NormalizedCandle, SignalDirection, AssetType } from '../../types/index.js';
+import { Gate31NewsRiskClassification, NewsClassification } from './Gate31NewsRiskClassification.js';
 
 export interface Gate7Result {
   session: string;
   newsRisk: 'HIGH' | 'MEDIUM' | 'LOW';
+  newsClassification: NewsClassification;
   correlationContext: string;
   marketContextScore: number;
   tradingAllowed: 'YES' | 'NO' | 'CAUTION';
@@ -73,13 +75,25 @@ export class Gate7MarketContext {
        }
     }
     
-    // Stub News Risk (Since we lack a live Economic Calendar feed in this sandbox)
-    // We will assume neutral, but build the architecture to block trading.
-    const newsRisk = 'LOW' as 'HIGH' | 'MEDIUM' | 'LOW';
-    if (newsRisk === 'HIGH') {
+    // Gate 31 News Risk Classification
+    const gate31 = Gate31NewsRiskClassification.evaluate(symbol);
+    const newsClassification = gate31.classification;
+    let newsRisk: 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
+
+    if (newsClassification === 'BLOCK') {
+       newsRisk = 'HIGH';
        tradingAllowed = 'NO';
-       marketContextScore -= 50;
-       reasons.push('High impact news event approaching. Automated trading blocked to prevent slippage/whipsaws.');
+       marketContextScore = 0;
+       reasons.push(...gate31.reasons);
+    } else if (newsClassification === 'CAUTION') {
+       newsRisk = 'MEDIUM';
+       if (tradingAllowed === 'YES') {
+          tradingAllowed = 'CAUTION';
+       }
+       marketContextScore -= 20;
+       reasons.push(...gate31.reasons);
+    } else {
+       newsRisk = 'LOW';
     }
 
     // Stub Correlation Context (e.g. BTC for Crypto, SPY for Stocks, DXY for Forex)
@@ -103,6 +117,7 @@ export class Gate7MarketContext {
     return {
        session,
        newsRisk,
+       newsClassification,
        correlationContext,
        marketContextScore,
        tradingAllowed,

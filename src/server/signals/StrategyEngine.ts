@@ -32,6 +32,7 @@ import { TechnicalIndicators } from './TechnicalIndicators.js';
 import { StrategyPerformanceTracker } from './StrategyPerformanceTracker.js';
 import { Gate1MarketRegime, Gate1Regime } from './Gate1MarketRegime.js';
 import { logger } from '../logger.js';
+import { serverConfig } from '../config.js';
 
 export type MarketRegime = Gate1Regime | 'TRENDING' | 'UPTREND' | 'DOWNTREND' | 'RANGING' | 'HIGH-VOLATILITY' | 'LOW-VOLATILITY';
 
@@ -119,7 +120,7 @@ export class StrategyEngine {
 
     // Require primary baseline timeframes (15m and 1h) to proceed
     if (!tfMap['15m'] || tfMap['15m'].length < 20 || !tfMap['1h'] || tfMap['1h'].length < 20) {
-      return this.createRejection('Insufficient candle depth in primary baseline timeframes (15m/1h required)');
+      return this.createRejection('REJECTED: INSUFFICIENT_DATA. Insufficient candle depth in primary baseline timeframes (15m/1h required)');
     }
 
     // 2. Classify the Market Regime
@@ -140,7 +141,7 @@ export class StrategyEngine {
 
     // Mandatory Volatility Gate check: Strategy 6 MUST pass with clean volatility conditions
     if (!s6.passed || s6.score < 50) {
-      return this.createRejection(`Volatility gate rejected setup: ${s6.reasons.join('; ')}`, regime, regimeDetails);
+      return this.createRejection(`REJECTED: VOLATILITY_GATE. Volatility gate rejected setup: ${s6.reasons.join('; ')}`, regime, regimeDetails);
     }
 
     // 5. Directional Determination according to Regime
@@ -163,7 +164,7 @@ export class StrategyEngine {
 
     if (!dominantDirection) {
       return this.createRejection(
-        'No directional trend or validated breakout established by primary strategies',
+        'REJECTED: NO_DIRECTION. No directional trend or validated breakout established by primary strategies',
         regime,
         regimeDetails
       );
@@ -196,12 +197,16 @@ export class StrategyEngine {
         (rawWeightedScore / 100) * 30
     );
 
-    // Require at least 2 out of 6 strategies agreeing, minimum 50 agreement score, and at least 2 aligned timeframes
-    const hasStrongConfluence = agreeingStrategiesCount >= 2 && agreementScore >= 50 && tfScores.alignedCount >= 2;
+    // Require configurable minimum strategies agreeing, minimum 50 agreement score, and configurable minimum aligned timeframes
+    const thresholds = serverConfig.getConfig().thresholds;
+    const hasStrongConfluence = 
+      agreeingStrategiesCount >= thresholds.minimumStrategyAgreement && 
+      agreementScore >= 50 && 
+      tfScores.alignedCount >= thresholds.minimumTimeframeAlignment;
 
     if (!hasStrongConfluence) {
       return this.createRejection(
-        `Insufficient strategy confluence: ${agreeingStrategiesCount}/6 strategies agreed with ${tfScores.alignedCount}/${tfScores.totalEvaluated} timeframes (Agreement Score: ${agreementScore}/100, min 50 required)`,
+        `REJECTED: INSUFFICIENT_CONFLUENCE. ${agreeingStrategiesCount}/6 strategies agreed (min ${thresholds.minimumStrategyAgreement}) with ${tfScores.alignedCount}/${tfScores.totalEvaluated} timeframes (min ${thresholds.minimumTimeframeAlignment}). Agreement Score: ${agreementScore}/100 (min 50 required)`,
         regime,
         regimeDetails
       );

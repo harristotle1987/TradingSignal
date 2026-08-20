@@ -12,6 +12,17 @@ import { SignalLifecycleManager } from '../signals/SignalLifecycleManager.js';
 import { OutcomeTrackerTester } from '../signals/OutcomeTrackerTester.js';
 import { StrategyPerformanceTracker, PERFORMANCE_LEGAL_DISCLAIMER } from '../signals/StrategyPerformanceTracker.js';
 import { WalkForwardEngine } from '../signals/WalkForwardEngine.js';
+import { OpportunityFunnelStore } from '../signals/Gate26OpportunityFunnel.js';
+import { Gate27RegimeThresholds } from '../signals/Gate27RegimeThresholds.js';
+import { Gate28ConfirmationDiversity } from '../signals/Gate28ConfirmationDiversity.js';
+import { Gate29ExecutableEntryValidation } from '../signals/Gate29ExecutableEntryValidation.js';
+import { Gate30DataFreshness } from '../signals/Gate30DataFreshness.js';
+import { Gate31NewsRiskClassification } from '../signals/Gate31NewsRiskClassification.js';
+import { Gate32AdaptiveCandidateSelection } from '../signals/Gate32AdaptiveCandidateSelection.js';
+import { Gate34ExecutionFrictionStressTest } from '../signals/Gate34ExecutionFrictionStressTest.js';
+import { Gate35SignalFunnelAnalytics } from '../signals/Gate35SignalFunnelAnalytics.js';
+import { Gate36ConfigurableSignalFrequency } from '../signals/Gate36ConfigurableSignalFrequency.js';
+import { serverConfig } from '../config.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
 import { marketCache } from '../market/CacheStore.js';
 import { logger } from '../logger.js';
@@ -312,6 +323,53 @@ router.post('/signals/refresh', async (req: Request, res: Response) => {
 
     if (!signal) {
       signal = ScannerPersistence.localData.sentSignals.find((s) => s.id === id);
+    }
+
+    if (!signal) {
+      // Fallback: Check inside SignalLogger logs
+      try {
+        await SignalLogger.init();
+        const logs = await SignalLogger.getSignalLogs();
+        const logRecord = logs.find((l) => l.id === id || l.snapshotId === id);
+        if (logRecord) {
+          const rawStatus = logRecord.status || 'ACTIVE';
+          const isCompleted = (rawStatus as string) === 'COMPLETED' || rawStatus === 'TP3 HIT' || rawStatus === 'TP HIT';
+          const isStopped = (rawStatus as string) === 'STOPPED_OUT' || rawStatus === 'SL HIT';
+          signal = {
+            id: logRecord.id,
+            snapshotId: logRecord.snapshotId || logRecord.id,
+            symbol: logRecord.symbol,
+            direction: logRecord.direction,
+            entryPrice: logRecord.entryPrice,
+            stopLoss: logRecord.stopLoss,
+            takeProfit: logRecord.takeProfit,
+            tp1: logRecord.tp1,
+            tp2: logRecord.tp2,
+            tp3: logRecord.tp3,
+            riskRewardRatio: logRecord.riskRewardRatio,
+            score: logRecord.score,
+            rankTier: logRecord.isBestTrade ? 'BEST_TRADE' : 'SUGGESTION',
+            strategy: logRecord.strategy,
+            timeframe: logRecord.timeframe || '1h',
+            dataSource: logRecord.provider || 'binance',
+            status: rawStatus === 'ACTIVE' ? 'ACTIVE' : 
+                    (isCompleted ? 'COMPLETED' : 
+                     (isStopped ? 'STOPPED_OUT' : 
+                      (rawStatus === 'TP1 HIT' ? 'TP1_HIT' : 
+                       (rawStatus === 'TP2 HIT' ? 'TP2_HIT' : rawStatus as any)))),
+            tp1Status: rawStatus.includes('TP') || isCompleted ? 'HIT' : 'PENDING',
+            tp2Status: rawStatus.includes('TP2') || rawStatus.includes('TP3') || isCompleted ? 'HIT' : 'PENDING',
+            tp3Status: rawStatus.includes('TP3') || isCompleted ? 'HIT' : 'PENDING',
+            slStatus: rawStatus.includes('SL') || isStopped ? 'HIT' : 'ACTIVE',
+            timestamp: logRecord.timestamp,
+            notificationSent: false,
+            notificationTimestamp: 0,
+            date: new Date(logRecord.timestamp).toISOString().split('T')[0],
+          };
+        }
+      } catch (err) {
+        logger.warn(`[Refresh API] SignalLogger fetch fallback failed for id=${id}: ${String(err)}`);
+      }
     }
 
     if (!signal) {
@@ -739,8 +797,9 @@ router.post('/signals/generate', async (req: Request, res: Response) => {
  * DELETE /api/signals
  * Resets/clears active signals cache.
  */
-router.delete('/signals', (_req: Request, res: Response) => {
+router.delete('/signals', async (_req: Request, res: Response) => {
   signalEngine.clearSignals();
+  await ScannerPersistence.clearSentSignals();
   res.status(200).json({
     success: true,
     message: 'Active signals cache cleared successfully',
@@ -855,5 +914,563 @@ router.post('/signals/test-outcome', async (_req: Request, res: Response) => {
     });
   }
 });
+
+/**
+ * GET /api/signals/funnel
+ * Retrieves active Opportunity Funnel items (Watching, Candidates, Confirmed, Promoted, Invalidated).
+ */
+router.get('/signals/funnel', async (_req: Request, res: Response) => {
+  try {
+    const report = OpportunityFunnelStore.evaluateAll();
+    res.status(200).json({
+      success: true,
+      report,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve opportunity funnel',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/funnel/evaluate
+ * Triggers re-evaluation of all opportunity funnel candidates against current market data.
+ */
+router.post('/signals/funnel/evaluate', async (_req: Request, res: Response) => {
+  try {
+    const report = OpportunityFunnelStore.evaluateAll();
+    res.status(200).json({
+      success: true,
+      message: `Funnel evaluated: ${report.totalActive} active items monitored (${report.watchingCount} watching, ${report.qualifiedCount} qualified, ${report.promotedCount} promoted)`,
+      report,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to evaluate opportunity funnel',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * GET /api/signals/funnel/config
+ * Retrieves centralized funnel thresholds configuration.
+ */
+router.get('/signals/funnel/config', (_req: Request, res: Response) => {
+  const thresholds = serverConfig.getThresholds();
+  res.status(200).json({
+    success: true,
+    funnelThresholds: {
+      watchingThreshold: thresholds.watchingThreshold,
+      qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold,
+      signalThreshold: thresholds.signalThreshold,
+      minimumScore: thresholds.minimumScore,
+      minimumRR: thresholds.minimumRR,
+      minimumNetRR: thresholds.minimumNetRR,
+      minimumWinProbability: thresholds.minimumWinProbability,
+    },
+    timestamp: Date.now(),
+  });
+});
+
+/**
+ * GET /api/signals/regime-thresholds
+ * Retrieves Gate 27 regime-adaptive threshold policy, modifiers, and recent logs.
+ */
+router.get('/signals/regime-thresholds', (_req: Request, res: Response) => {
+  try {
+    const policy = Gate27RegimeThresholds.getPolicy();
+    const logs = Gate27RegimeThresholds.getLogs(50);
+    res.status(200).json({
+      success: true,
+      policy,
+      recentEvaluations: logs,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve regime thresholds',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/regime-thresholds/evaluate
+ * Evaluates adaptive threshold and margin for a given symbol, regime, strategy, and score.
+ */
+router.post('/signals/regime-thresholds/evaluate', (req: Request, res: Response) => {
+  try {
+    const { symbol, actualScore, regime, strategy, assetClass } = req.body;
+    if (!symbol || actualScore === undefined) {
+      res.status(400).json({
+        success: false,
+        message: "Missing required fields: 'symbol' and 'actualScore' are required",
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const evaluation = Gate27RegimeThresholds.resolveThreshold({
+      symbol: String(symbol),
+      actualScore: Number(actualScore),
+      regime: regime ? String(regime) : undefined,
+      strategy: strategy ? String(strategy) : undefined,
+      assetClass: assetClass ? String(assetClass) : undefined,
+    });
+
+    res.status(200).json({
+      success: true,
+      evaluation,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to evaluate regime-adaptive threshold',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/regime-thresholds/policy
+ * Updates regime threshold policy configuration (guarded against tiny sample size over-fitting).
+ */
+router.post('/signals/regime-thresholds/policy', (req: Request, res: Response) => {
+  try {
+    const { policy, sampleSize } = req.body;
+    if (!policy) {
+      res.status(400).json({
+        success: false,
+        message: "Missing required 'policy' object in request body",
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const result = Gate27RegimeThresholds.updatePolicy(policy, sampleSize);
+    const httpCode = result.success ? 200 : 400;
+    res.status(httpCode).json({
+      success: result.success,
+      message: result.message,
+      policy: result.policy,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update regime threshold policy',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/confirmation-diversity/evaluate
+ * Evaluates Gate 28 independent confirmation diversity for a list of confluence reasons or technical parameters.
+ */
+router.post('/signals/confirmation-diversity/evaluate', (req: Request, res: Response) => {
+  try {
+    const { reasons, technicalData } = req.body;
+    if (!reasons || !Array.isArray(reasons)) {
+      res.status(400).json({
+        success: false,
+        message: "Missing or invalid 'reasons' array in request body",
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const evaluation = Gate28ConfirmationDiversity.evaluate(reasons, technicalData);
+
+    res.status(200).json({
+      success: true,
+      evaluation,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to evaluate confirmation diversity',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/executable-entry/validate
+ * Validates executable entry price (ASK for BUY, BID for SELL, fallback display price if bid/ask unavailable)
+ * for Gate 29 Executable Entry Validation.
+ */
+router.post('/signals/executable-entry/validate', (req: Request, res: Response) => {
+  try {
+    const { direction, entryPrice, quote, timestampMs } = req.body;
+    if (!direction || (direction !== 'BUY' && direction !== 'SELL') || typeof entryPrice !== 'number' || !quote) {
+      res.status(400).json({
+        success: false,
+        message: "Missing or invalid parameters. Requires 'direction' ('BUY'|'SELL'), numeric 'entryPrice', and 'quote' object.",
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const validation = Gate29ExecutableEntryValidation.validateEntry(
+      direction,
+      entryPrice,
+      quote,
+      timestampMs || Date.now()
+    );
+
+    res.status(200).json({
+      success: true,
+      validation,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to validate executable entry',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/data-freshness/evaluate
+ * Evaluates asset-aware quote & candle data freshness and coverage according to Gate 30.
+ */
+router.post('/signals/data-freshness/evaluate', (req: Request, res: Response) => {
+  try {
+    const { symbol, assetClass, provider, timeframe, executionRequirement, quote, candles, nowMs, sessionState } = req.body;
+    if (!symbol) {
+      res.status(400).json({
+        success: false,
+        message: "Missing required parameter 'symbol'.",
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const freshnessResult = Gate30DataFreshness.evaluate({
+      symbol,
+      assetClass,
+      provider,
+      timeframe,
+      executionRequirement,
+      quote,
+      candles,
+      nowMs,
+      sessionState,
+    });
+
+    res.status(200).json({
+      success: true,
+      result: freshnessResult,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to evaluate data freshness policy',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/news-risk/evaluate
+ * Evaluates asset-specific news risk classification according to Gate 31.
+ */
+router.post('/signals/news-risk/evaluate', (req: Request, res: Response) => {
+  try {
+    const { symbol, timestampMs } = req.body;
+    if (!symbol) {
+      res.status(400).json({
+        success: false,
+        message: "Missing required parameter 'symbol'.",
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const evaluation = Gate31NewsRiskClassification.evaluate(symbol, timestampMs || Date.now());
+
+    res.status(200).json({
+      success: true,
+      evaluation,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to evaluate news risk classification',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * GET /api/signals/news-risk/events
+ * Returns registered scheduled news events in the system calendar.
+ */
+router.get('/signals/news-risk/events', (_req: Request, res: Response) => {
+  try {
+    const events = Gate31NewsRiskClassification.getRegisteredEvents();
+    res.status(200).json({
+      success: true,
+      events,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch registered news events',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/news-risk/register
+ * Dynamically registers or updates a scheduled news event in the system calendar.
+ */
+router.post('/signals/news-risk/register', (req: Request, res: Response) => {
+  try {
+    const event = req.body;
+    if (!event || !event.id || !event.title || !event.scheduledTimeMs) {
+      res.status(400).json({
+        success: false,
+        message: "Missing required event fields ('id', 'title', 'scheduledTimeMs').",
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    Gate31NewsRiskClassification.registerNewsEvent(event);
+
+    res.status(200).json({
+      success: true,
+      message: `Registered news event '${event.id}' successfully.`,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to register news event',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/adaptive-candidates/select
+ * Evaluates Stage-2 candidates and adaptively selects candidates for deep MTF analysis (Gate 32).
+ */
+router.post('/signals/adaptive-candidates/select', (req: Request, res: Response) => {
+  try {
+    const { candidates, config, providerId } = req.body;
+    if (!candidates || !Array.isArray(candidates)) {
+      res.status(400).json({
+        success: false,
+        message: "Missing or invalid required parameter 'candidates' (must be an array).",
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const selection = Gate32AdaptiveCandidateSelection.selectCandidates(candidates, config, providerId);
+
+    res.status(200).json({
+      success: true,
+      selection,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to perform adaptive candidate selection',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/execution-friction/stress-test
+ * Evaluates Gate 34 execution friction stress test for trade signals (spread, slippage, fees, latency buffer).
+ */
+router.post('/signals/execution-friction/stress-test', (req: Request, res: Response) => {
+  try {
+    const { symbol, entryPrice, stopLoss, takeProfit, thresholdOverrides } = req.body;
+    if (!symbol || typeof entryPrice !== 'number' || typeof stopLoss !== 'number' || typeof takeProfit !== 'number') {
+      res.status(400).json({
+        success: false,
+        message: "Missing or invalid required parameters ('symbol', 'entryPrice', 'stopLoss', 'takeProfit').",
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const testResult = Gate34ExecutionFrictionStressTest.evaluate(
+      symbol,
+      entryPrice,
+      stopLoss,
+      takeProfit,
+      thresholdOverrides
+    );
+
+    res.status(200).json({
+      success: true,
+      result: testResult,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to perform execution friction stress test',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * GATE 35 — Signal Funnel Analytics
+ * GET /api/signals/funnel-analytics
+ * Returns complete aggregated funnel report tracking scanned candidate records through Stage 2 -> Gate 0-9 -> Final Signal
+ */
+router.get('/signals/funnel-analytics', (req: Request, res: Response) => {
+  try {
+    const report = Gate35SignalFunnelAnalytics.getFunnelAnalytics();
+    res.status(200).json({
+      success: true,
+      data: report,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve signal funnel analytics',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * DELETE /api/signals/funnel-analytics
+ * Resets/clears the recorded funnel analytics candidates data
+ */
+router.delete('/signals/funnel-analytics', (req: Request, res: Response) => {
+  try {
+    Gate35SignalFunnelAnalytics.clear();
+    res.status(200).json({
+      success: true,
+      message: 'Signal funnel analytics records cleared successfully.',
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to clear signal funnel analytics',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * GATE 36 — Configurable Signal Frequency
+ * GET /api/signals/frequency-config
+ * Returns current daily signal cap configuration, preset mode, candidate/signal/notification counts, and cluster allocation limits.
+ */
+router.get('/signals/frequency-config', async (req: Request, res: Response) => {
+  try {
+    const metrics = await Gate36ConfigurableSignalFrequency.getMetrics();
+    res.status(200).json({
+      success: true,
+      data: metrics,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve signal frequency configuration',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/frequency-config & PUT /api/signals/frequency-config
+ * Updates daily signal cap configuration and preset (5, 10, 15, CUSTOM)
+ */
+const updateFrequencyHandler = async (req: Request, res: Response) => {
+  try {
+    const { preset, customCap, maxClusterAllocationPct } = req.body || {};
+
+    const updated = Gate36ConfigurableSignalFrequency.setConfig({
+      preset,
+      customCap: typeof customCap === 'number' ? customCap : undefined,
+      maxClusterAllocationPct: typeof maxClusterAllocationPct === 'number' ? maxClusterAllocationPct : undefined,
+    });
+
+    const metrics = await Gate36ConfigurableSignalFrequency.getMetrics();
+
+    res.status(200).json({
+      success: true,
+      message: `Signal frequency configuration updated successfully. Cap set to ${updated.dailySignalCap} (Preset: ${updated.preset}).`,
+      data: metrics,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update signal frequency configuration',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+};
+
+router.post('/signals/frequency-config', updateFrequencyHandler);
+router.put('/signals/frequency-config', updateFrequencyHandler);
 
 export default router;

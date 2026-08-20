@@ -44,6 +44,7 @@ interface SignalHistoryPanelProps {
   preferredTimeZone: DisplayTimeZone;
   onSelectSymbol?: (symbol: string) => void;
   onTimeZoneChange?: (tz: DisplayTimeZone) => void;
+  onSignalRefreshed?: (updatedSignal: TradingSignal) => void;
 }
 
 export function SignalHistoryPanel({
@@ -53,6 +54,7 @@ export function SignalHistoryPanel({
   preferredTimeZone,
   onSelectSymbol,
   onTimeZoneChange,
+  onSignalRefreshed,
 }: SignalHistoryPanelProps) {
   const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'TOP_TRADE' | 'SUGGESTION' | 'NO_TRADE'>('ALL');
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -516,7 +518,11 @@ export function SignalHistoryPanel({
                 {isExpanded && (
                   <div className="pt-3 border-t border-slate-800/80 space-y-3 text-xs">
                     {/* Gate 2 Authoritative Target Hit Details Tracker */}
-                    <TargetTracker signal={item as unknown as TradingSignal} precision={precision} />
+                    <TargetTracker
+                      signal={item as unknown as TradingSignal}
+                      precision={precision}
+                      onSignalRefreshed={onSignalRefreshed}
+                    />
 
                     {item.strategy && (
                       <div className="text-slate-300 font-mono text-xs bg-slate-900/80 border border-slate-800 p-3 rounded-lg flex items-center gap-2">

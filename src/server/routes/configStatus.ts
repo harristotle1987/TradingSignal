@@ -48,7 +48,13 @@ router.get('/config/status', (_req: Request, res: Response) => {
       marketFeedsActive: true,
       reason: 'Gate 3 enforces real-time Twelve Data/Bitget market feeds, multi-timeframe indicator confluence, and NVIDIA AI risk evaluation.',
     },
-
+    expirationPolicy: {
+      signalExpirationMinutes: config.signalExpirationMinutes,
+      signalExpirationMs: config.signalExpirationMs,
+      appliesTo: 'WAITING_ENTRY',
+      disabledAfterEntry: true,
+    },
+    thresholds: config.thresholds,
   });
 });
 
