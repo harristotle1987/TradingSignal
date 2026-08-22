@@ -158,6 +158,15 @@ class ApiClient {
   }
 
   /**
+   * Delete an active signal by ID
+   */
+  async deleteSignal(id: string): Promise<{ success: boolean; message: string }> {
+    return this.fetchJson<{ success: boolean; message: string }>(`/api/signals/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  /**
    * Clear active signals
    */
   async clearSignals(): Promise<{ success: boolean; message: string }> {

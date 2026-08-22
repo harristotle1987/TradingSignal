@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "lastUpdated": 1787407749731,
+  "lastUpdated": 1787413076368,
   "disclaimer": "DISCLAIMER: Historical performance, backtest simulation results, walk-forward evaluations, and confidence calibration metrics are statistical tools for backend algorithmic risk management only. Past performance does not guarantee or claim future profitability. Live trading involves substantial market risk.",
   "overall": {
     "totalTrades": 18,
@@ -308,8 +308,8 @@
       "isWin": true,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787371749657,
-      "resolvedAt": 1787375349657,
+      "timestamp": 1787377076301,
+      "resolvedAt": 1787380676301,
       "durationMs": 3600000
     },
     {
@@ -332,8 +332,8 @@
       "isWin": true,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787375349675,
-      "resolvedAt": 1787378949675,
+      "timestamp": 1787380676315,
+      "resolvedAt": 1787384276315,
       "durationMs": 3600000
     },
     {
@@ -356,8 +356,8 @@
       "isWin": true,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787378949678,
-      "resolvedAt": 1787382549678,
+      "timestamp": 1787384276318,
+      "resolvedAt": 1787387876318,
       "durationMs": 3600000
     },
     {
@@ -380,8 +380,8 @@
       "isWin": true,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787382549680,
-      "resolvedAt": 1787386149680,
+      "timestamp": 1787387876320,
+      "resolvedAt": 1787391476320,
       "durationMs": 3600000
     },
     {
@@ -404,8 +404,8 @@
       "isWin": true,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787386149683,
-      "resolvedAt": 1787389749683,
+      "timestamp": 1787391476323,
+      "resolvedAt": 1787395076323,
       "durationMs": 3600000
     },
     {
@@ -428,8 +428,8 @@
       "isWin": true,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787389749686,
-      "resolvedAt": 1787393349686,
+      "timestamp": 1787395076325,
+      "resolvedAt": 1787398676325,
       "durationMs": 3600000
     },
     {
@@ -452,8 +452,8 @@
       "isWin": true,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787393349688,
-      "resolvedAt": 1787396949688,
+      "timestamp": 1787398676328,
+      "resolvedAt": 1787402276328,
       "durationMs": 3600000
     },
     {
@@ -476,8 +476,8 @@
       "isWin": false,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787396949692,
-      "resolvedAt": 1787400549692,
+      "timestamp": 1787402276331,
+      "resolvedAt": 1787405876331,
       "durationMs": 3600000
     },
     {
@@ -500,8 +500,8 @@
       "isWin": false,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787400549694,
-      "resolvedAt": 1787404149694,
+      "timestamp": 1787405876334,
+      "resolvedAt": 1787409476334,
       "durationMs": 3600000
     },
     {
@@ -524,8 +524,8 @@
       "isWin": false,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787404149698,
-      "resolvedAt": 1787407749698,
+      "timestamp": 1787409476337,
+      "resolvedAt": 1787413076337,
       "durationMs": 3600000
     },
     {
@@ -548,8 +548,8 @@
       "isWin": false,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787378949708,
-      "resolvedAt": 1787382549709,
+      "timestamp": 1787384276344,
+      "resolvedAt": 1787387876344,
       "durationMs": 3600000
     },
     {
@@ -572,8 +572,8 @@
       "isWin": false,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787382549718,
-      "resolvedAt": 1787386149718,
+      "timestamp": 1787387876346,
+      "resolvedAt": 1787391476346,
       "durationMs": 3600000
     },
     {
@@ -596,8 +596,8 @@
       "isWin": false,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787386149720,
-      "resolvedAt": 1787389749720,
+      "timestamp": 1787391476348,
+      "resolvedAt": 1787395076348,
       "durationMs": 3600000
     },
     {
@@ -620,8 +620,8 @@
       "isWin": false,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787389749722,
-      "resolvedAt": 1787393349722,
+      "timestamp": 1787395076353,
+      "resolvedAt": 1787398676353,
       "durationMs": 3600000
     },
     {
@@ -644,8 +644,8 @@
       "isWin": false,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787393349725,
-      "resolvedAt": 1787396949725,
+      "timestamp": 1787398676356,
+      "resolvedAt": 1787402276356,
       "durationMs": 3600000
     },
     {
@@ -668,8 +668,8 @@
       "isWin": false,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787396949727,
-      "resolvedAt": 1787400549727,
+      "timestamp": 1787402276363,
+      "resolvedAt": 1787405876363,
       "durationMs": 3600000
     },
     {
@@ -692,8 +692,8 @@
       "isWin": false,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787400549729,
-      "resolvedAt": 1787404149729,
+      "timestamp": 1787405876366,
+      "resolvedAt": 1787409476366,
       "durationMs": 3600000
     },
     {
@@ -716,8 +716,8 @@
       "isWin": false,
       "tradeEntered": true,
       "TRADE_ENTERED": true,
-      "timestamp": 1787404149731,
-      "resolvedAt": 1787407749731,
+      "timestamp": 1787409476368,
+      "resolvedAt": 1787413076368,
       "durationMs": 3600000
     }
   ]

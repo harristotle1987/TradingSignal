@@ -691,6 +691,7 @@ export class ScannerPersistence {
     this.init();
     if (!this.isProductionMode()) {
       this.localData.sentSignals = [];
+      this.localData.notifications = [];
       this.localData.capState = {
         date: new Date().toISOString().split('T')[0],
         dailySignalCount: 0,
@@ -703,21 +704,35 @@ export class ScannerPersistence {
     const firestore = getFirestoreAdmin();
     if (firestore) {
       try {
-        const query = await firestore.collection(FIRESTORE_SIGNALS_COL).get();
-        const batch = firestore.batch();
-        if (!query.empty) {
-          query.docs.forEach((doc) => {
-            batch.delete(doc.ref);
-          });
+        const collections = [FIRESTORE_SIGNALS_COL, FIRESTORE_NOTIFICATIONS_COL, FIRESTORE_REJECTIONS_COL];
+        for (const col of collections) {
+          const snapshot = await firestore.collection(col).get();
+          if (!snapshot.empty) {
+            let count = 0;
+            let batch = firestore.batch();
+            for (const doc of snapshot.docs) {
+              batch.delete(doc.ref);
+              count++;
+              if (count % 400 === 0) {
+                await batch.commit();
+                batch = firestore.batch();
+              }
+            }
+            if (count % 400 !== 0) {
+              await batch.commit();
+            }
+          }
         }
+
         const capDocRef = firestore.doc(FIRESTORE_CAP_DOC);
-        batch.set(capDocRef, {
-          date: new Date().toISOString().split('T')[0],
-          dailySignalCount: 0,
-          dailySignalCap: serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 10,
-          lastScanTime: Date.now(),
+        await firestore.runTransaction(async (transaction) => {
+           transaction.set(capDocRef, {
+            date: new Date().toISOString().split('T')[0],
+            dailySignalCount: 0,
+            dailySignalCap: serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 10,
+            lastScanTime: Date.now(),
+          });
         });
-        await batch.commit();
       } catch (err) {
         logger.warn('[ScannerPersistence] Firestore clearSentSignals failed:', { error: String(err) });
       }
@@ -957,6 +972,57 @@ export class ScannerPersistence {
     } else if (this.isProductionMode()) {
       logger.error('[ScannerPersistence] FAIL CLOSED: Cannot record notification without Firestore in production.');
     }
+  }
+
+  /**
+   * Deletes a single notification by ID.
+   */
+  static async deleteNotification(id: string): Promise<boolean> {
+    this.init();
+    let deletedLocally = false;
+    
+    if (!this.isProductionMode()) {
+      const initialLength = this.localData.notifications.length;
+      this.localData.notifications = this.localData.notifications.filter((n) => n.id !== id);
+      deletedLocally = this.localData.notifications.length < initialLength;
+      if (deletedLocally) {
+        this.saveLocalData();
+      }
+    }
+
+    let deletedInFirestore = false;
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      try {
+        const query = await firestore
+          .collection(FIRESTORE_NOTIFICATIONS_COL)
+          .doc(id)
+          .get();
+        if (query.exists) {
+          await firestore.collection(FIRESTORE_NOTIFICATIONS_COL).doc(id).delete();
+          deletedInFirestore = true;
+        } else {
+          // If the ID is a signal snapshot ID instead of a notification ID, we should try querying by it
+          const snapshotQuery = await firestore
+            .collection(FIRESTORE_NOTIFICATIONS_COL)
+            .where('snapshotId', '==', id)
+            .get();
+          if (!snapshotQuery.empty) {
+            const batch = firestore.batch();
+            snapshotQuery.forEach(doc => batch.delete(doc.ref));
+            await batch.commit();
+            deletedInFirestore = true;
+          }
+        }
+      } catch (err) {
+        logger.debug('[ScannerPersistence] Firestore deleteNotification error', { error: String(err) });
+      }
+    } else if (this.isProductionMode()) {
+      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot delete notification without Firestore in production.');
+      return false;
+    }
+
+    return deletedLocally || deletedInFirestore;
   }
 
   /**

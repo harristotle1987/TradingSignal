@@ -1,9 +1,9 @@
 [
   {
     "symbol": "EURUSD",
-    "lastAssetSignalMs": 1787407735684,
+    "lastAssetSignalMs": 1787413062905,
     "strategyCooldowns": {
-      "breakout": 1787407735684
+      "breakout": 1787413062905
     }
   }
 ]

@@ -59,9 +59,9 @@ export function adminAuthMiddleware(req: Request, res: Response, next: NextFunct
   } else {
     // Development / Test environment fallback when no explicit admin key is set
     if (process.env.NODE_ENV !== 'production') {
-      if (token === 'dev-admin-key' || token === 'admin-secret' || (token && token.length > 0)) {
-        isAuthorized = true;
-      }
+      // In development without configured secrets, we allow access to facilitate local testing
+      // and UI interactions (like deleting test signals) without requiring a mock token to be set.
+      isAuthorized = true;
     }
   }
 

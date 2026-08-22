@@ -706,11 +706,14 @@ router.get('/signals/log', async (_req: Request, res: Response) => {
 router.delete('/signals/log/:id', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
-    const success = await SignalLogger.deleteLog(id);
+    const loggerSuccess = await SignalLogger.deleteLog(id);
     
     // Also remove from active signals cache and persistent sent signals
     signalEngine.removeActiveSignal(id);
-    await ScannerPersistence.deleteSentSignal(id);
+    const sentSignalSuccess = await ScannerPersistence.deleteSentSignal(id);
+    const notificationSuccess = await ScannerPersistence.deleteNotification(id);
+
+    const success = loggerSuccess || sentSignalSuccess || notificationSuccess;
 
     if (success) {
       res.status(200).json({
@@ -796,6 +799,46 @@ router.post('/signals/generate', adminAuthMiddleware, async (req: Request, res: 
     return res.status(500).json({
       success: false,
       message: 'Signal generation endpoint internal error',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * DELETE /api/signals/:id
+ * Deletes a specific active signal by ID.
+ */
+router.delete('/signals/:id', adminAuthMiddleware, async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id;
+    // Remove from active signals cache and persistent sent signals
+    const removedFromMemory = signalEngine.removeActiveSignal(id);
+    const sentSignalSuccess = await ScannerPersistence.deleteSentSignal(id);
+    const notificationSuccess = await ScannerPersistence.deleteNotification(id);
+    const loggerSuccess = await SignalLogger.deleteLog(id);
+
+    const success = removedFromMemory || sentSignalSuccess || notificationSuccess || loggerSuccess;
+
+    if (success) {
+      res.status(200).json({
+        success: true,
+        message: `Signal ${id} deleted successfully`,
+        timestamp: Date.now(),
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: `Signal ${id} not found`,
+        timestamp: Date.now(),
+      });
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error(`[API] Failed to delete signal ${req.params.id}`, { error: msg });
+    res.status(500).json({
+      success: false,
+      message: `Failed to delete signal ${req.params.id}`,
       error: msg,
       timestamp: Date.now(),
     });

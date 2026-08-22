@@ -659,9 +659,21 @@ export class SignalLogger {
     if (firestore) {
       try {
         const snapshot = await firestore.collection(FIRESTORE_COLLECTION).get();
-        const batch = firestore.batch();
-        snapshot.docs.forEach((doc) => batch.delete(doc.ref));
-        await batch.commit();
+        if (!snapshot.empty) {
+          let count = 0;
+          let batch = firestore.batch();
+          for (const doc of snapshot.docs) {
+            batch.delete(doc.ref);
+            count++;
+            if (count % 400 === 0) {
+              await batch.commit();
+              batch = firestore.batch();
+            }
+          }
+          if (count % 400 !== 0) {
+            await batch.commit();
+          }
+        }
       } catch (err) {
         logger.debug('[SignalLogger] Firestore clear logs deferred:', { error: String(err) });
       }
