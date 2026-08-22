@@ -248,8 +248,9 @@ export async function runDivergenceTestSuite() {
   }
 }
 
-// Run when executed directly
-runDivergenceTestSuite().catch((err) => {
-  console.error(err);
-  process.exit(1);
+import { describe, it } from "vitest";
+describe("divergenceEngine.test.ts", () => {
+  it("runs successfully", async () => {
+    await runDivergenceTestSuite();
+  });
 });

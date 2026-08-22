@@ -14,8 +14,9 @@
  * - Duplicate protection: Prevents spamming the same setup.
  */
 
-import { TradingSignal, SignalGenerationResponse, NormalizedCandle, NormalizedTicker, SignalDirection } from '../../types/index.js';
+import { TradingSignal, SignalGenerationResponse, NormalizedCandle, NormalizedTicker, SignalDirection, isActionableSignal } from '../../types/index.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
+import { quotaManager } from '../market/QuotaManager.js';
 import { MarketSessionManager } from '../market/MarketSessionManager.js';
 import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 import { ScoringEngine, ScoringResult } from './ScoringEngine.js';
@@ -343,6 +344,17 @@ export class SignalEngine {
       const selectedAssetNames = new Set(adaptiveSelection.selectedCandidates.map((sc) => sc.asset));
       const topCandidates = stage2Candidates.filter((c) => selectedAssetNames.has(c.asset));
 
+      // GATE 52 — ADAPTIVE DEEP SCAN AUDIT LOG
+      logger.info(`[Gate 52 Deep Scan Audit Log]`, {
+        universeSize: universe.length,
+        stage1Candidates: openAssets.length,
+        stage2Candidates: stage2Candidates.length,
+        initialDeepScanLimit: adaptiveSelection.baseQuotaLimit,
+        expandedDeepScanLimit: adaptiveSelection.finalQuotaLimit,
+        finalDeepScanCount: topCandidates.length,
+        APIQuotaRemaining: quotaManager.getRemainingQuota('twelvedata'),
+      });
+
       logger.info(
         `[Stage 3 Dispatch] ${adaptiveSelection.explanation} Advancing ${topCandidates.length} assets to Deep MTF Analysis: ${topCandidates.map((c) => `${c.asset} (${c.preliminaryScore}pt)`).join(', ')}`
       );
@@ -418,6 +430,7 @@ export class SignalEngine {
         }
 
         const baselinePrice = liveTicker.price;
+        const thresholds = serverConfig.getConfig().thresholds;
         const newsSentiment = this.evaluateNewsSentiment(asset, generalNews);
         const crossCheck = await this.verifyCrossSourcePrice(asset, baselinePrice);
 
@@ -496,8 +509,6 @@ export class SignalEngine {
           const gate9 = Gate9RiskManagement.calculate(baselinePrice, scoring.direction, setupCandles);
           logger.info(`[Gate 9 Risk] ${asset}: RR=${gate9.rrRatio.toFixed(2)}, EV=${gate9.expectedValue.toFixed(2)}, SCORE=${gate9.riskScore}`);
 
-          const thresholds = serverConfig.getConfig().thresholds;
-
           // -----------------------------------------------------------------
           // DIRECTIONAL CONFIRMATION MODEL (2 OF 3 REQUIRED: Trend, Structure, Momentum)
           // -----------------------------------------------------------------
@@ -518,7 +529,7 @@ export class SignalEngine {
             scoring.rejectionReason = `REJECTED: MARKET_CONTEXT_BLOCKED. Gate 7 Market Context Blocked: ${gate7.reasons.join('; ')}`;
           } else if (gate9.rrRatio < thresholds.minimumRR) {
             scoring.isValid = false;
-            scoring.rejectionReason = `REJECTED: NET_RR_BELOW_THRESHOLD. R:R ${gate9.rrRatio.toFixed(2)} is below minimum required ${thresholds.minimumRR}:1 ratio`;
+            scoring.rejectionReason = `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross R:R (${gate9.rrRatio.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${thresholds.minimumRR}:1)`;
           } else {
             // Apply weighted composite scoring:
             // Weights: Trend (25), Structure (20), Momentum (20), Volatility (15), Volume (10), Multi-TF (10)
@@ -603,6 +614,30 @@ export class SignalEngine {
           atr: scoring.technicalMetrics?.atr,
         });
 
+        const commonTelemetry = {
+          assetClass: SymbolNormalizer.getAssetClassification(asset),
+          initialScore: cand.preliminaryScore,
+          watchingThreshold: thresholds.watchingThreshold,
+          qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold,
+          signalThreshold: thresholds.signalThreshold,
+          strategyAgreementRatio: scoring.strategyAgreementRatio,
+          timeframeAlignmentRatio: scoring.timeframeAlignmentRatio,
+          grossRR: scoring.riskRewardRatio,
+          netRR: scoring.estimatedFriction?.netRiskRewardRatio,
+          adverseNetRR: scoring.estimatedFriction?.adverseNetRiskRewardRatio,
+          estimatedWinRate: scoring.estimatedWinRate,
+          empiricalProbability: null,
+          probabilitySampleSize: 0,
+          aiMode: 'None',
+          aiResult: 'None',
+          dataFreshness: `${dataFreshnessSeconds}s`,
+          entryQuality: scoring.isValid ? 'High Quality setup' : 'Unqualified',
+          newsStatus: newsSentiment.sentiment,
+          correlationCluster: Gate17CorrelationExposure.identifyCluster(asset).name,
+          finalDecision: scoring.isValid ? 'QUALIFIED' : 'REJECTED',
+          rejectionStage: scoring.isValid ? 'Passed' : 'GATE_3',
+        };
+
         if (!scoring.isValid) {
           logger.info(`[Stage 3 Scoring] ${asset} rejected: ${scoring.rejectionReason}`);
           Gate35SignalFunnelAnalytics.recordCandidate({
@@ -613,6 +648,9 @@ export class SignalEngine {
             regime: scoring.marketRegime || 'UNKNOWN',
             strategy: primaryStrategyName,
             rejectionReason: scoring.rejectionReason || 'Failed scoring criteria',
+            ...commonTelemetry,
+            finalDecision: 'REJECTED',
+            rejectionStage: 'GATE_3',
           });
           SignalAuditStore.logAudit({
             symbol: asset,
@@ -665,6 +703,9 @@ export class SignalEngine {
               regime: scoring.marketRegime,
               strategy: primaryStrategyName,
               rejectionReason: reason,
+              ...commonTelemetry,
+              finalDecision: 'REJECTED',
+              rejectionStage: 'GATE_8',
             });
             SignalAuditStore.logAudit({
               symbol: asset,
@@ -701,6 +742,9 @@ export class SignalEngine {
             regime: scoring.marketRegime,
             strategy: primaryStrategyName,
             rejectionReason: reason,
+            ...commonTelemetry,
+            finalDecision: 'REJECTED',
+            rejectionStage: 'GATE_8',
           });
           SignalAuditStore.logAudit({
             symbol: asset,
@@ -736,6 +780,9 @@ export class SignalEngine {
             regime: scoring.marketRegime,
             strategy: primaryStrategyName,
             rejectionReason: reason,
+            ...commonTelemetry,
+            finalDecision: 'REJECTED',
+            rejectionStage: 'GATE_8',
           });
           SignalAuditStore.logAudit({
             symbol: asset,
@@ -788,6 +835,9 @@ export class SignalEngine {
             regime: scoring.marketRegime,
             strategy: primaryStrategyName,
             rejectionReason: validation.detailedMessage || validation.validationReason,
+            ...commonTelemetry,
+            finalDecision: 'REJECTED',
+            rejectionStage: 'GATE_9',
           });
           SignalAuditStore.logAudit({
             symbol: asset,
@@ -810,12 +860,18 @@ export class SignalEngine {
           continue;
         }
 
-        const finalEntry = validation.adjustedEntryPrice || liveTicker.price;
-        const finalSL = validation.adjustedStopLoss || scoring.stopLoss;
-        const finalTP = validation.adjustedTakeProfit || scoring.takeProfit;
+        let finalEntry = validation.adjustedEntryPrice || liveTicker.price;
+        let finalSL = validation.adjustedStopLoss || scoring.stopLoss;
+        let finalTP = validation.adjustedTakeProfit || scoring.takeProfit;
         const finalRR = validation.adjustedNetRR || scoring.riskRewardRatio;
 
         if (!scoring.technicalMetrics) continue;
+
+        // Strict policy enforcement check: Save state before AI evaluation
+        const entryBeforeAI = finalEntry;
+        const slBeforeAI = finalSL;
+        const tpBeforeAI = finalTP;
+        const scoreBeforeAI = scoring.score;
 
         const candidatePayloadForAI = {
           hasSetup: true,
@@ -832,11 +888,40 @@ export class SignalEngine {
           technicalMetrics: scoring.technicalMetrics,
         };
 
-        const aiResult = await NvidiaAIService.evaluate(candidatePayloadForAI);
+        let aiResult: {
+          aiAssessment: string;
+          classification: 'UNAVAILABLE' | 'QUALITATIVE_CONFIRMATION' | 'QUALITATIVE_CONTRADICTION';
+          refinedConfidence: number;
+          documentedConfidence?: number;
+          isAiValidated: boolean;
+        } = {
+          aiAssessment: 'AI Confirmation Disabled by Policy.',
+          classification: 'UNAVAILABLE',
+          refinedConfidence: scoring.score,
+          documentedConfidence: undefined,
+          isAiValidated: false,
+        };
+
+        if (thresholds.AIConfirmationMode !== 'DISABLED') {
+          aiResult = await NvidiaAIService.evaluate(candidatePayloadForAI);
+        }
+
         const winRate = ScoringEngine.estimateWinRate(scoring.score, finalRR, scoring.agreeingStrategiesCount);
         const expectancy = ScoringEngine.calculateExpectancy(winRate, finalRR);
-        
-        const thresholds = serverConfig.getConfig().thresholds;
+
+        // Strict Policy Enforcement Check: Reset any unauthorized AI modifications to entry, SL, TP, score or probability
+        if (
+          finalEntry !== entryBeforeAI ||
+          finalSL !== slBeforeAI ||
+          finalTP !== tpBeforeAI ||
+          scoring.score !== scoreBeforeAI
+        ) {
+          logger.warn(`[Stage 3 AI] Policy violation attempt detected. Resetting fields to original deterministic values.`);
+          finalEntry = entryBeforeAI;
+          finalSL = slBeforeAI;
+          finalTP = tpBeforeAI;
+          scoring.score = scoreBeforeAI;
+        }
         if (winRate <= thresholds.minimumWinProbability) {
           const reason = `REJECTED: WIN_RATE_BELOW_THRESHOLD. Estimated win rate (${winRate}% <= ${thresholds.minimumWinProbability}% threshold)`;
           logger.info(`[Stage 3 AI] Rejected ${asset} due to ${reason}`);
@@ -887,18 +972,21 @@ export class SignalEngine {
 
         const classification = SymbolNormalizer.getAssetClassification(asset);
 
-        // GATE 27: Regime-Adaptive Signal Threshold Resolution
-        const adaptiveThreshold = Gate27RegimeThresholds.resolveThreshold({
+        // GATE 65: Centralized Final Tradeability Resolution
+        // finalRequiredScore = Math.max(thresholds.signalThreshold, regimeAdaptiveThreshold)
+        // Gate 27 can make the system MORE selective, but NEVER less selective than signalThreshold.
+        const tradeabilityCheck = TradeRankingEngine.calculateFinalRequiredScore({
           symbol: asset,
           actualScore: scoring.score,
           regime: scoring.marketRegime,
           strategy: primaryStrategyName,
           assetClass: classification,
+          signalThreshold: thresholds.signalThreshold,
         });
 
         // 1. Hard Rejection for UNKNOWN / Untradeable Regimes (Gate 27 policy: UNKNOWN -> NO SIGNAL)
-        if (!adaptiveThreshold.isExecutable) {
-          const reason = `REJECTED: REGIME_UNTRADEABLE. Market regime '${scoring.marketRegime}' is UNKNOWN or untradeable under Gate 27 policy (NO SIGNAL).`;
+        if (!tradeabilityCheck.isExecutable) {
+          const reason = tradeabilityCheck.rejectionReason || `REJECTED: REGIME_UNTRADEABLE. Market regime '${scoring.marketRegime}' is UNKNOWN or untradeable under Gate 27 policy (NO SIGNAL).`;
           logger.info(`[Gate 27 Policy] Rejected ${asset} due to ${reason}`);
           SignalAuditStore.logAudit({
             symbol: asset,
@@ -910,9 +998,9 @@ export class SignalEngine {
             failedStrategies: scoring.failedStrategies || [],
             marketRegime: scoring.marketRegime,
             regime: scoring.marketRegime,
-            threshold: adaptiveThreshold.resolvedThreshold,
+            threshold: tradeabilityCheck.finalRequiredScore,
             actualScore: scoring.score,
-            marginAboveThreshold: adaptiveThreshold.marginAboveThreshold,
+            marginAboveThreshold: tradeabilityCheck.marginAboveFinalThreshold,
             atr: scoring.technicalMetrics?.atr || 0,
             dataFreshnessSeconds,
             providerAgreement: crossCheck.agreementPct >= 99.5,
@@ -926,16 +1014,16 @@ export class SignalEngine {
           continue;
         }
 
-        // 2. Regime-Adaptive Threshold Evaluation
-        const effectiveSignalThreshold = adaptiveThreshold.resolvedThreshold;
-        const marginAboveThreshold = adaptiveThreshold.marginAboveThreshold;
+        // 2. Centralized Final Tradeability Threshold Evaluation
+        const effectiveFinalScoreHurdle = tradeabilityCheck.finalRequiredScore;
+        const marginAboveThreshold = tradeabilityCheck.marginAboveFinalThreshold;
 
-        if (scoring.score < effectiveSignalThreshold) {
-          const effectiveWatchingThreshold = Math.max(68, effectiveSignalThreshold - 8);
-          const effectiveCandidateThreshold = Math.max(72, effectiveSignalThreshold - 4);
+        if (!tradeabilityCheck.passed) {
+          const effectiveWatchingThreshold = Math.max(68, effectiveFinalScoreHurdle - 8);
+          const effectiveCandidateThreshold = Math.max(72, effectiveFinalScoreHurdle - 4);
           const isWatching = scoring.score >= effectiveWatchingThreshold;
           const funnelStage = scoring.score >= effectiveCandidateThreshold ? 'CONFIRMED' : 'WATCHING';
-          const reason = `REJECTED: SCORE_BELOW_REGIME_THRESHOLD. Score (${scoring.score}/100) below regime-adaptive threshold (${effectiveSignalThreshold}) for regime '${adaptiveThreshold.normalizedRegime}' & strategy '${primaryStrategyName}' (margin: ${marginAboveThreshold >= 0 ? '+' : ''}${marginAboveThreshold})`;
+          const reason = tradeabilityCheck.rejectionReason || `REJECTED: SCORE_BELOW_FINAL_THRESHOLD. Score (${scoring.score}/100) below final required score (${effectiveFinalScoreHurdle}) (margin: ${marginAboveThreshold >= 0 ? '+' : ''}${marginAboveThreshold})`;
           
           if (isWatching) {
             // GATE 26 & 27: Register in Opportunity Funnel for continuous monitoring with adaptive target
@@ -951,20 +1039,20 @@ export class SignalEngine {
               tp3: scoring.tp3,
               riskRewardRatio: finalRR,
               score: scoring.score,
-              confidenceScore: aiResult.refinedConfidence,
+              confidenceScore: scoring.score,
               stage: funnelStage,
               status: funnelStage === 'CONFIRMED' ? 'QUALIFIED' : 'WATCHING',
               hardGatesPassed: true,
               passedSoftConditions: scoring.confluenceReasons || [],
-              missingSoftConditions: [`Missing confirmation trigger to reach ${effectiveSignalThreshold} regime threshold`],
-              rejectionReason: `Placed in ${funnelStage} stage (Score: ${scoring.score}/${effectiveSignalThreshold}, margin: ${marginAboveThreshold >= 0 ? '+' : ''}${marginAboveThreshold}). Not emitted as trade signal.`,
+              missingSoftConditions: [`Missing confirmation trigger to reach ${effectiveFinalScoreHurdle} final required threshold`],
+              rejectionReason: `Placed in ${funnelStage} stage (Score: ${scoring.score}/${effectiveFinalScoreHurdle}, margin: ${marginAboveThreshold >= 0 ? '+' : ''}${marginAboveThreshold}). Not emitted as trade signal.`,
               marketRegime: scoring.marketRegime,
               strategy: primaryStrategyName,
               createdAt: now,
               updatedAt: now,
               expiresAt: now + serverConfig.getConfig().signalExpirationMs,
             });
-            logger.info(`[Gate 26 Funnel] Registered ${asset} as ${funnelStage} (Score: ${scoring.score}, Target: ${effectiveSignalThreshold})`, { id: funnelItem.id, symbol: asset, stage: funnelStage, margin: marginAboveThreshold });
+            logger.info(`[Gate 26 Funnel] Registered ${asset} as ${funnelStage} (Score: ${scoring.score}, Target: ${effectiveFinalScoreHurdle})`, { id: funnelItem.id, symbol: asset, stage: funnelStage, margin: marginAboveThreshold });
           }
 
           logger.info(`[Stage 3 AI] Rejected ${asset} due to ${reason}`);
@@ -978,7 +1066,7 @@ export class SignalEngine {
             failedStrategies: scoring.failedStrategies || [],
             marketRegime: scoring.marketRegime,
             regime: scoring.marketRegime,
-            threshold: effectiveSignalThreshold,
+            threshold: effectiveFinalScoreHurdle,
             actualScore: scoring.score,
             marginAboveThreshold,
             atr: scoring.technicalMetrics?.atr || 0,
@@ -994,9 +1082,30 @@ export class SignalEngine {
           continue;
         }
 
-        if (thresholds.AIConfirmationMode === 'REQUIRED' && (aiResult.classification === 'QUALITATIVE_CONTRADICTION' || !aiResult.isAiValidated)) {
-          const reason = `REJECTED: AI_QUALITATIVE_CONTRADICTION. AI qualitative assessment returned ${aiResult.classification} ('${aiResult.aiAssessment}')`;
-          logger.info(`[Stage 3 AI] Rejected ${asset} due to ${reason}`);
+        // Check AI qualitative and quantitative thresholds according to policy
+        let aiRejected = false;
+        let aiRejectionReason = '';
+
+        if (thresholds.AIConfirmationMode === 'REQUIRED') {
+          if (aiResult.classification === 'QUALITATIVE_CONTRADICTION' || aiResult.classification === 'UNAVAILABLE' || !aiResult.isAiValidated) {
+            aiRejected = true;
+            aiRejectionReason = `REJECTED: AI_QUALITATIVE_CONTRADICTION. AI qualitative assessment returned ${aiResult.classification} ('${aiResult.aiAssessment}')`;
+          } else if (aiResult.documentedConfidence !== undefined && aiResult.documentedConfidence < thresholds.minimumAiConfidence) {
+            aiRejected = true;
+            aiRejectionReason = `REJECTED: AI_CONFIDENCE_BELOW_THRESHOLD. AI confidence (${aiResult.documentedConfidence}% < ${thresholds.minimumAiConfidence}%)`;
+          }
+        } else if (thresholds.AIConfirmationMode === 'OPTIONAL') {
+          if (aiResult.classification === 'QUALITATIVE_CONTRADICTION') {
+            aiRejected = true;
+            aiRejectionReason = `REJECTED: AI_QUALITATIVE_CONTRADICTION. AI qualitative assessment returned ${aiResult.classification} ('${aiResult.aiAssessment}')`;
+          } else if (aiResult.documentedConfidence !== undefined && aiResult.documentedConfidence < thresholds.minimumAiConfidence) {
+            aiRejected = true;
+            aiRejectionReason = `REJECTED: AI_CONFIDENCE_BELOW_THRESHOLD. AI confidence (${aiResult.documentedConfidence}% < ${thresholds.minimumAiConfidence}%)`;
+          }
+        }
+
+        if (aiRejected) {
+          logger.info(`[Stage 3 AI] Rejected ${asset} due to ${aiRejectionReason}`);
           SignalAuditStore.logAudit({
             symbol: asset,
             direction: scoring.direction,
@@ -1007,7 +1116,7 @@ export class SignalEngine {
             failedStrategies: scoring.failedStrategies || [],
             marketRegime: scoring.marketRegime,
             regime: scoring.marketRegime,
-            threshold: effectiveSignalThreshold,
+            threshold: effectiveFinalScoreHurdle,
             actualScore: scoring.score,
             marginAboveThreshold,
             atr: scoring.technicalMetrics?.atr || 0,
@@ -1017,7 +1126,7 @@ export class SignalEngine {
             expectedRR: finalRR,
             score: scoring.score,
             status: 'REJECTED',
-            rejectionReason: reason,
+            rejectionReason: aiRejectionReason,
             fingerprint: fp,
           });
           continue;
@@ -1084,9 +1193,13 @@ export class SignalEngine {
           timeframe: 'Multi-TF Realism Setup',
           strategy: primaryStrategyName,
           confluenceReasons: scoring.confluenceReasons,
-          confidenceScore: aiResult.refinedConfidence,
+          confidenceScore: scoring.score,
           targetQualityScore: tqResult.targetQualityScore,
           estimatedWinRate: winRate,
+          modelEstimatedWinRate: winRate,
+          empiricalCalibratedProbability: null,
+          probabilitySourceUsed: serverConfig.getConfig().thresholds.probabilitySource,
+          isEmpiricallyCalibrated: false,
           isAiValidated: aiResult.isAiValidated,
           stopLoss: finalSL,
           takeProfit: safeTakeProfit,
@@ -1097,6 +1210,9 @@ export class SignalEngine {
           tp2Rr,
           tp3Rr,
           riskRewardRatio: exactPrimaryRr,
+          grossRiskRewardRatio: scoring.estimatedFriction?.grossRiskRewardRatio ?? exactPrimaryRr,
+          netRiskRewardRatio: scoring.estimatedFriction?.netRiskRewardRatio,
+          adverseNetRiskRewardRatio: scoring.estimatedFriction?.adverseNetRiskRewardRatio,
           targetDistance,
           stopDistance,
           pipPointUnit: scoring.pipPointUnit,
@@ -1108,17 +1224,22 @@ export class SignalEngine {
           validatedAt: validation.validatedAt,
           dataSource: `${providerName} with Live Price & Sentiment Cross-Validation`,
           status: 'WAITING_ENTRY',
+          isActionableSignal: true,
           validationReason: 'VALID',
           aiAssessment: aiResult.aiAssessment,
           score: scoring.score,
           entryHitTimestamp: null,
+          tp1Status: 'PENDING',
+          tp2Status: 'PENDING',
+          tp3Status: 'PENDING',
+          slStatus: 'ACTIVE_FOR_ENTRY_ONLY',
         };
 
         candidates.push({
           signal,
           scoring,
           validation,
-          aiConfidence: aiResult.refinedConfidence,
+          aiConfidence: aiResult.documentedConfidence,
           timeframesAligned: scoring.timeframesAligned,
           candles: candlesMap['1h'] || candlesMap['15m'] || candlesMap['5m'] || [],
         });
@@ -1131,11 +1252,13 @@ export class SignalEngine {
         direction: c.signal.direction,
         score: c.signal.score,
       }));
-      const activeSignalsArray = Array.from(this.activeSignals.values()).map((s) => ({
-        symbol: s.symbol,
-        direction: s.direction,
-        score: s.score,
-      }));
+      const activeSignalsArray = Array.from(this.activeSignals.values())
+        .filter(isActionableSignal)
+        .map((s) => ({
+          symbol: s.symbol,
+          direction: s.direction,
+          score: s.score,
+        }));
 
       const correlationResult = CorrelationFilter.filterCorrelatedCandidates(correlationInput, activeSignalsArray);
 
@@ -1247,7 +1370,10 @@ export class SignalEngine {
         logger.info(`[Gate 18 Strategy Selection] ${cand.signal.symbol}: REGIME=${regimeSelection.marketRegime}, STRATEGY=${regimeSelection.selectedStrategy}, MATCH=${regimeSelection.regimeStrategyMatch} (${regimeSelection.strategyCompatibilityScore}/100)`);
       }
 
-      // Stage 3.8: Gate 20 Empirical Probability Calibration
+      // Stage 3.8: Gate 20 & Gate 41 Empirical Probability Calibration & Safety
+      const probThresholds = serverConfig.getConfig().thresholds;
+      const validCandidates: typeof filteredCandidates = [];
+
       for (const cand of filteredCandidates) {
         const calibration = Gate20ProbabilityCalibration.calibrateProbability({
           signalScore: cand.signal.score || cand.signal.confidenceScore || 0,
@@ -1257,7 +1383,6 @@ export class SignalEngine {
           timeframe: cand.signal.timeframe,
         });
 
-        cand.signal.empiricalProbability = calibration.empiricalProbability;
         cand.signal.probabilityScoreBucket = calibration.scoreBucket;
         cand.signal.probabilitySampleSize = calibration.sampleSize;
         cand.signal.probabilityConfidenceInterval = calibration.confidenceInterval
@@ -1265,11 +1390,53 @@ export class SignalEngine {
           : null;
         cand.signal.calibrationStatus = calibration.calibrationStatus;
 
+        cand.signal.probabilitySourceUsed = probThresholds.probabilitySource;
+
+        const isEmpiricalReady =
+          (calibration.calibrationStatus === 'CALIBRATED' || calibration.calibrationStatus === 'HIGH_CONFIDENCE_CALIBRATION') &&
+          calibration.sampleSize >= 30 &&
+          calibration.empiricalProbability !== null;
+
+        if (probThresholds.probabilitySource === 'EMPIRICAL') {
+          if (isEmpiricalReady) {
+            cand.signal.empiricalCalibratedProbability = calibration.empiricalProbability;
+            cand.signal.empiricalProbability = calibration.empiricalProbability;
+            cand.signal.isEmpiricallyCalibrated = true;
+            cand.signal.estimatedWinRate = calibration.empiricalProbability;
+          } else {
+            cand.signal.empiricalCalibratedProbability = null;
+            cand.signal.empiricalProbability = null;
+            cand.signal.isEmpiricallyCalibrated = false;
+            if (probThresholds.requireEmpiricalCalibration) {
+              const rejectReason = `REJECTED: INSUFFICIENT_EMPIRICAL_SAMPLE. Empirical calibration unavailable (N=${calibration.sampleSize} < 30) and requireEmpiricalCalibration is active.`;
+              cand.signal.status = 'REJECTED';
+              cand.signal.rejectionReason = rejectReason;
+              logger.info(`[Gate 41 Safety] ${cand.signal.symbol}: ${rejectReason}`);
+              continue;
+            } else {
+              // Fallback to model estimated win rate without pretending it is statistically calibrated empirical probability
+              cand.signal.estimatedWinRate = cand.signal.modelEstimatedWinRate || cand.signal.estimatedWinRate;
+            }
+          }
+        } else if (probThresholds.probabilitySource === 'MODEL') {
+          cand.signal.empiricalCalibratedProbability = null;
+          cand.signal.empiricalProbability = null;
+          cand.signal.isEmpiricallyCalibrated = false;
+          cand.signal.estimatedWinRate = cand.signal.modelEstimatedWinRate || cand.signal.estimatedWinRate;
+        } else if (probThresholds.probabilitySource === 'NONE') {
+          cand.signal.empiricalCalibratedProbability = null;
+          cand.signal.empiricalProbability = null;
+          cand.signal.isEmpiricallyCalibrated = false;
+        }
+
         if (calibration.reasons && calibration.reasons.length > 0) {
           cand.signal.confluenceReasons.push(...calibration.reasons);
         }
-        logger.info(`[Gate 20 Calibration] ${cand.signal.symbol}: BUCKET=${calibration.scoreBucket}, N=${calibration.sampleSize}, PROB=${calibration.empiricalProbability !== null ? calibration.empiricalProbability + '%' : 'WITHHELD'}, STATUS=${calibration.calibrationStatus}`);
+        validCandidates.push(cand);
+        logger.info(`[Gate 20/41 Calibration] ${cand.signal.symbol}: SOURCE=${probThresholds.probabilitySource}, BUCKET=${calibration.scoreBucket}, N=${calibration.sampleSize}, EMP_PROB=${cand.signal.empiricalCalibratedProbability ?? 'N/A'}, MODEL_PROB=${cand.signal.modelEstimatedWinRate}, IS_CALIBRATED=${cand.signal.isEmpiricallyCalibrated}`);
       }
+      filteredCandidates.length = 0;
+      filteredCandidates.push(...validCandidates);
 
       // Stage 3.9: Gate 21 Walk-Forward Validation
       for (const cand of filteredCandidates) {
@@ -1305,13 +1472,62 @@ export class SignalEngine {
       }
 
       // Stage 4: Final Trade Selection & Opportunity Ranking
+      const thresholds = serverConfig.getConfig().thresholds;
       const ranking = TradeRankingEngine.rankOpportunities(filteredCandidates);
       const validatedSignals = ranking.allRanked.slice(0, 5);
 
       if (validatedSignals.length > 0) {
         for (const sig of validatedSignals) {
+          // GATE 65: Double check centralized final tradeability contract
+          const tradeability = TradeRankingEngine.calculateFinalRequiredScore({
+            symbol: sig.symbol,
+            actualScore: sig.score,
+            regime: sig.marketRegime,
+            strategy: sig.strategy,
+            assetClass: sig.assetClass,
+            signalThreshold: thresholds.signalThreshold,
+          });
+
+          if (!tradeability.isExecutable || !tradeability.passed) {
+            logger.warn(`[SignalEngine] Final candidate ${sig.symbol} failed tradeability check: score ${sig.score} < ${tradeability.finalRequiredScore}. Skipped.`);
+            continue;
+          }
+
+          if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
+            logger.warn(`[SignalEngine] Final candidate ${sig.symbol} cannot be marked tradeable: production persistence (Firebase Admin) unavailable.`);
+            sig.isTradeableSignal = false;
+            sig.signalClassification = 'DIAGNOSTIC';
+            continue;
+          }
+
+          // Atomically increment cap
+          const inc = await ScannerPersistence.tryIncrementCap(thresholds.dailySignalCap || 10);
+          if (!inc.allowed) {
+            logger.warn(`[SignalEngine] Daily cap reached during atomic increment. Stopping further dispatches.`);
+            break;
+          }
+
+          // GATE 60 & GATE 65: Mark as officially tradeable before persistence
+          sig.isTradeableSignal = true;
+          sig.signalClassification = 'TRADEABLE';
+
+          // PERSIST & CONFIRM PERSISTENCE
+          const persRes = await ScannerPersistence.recordSentSignal(sig);
+          const logRes = await SignalLogger.logSignal(sig, sig.marketRegime || 'TREND');
+
+          if (!persRes.success || !logRes.success || logRes.status !== 'TRADEABLE_RECORD_PERSISTED') {
+            logger.error(`[SignalEngine] Persistence failed for ${sig.symbol}. Rolling back cap and aborting dispatch.`, { persError: persRes.error, logError: logRes.error });
+            await ScannerPersistence.releaseCap(inc.reservationId);
+            sig.isTradeableSignal = false;
+            sig.signalClassification = 'DIAGNOSTIC';
+            continue;
+          }
+
+          // COMMIT CAP RESERVATION!
+          await ScannerPersistence.commitCap(inc.reservationId);
+
+          // ONLY AFTER BOTH SUCCEED: activate signal
           this.activeSignals.set(sig.symbol, sig);
-          SignalLogger.logSignal(sig, 'TREND');
 
           // Record Fingerprint, Cooldown, and Accepted Audit Explanation
           const fp = SignalFingerprint.recordFingerprint({
@@ -1324,14 +1540,7 @@ export class SignalEngine {
 
           CooldownManager.recordSignalEmit(sig.symbol, sig.strategy, sig.timestamp);
 
-          const regime = sig.marketRegime || 'TRENDING';
-          const adaptiveRes = Gate27RegimeThresholds.resolveThreshold({
-            symbol: sig.symbol,
-            actualScore: sig.score,
-            regime,
-            strategy: sig.strategy,
-            assetClass: sig.assetClass,
-          });
+          const regime = sig.marketRegime || 'UNKNOWN';
 
           SignalAuditStore.logAudit({
             symbol: sig.symbol,
@@ -1343,9 +1552,9 @@ export class SignalEngine {
             failedStrategies: [],
             marketRegime: regime,
             regime,
-            threshold: adaptiveRes.resolvedThreshold,
+            threshold: tradeability.finalRequiredScore,
             actualScore: sig.score,
-            marginAboveThreshold: adaptiveRes.marginAboveThreshold,
+            marginAboveThreshold: tradeability.marginAboveFinalThreshold,
             atr: 0,
             dataFreshnessSeconds: 0,
             providerAgreement: true,
@@ -1412,8 +1621,7 @@ export class SignalEngine {
         const persistedSymbols = new Set<string>();
 
         for (const s of persisted) {
-          const isWaitingAndNotExpired = s.status === 'WAITING_ENTRY' && (now - s.timestamp <= serverConfig.getConfig().signalExpirationMs);
-          if (s.status === 'ACTIVE' || s.status === 'TP1_HIT' || s.status === 'TP2_HIT' || isWaitingAndNotExpired) {
+          if (isActionableSignal(s) && s.isTradeableSignal === true && s.signalClassification === 'TRADEABLE') {
             persistedSymbols.add(s.symbol.toUpperCase());
 
             // Enforce that we do NOT load any signal with duplicate TPs
@@ -1457,6 +1665,7 @@ export class SignalEngine {
               timeframe: s.timeframe,
               dataSource: s.dataSource,
               status: s.status as any,
+              isActionableSignal: isActionableSignal(s),
               timestamp: s.timestamp,
               validatedAt: s.timestamp,
               confluenceReasons: [],

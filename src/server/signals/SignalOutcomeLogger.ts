@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { logger } from '../logger.js';
+import { ExecutionEvidenceState, HistoricalEntryPolicy } from '../../types/index.js';
 
 export interface SignalOutcomeRecord {
   id: string; // unique signal ID
@@ -26,14 +27,16 @@ export interface SignalOutcomeRecord {
   executionPrice?: number;
   spread?: number;
   entryTriggerTimestamp?: string | null;
+  executionEvidence?: ExecutionEvidenceState;
+  historicalEntryPolicy?: HistoricalEntryPolicy;
   expiredTimestamp?: number;
   expiresAt?: number;
   finalOutcome?: 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'AMBIGUOUS';
-  status: 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'AMBIGUOUS';
+  status: 'WAITING_ENTRY' | 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'AMBIGUOUS';
   tp1Status?: 'PENDING' | 'HIT';
   tp2Status?: 'PENDING' | 'HIT';
   tp3Status?: 'PENDING' | 'HIT';
-  slStatus?: 'ACTIVE' | 'HIT';
+  slStatus?: 'ACTIVE' | 'HIT' | 'ACTIVE_FOR_ENTRY_ONLY';
   tp1HitAt?: string;
   tp2HitAt?: string;
   tp3HitAt?: string;
@@ -101,7 +104,10 @@ export class SignalOutcomeLogger {
     const firestore = getFirestoreAdmin();
     if (firestore) {
       try {
-        await firestore.collection(FIRESTORE_OUTCOME_COL).doc(record.id).set(record);
+        const cleaned = Object.fromEntries(
+          Object.entries(record).filter(([_, v]) => v !== undefined)
+        );
+        await firestore.collection(FIRESTORE_OUTCOME_COL).doc(record.id).set(cleaned);
       } catch (err) {
         logger.warn('[SignalOutcomeLogger] Firestore failed to save record:', { error: String(err) });
       }

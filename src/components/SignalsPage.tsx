@@ -70,7 +70,12 @@ export function SignalsPage({ health }: SignalsPageProps) {
       const saved = localStorage.getItem(HISTORY_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed.slice(0, 30);
+        if (Array.isArray(parsed)) {
+          // GATE 62: filter out entries that do not explicitly contain isTradeableSignal === true && signalClassification === 'TRADEABLE'
+          return parsed
+            .filter((item: any) => item && item.isTradeableSignal === true && item.signalClassification === 'TRADEABLE')
+            .slice(0, 30);
+        }
       }
     } catch (e) {
       console.warn('Failed to load signal history from storage:', e);
@@ -97,6 +102,13 @@ export function SignalsPage({ health }: SignalsPageProps) {
         const newItems: SignalHistoryItem[] = [];
 
         for (const sig of signals) {
+          // GATE 62: Reject any signal unless isTradeableSignal === true AND signalClassification === 'TRADEABLE'
+          // Do this BEFORE creating the SignalHistoryItem.
+          // Do not infer tradeability from score, isTopTrade, isBestTrade, rankTier, status, outcomeType.
+          if (sig.isTradeableSignal !== true || sig.signalClassification !== 'TRADEABLE') {
+            continue;
+          }
+
           const uniqueId = sig.id || sig.snapshotId || `${sig.symbol}_${sig.timestamp}`;
           if (!existingIds.has(uniqueId)) {
             existingIds.add(uniqueId);
@@ -140,7 +152,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
               stopDistance: sig.stopDistance,
               pipPointUnit: sig.pipPointUnit,
               estimatedFriction: sig.estimatedFriction,
-              signalStatus: sig.status === 'ACTIVE' ? 'ACTIVE' : undefined,
+              signalStatus: sig.status,
               tp1Status: sig.tp1Status,
               tp2Status: sig.tp2Status,
               tp3Status: sig.tp3Status,
@@ -153,6 +165,8 @@ export function SignalsPage({ health }: SignalsPageProps) {
               tp2HitPrice: sig.tp2HitPrice,
               tp3HitPrice: sig.tp3HitPrice,
               stopLossHitPrice: sig.stopLossHitPrice,
+              isTradeableSignal: true,
+              signalClassification: 'TRADEABLE',
             });
           }
         }
@@ -169,7 +183,10 @@ export function SignalsPage({ health }: SignalsPageProps) {
     try {
       const res = await api.getSignalLogs();
       if (res && res.success && Array.isArray(res.logs) && res.logs.length > 0) {
-        const mappedItems: SignalHistoryItem[] = res.logs.map((log: any) => ({
+        // DEFENSE-IN-DEPTH: strictly filter tradeable signals on the frontend
+        const tradeableLogs = res.logs.filter((log: any) => log && log.isTradeableSignal === true && log.signalClassification === 'TRADEABLE');
+
+        const mappedItems: SignalHistoryItem[] = tradeableLogs.map((log: any) => ({
           id: log.id,
           snapshotId: log.snapshotId || log.id,
           symbol: log.symbol,
@@ -183,17 +200,23 @@ export function SignalsPage({ health }: SignalsPageProps) {
           riskRewardRatio: log.riskRewardRatio,
           score: log.score,
           confidenceScore: log.confidenceScore,
+          estimatedWinRate: log.estimatedWinRate ?? log.modelEstimatedWinRate,
+          modelEstimatedWinRate: log.modelEstimatedWinRate,
+          empiricalProbability: log.empiricalProbability,
+          probabilitySampleSize: log.probabilitySampleSize,
+          isEmpiricallyCalibrated: log.isEmpiricallyCalibrated,
+          probabilityConfidenceInterval: log.probabilityConfidenceInterval,
           isTopTrade: log.isTopTrade || log.isBestTrade,
           isBestTrade: log.isBestTrade,
           outcomeType: log.isBestTrade
             ? 'BEST_TRADE'
-            : log.status === 'ACTIVE'
+            : (log.status === 'ACTIVE' || log.status === 'WAITING_ENTRY')
             ? 'VALIDATED'
             : 'TOP_TRADE',
           strategy: formatStrategy(log.strategy),
           timeframe: log.timeframe || '1h',
           dataSource: formatLabel(log.provider || log.dataSource),
-          reason: `Market Type: ${formatLabel(log.marketType || 'Asset')} | Provider: ${formatProviderName(log.provider || 'Live Feed')} | Regime: ${formatLabel(log.marketRegime || 'TREND')} | Status: ${formatStatus(log.status || 'ACTIVE')} | Score: ${log.score}/100`,
+          reason: `Market Type: ${formatLabel(log.marketType || 'Asset')} | Provider: ${formatProviderName(log.provider || 'Live Feed')} | Regime: ${formatLabel(log.marketRegime || 'TREND')} | Status: ${formatStatus(log.status || 'WAITING_ENTRY')} | Score: ${log.score}/100`,
           timestamp: log.timestamp || Date.now(),
           marketType: log.marketType,
           marketRegime: log.marketRegime,
@@ -212,6 +235,8 @@ export function SignalsPage({ health }: SignalsPageProps) {
           stopLossHitPrice: log.stopLossHitPrice,
           confluenceReasons: log.confluenceReasons,
           aiAssessment: log.aiAssessment,
+          isTradeableSignal: true,
+          signalClassification: 'TRADEABLE',
         }));
         setSignalHistory(mappedItems.slice(0, 30));
       }
@@ -344,10 +369,14 @@ export function SignalsPage({ health }: SignalsPageProps) {
     try {
       const res = await api.getSignals();
       if (res && res.success && Array.isArray(res.signals)) {
-        setActiveSignals(res.signals);
-        checkTopTradeNotifications(res.signals);
-        if (res.signals.length > 0) {
-          addSignalsToHistory(res.signals);
+        // GATE 79: Strictly filter out any active signals that are not tradeable
+        const filteredSignals = res.signals.filter((sig: any) =>
+          sig && sig.isTradeableSignal === true && sig.signalClassification === 'TRADEABLE'
+        );
+        setActiveSignals(filteredSignals);
+        checkTopTradeNotifications(filteredSignals);
+        if (filteredSignals.length > 0) {
+          addSignalsToHistory(filteredSignals);
         }
       }
     } catch (err) {
@@ -408,22 +437,6 @@ export function SignalsPage({ health }: SignalsPageProps) {
         if (result.signal.isTopTrade || result.signal.strategy?.includes('[TOP TRADE]')) {
           NotificationService.notifyTopTrade(result.signal, soundAlerts);
         }
-      } else {
-        // Record scan evaluation outcome in history
-        setSignalHistory((prev) => {
-          const scanItem: SignalHistoryItem = {
-            id: `scan_${Date.now()}_${result.symbol || selectedSymbol}`,
-            snapshotId: `scan_${Date.now()}`,
-            symbol: result.symbol || selectedSymbol,
-            direction: 'NO_TRADE',
-            outcomeType: 'NO_TRADE_OPPORTUNITY',
-            reason: result.reason || result.message || 'No setups satisfied strict Gate 7–9 hurdles.',
-            timestamp: result.timestamp || Date.now(),
-            timeframe: 'Multi-TF Scan',
-            dataSource: 'Live Universe Scan',
-          };
-          return [scanItem, ...prev.filter((p) => p.id !== scanItem.id)].slice(0, 10);
-        });
       }
 
       await loadActiveSignals();

@@ -48,8 +48,11 @@ export interface StrategyResult {
 
 export interface MultiStrategyAgreement {
   dominantDirection: SignalDirection | null;
-  agreeingStrategiesCount: number; // e.g. 5 out of 6
-  totalStrategiesCount: number; // 6
+  agreeingStrategiesCount: number;
+  totalStrategiesCount: number; // totalStrategiesEvaluated
+  agreementRatio: number;
+  minimumRequiredAgreement: number;
+  passed: boolean;
   agreementScore: number; // 0 - 100
   hasStrongConfluence: boolean;
   marketRegime: MarketRegime;
@@ -189,24 +192,29 @@ export class StrategyEngine {
     // Multi-Timeframe Alignment
     const tfScores = this.evaluateMultiTimeframeAlignment(dominantDirection, entryPrice, tfMap);
 
+    const totalStrategiesEvaluated = Math.max(1, strategyResults.length);
+    const agreementRatio = agreeingStrategiesCount / totalStrategiesEvaluated;
     const rawWeightedScore = totalWeight > 0 ? weightedScoreSum / totalWeight : 0;
-    const agreementRatio = agreeingStrategiesCount / 6;
     const agreementScore = Math.round(
       agreementRatio * 40 +
         (tfScores.alignedCount / Math.max(1, tfScores.totalEvaluated)) * 30 +
         (rawWeightedScore / 100) * 30
     );
 
-    // Require configurable minimum strategies agreeing, minimum 50 agreement score, and configurable minimum aligned timeframes
+    // Require configurable minimum strategies agreeing ratio, minimum 50 agreement score, and configurable minimum timeframe alignment ratio
     const thresholds = serverConfig.getConfig().thresholds;
+    const minimumRequiredAgreement = thresholds.minimumStrategyAgreement;
+    const passed = agreementRatio >= minimumRequiredAgreement;
+    const timeframeAlignmentRatio = tfScores.totalEvaluated > 0 ? tfScores.alignedCount / tfScores.totalEvaluated : 0;
+
     const hasStrongConfluence = 
-      agreeingStrategiesCount >= thresholds.minimumStrategyAgreement && 
+      passed && 
       agreementScore >= 50 && 
-      tfScores.alignedCount >= thresholds.minimumTimeframeAlignment;
+      timeframeAlignmentRatio >= thresholds.minimumTimeframeAlignment;
 
     if (!hasStrongConfluence) {
       return this.createRejection(
-        `REJECTED: INSUFFICIENT_CONFLUENCE. ${agreeingStrategiesCount}/6 strategies agreed (min ${thresholds.minimumStrategyAgreement}) with ${tfScores.alignedCount}/${tfScores.totalEvaluated} timeframes (min ${thresholds.minimumTimeframeAlignment}). Agreement Score: ${agreementScore}/100 (min 50 required)`,
+        `REJECTED: INSUFFICIENT_CONFLUENCE. Strategy agreement ratio ${(agreementRatio * 100).toFixed(1)}% (${agreeingStrategiesCount}/${totalStrategiesEvaluated}, min ${minimumRequiredAgreement * 100}%) with timeframe alignment ratio ${(timeframeAlignmentRatio * 100).toFixed(0)}% (${tfScores.alignedCount}/${tfScores.totalEvaluated}, min ${thresholds.minimumTimeframeAlignment * 100}%). Agreement Score: ${agreementScore}/100 (min 50 required)`,
         regime,
         regimeDetails
       );
@@ -214,7 +222,7 @@ export class StrategyEngine {
 
     const reasons: string[] = [];
     reasons.push(`Market Regime: ${regime} — ${regimeDetails}`);
-    reasons.push(`Strategy Confluence: ${agreeingStrategiesCount}/6 backend strategies aligned for ${dominantDirection}`);
+    reasons.push(`Strategy Confluence: ${agreeingStrategiesCount}/${totalStrategiesEvaluated} backend strategies aligned for ${dominantDirection} (Ratio: ${(agreementRatio * 100).toFixed(1)}%)`);
     reasons.push(
       `Timeframe Hierarchy: ${tfScores.alignedCount}/${tfScores.totalEvaluated} evaluated timeframes (${availableTfs.join(
         ', '
@@ -230,7 +238,10 @@ export class StrategyEngine {
     return {
       dominantDirection,
       agreeingStrategiesCount,
-      totalStrategiesCount: 6,
+      totalStrategiesCount: totalStrategiesEvaluated,
+      agreementRatio,
+      minimumRequiredAgreement,
+      passed,
       agreementScore: Math.min(100, agreementScore),
       hasStrongConfluence: true,
       marketRegime: regime,
@@ -1044,10 +1055,14 @@ export class StrategyEngine {
     marketRegime: MarketRegime = 'RANGE',
     regimeDetails = 'Unqualified'
   ): MultiStrategyAgreement {
+    const thresholds = serverConfig.getConfig().thresholds;
     return {
       dominantDirection: null,
       agreeingStrategiesCount: 0,
       totalStrategiesCount: 6,
+      agreementRatio: 0,
+      minimumRequiredAgreement: thresholds.minimumStrategyAgreement,
+      passed: false,
       agreementScore: 0,
       hasStrongConfluence: false,
       marketRegime,

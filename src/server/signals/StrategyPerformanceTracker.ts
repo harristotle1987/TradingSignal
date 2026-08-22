@@ -52,12 +52,14 @@ export interface TradeOutcomeRecord {
   stopLoss: number;
   takeProfit: number;
   plannedRR: number;
-  outcomeStatus: 'TP_HIT' | 'SL_HIT' | 'EXPIRED' | 'INVALIDATED';
+  outcomeStatus: 'TP_HIT' | 'SL_HIT' | 'EXPIRED' | 'INVALIDATED' | 'NO_ENTRY / EXPIRED';
   realizedRR: number; // e.g. +2.2 for TP, -1.0 for SL, 0 for expired/invalidated
   isWin: boolean;
   timestamp: number;
   resolvedAt: number;
   durationMs: number;
+  tradeEntered?: boolean;
+  TRADE_ENTERED?: boolean;
 }
 
 export interface MetricSummary {
@@ -66,6 +68,7 @@ export interface MetricSummary {
   losses: number;
   breakevens: number;
   winRatePct: number;
+  lossRatePct?: number;
   rollingWinRatePct: number; // Last 20 trades win rate
   profitFactor: number;
   totalRealizedR: number;
@@ -74,6 +77,11 @@ export interface MetricSummary {
   maxDrawdownR: number;
   maxLosingStreak: number;
   currentStreak: number; // positive = winning streak, negative = losing streak
+  totalSignals?: number;
+  signalConversionRatePct?: number;
+  entryOpportunityRatePct?: number;
+  expirationRatePct?: number;
+  expiredSignals?: number;
 }
 
 export interface StrategyPerformanceState {
@@ -104,6 +112,7 @@ export class StrategyPerformanceTracker {
       losses: 0,
       breakevens: 0,
       winRatePct: 50.0,
+      lossRatePct: 50.0,
       rollingWinRatePct: 50.0,
       profitFactor: 1.5,
       totalRealizedR: 0,
@@ -112,6 +121,11 @@ export class StrategyPerformanceTracker {
       maxDrawdownR: 0,
       maxLosingStreak: 0,
       currentStreak: 0,
+      totalSignals: 0,
+      signalConversionRatePct: 0.0,
+      entryOpportunityRatePct: 0.0,
+      expirationRatePct: 0.0,
+      expiredSignals: 0,
     },
     byStrategy: {},
     byAsset: {},
@@ -198,6 +212,8 @@ export class StrategyPerformanceTracker {
         outcomeStatus: 'TP_HIT',
         realizedRR: 2.45,
         isWin: true,
+        tradeEntered: true,
+        TRADE_ENTERED: true,
         timestamp: now - 48 * hour,
         resolvedAt: now - 38 * hour,
         durationMs: 10 * hour,
@@ -220,6 +236,8 @@ export class StrategyPerformanceTracker {
         outcomeStatus: 'TP_HIT',
         realizedRR: 2.17,
         isWin: true,
+        tradeEntered: true,
+        TRADE_ENTERED: true,
         timestamp: now - 36 * hour,
         resolvedAt: now - 28 * hour,
         durationMs: 8 * hour,
@@ -242,6 +260,8 @@ export class StrategyPerformanceTracker {
         outcomeStatus: 'TP_HIT',
         realizedRR: 2.11,
         isWin: true,
+        tradeEntered: true,
+        TRADE_ENTERED: true,
         timestamp: now - 24 * hour,
         resolvedAt: now - 18 * hour,
         durationMs: 6 * hour,
@@ -264,6 +284,8 @@ export class StrategyPerformanceTracker {
         outcomeStatus: 'SL_HIT',
         realizedRR: -1.0,
         isWin: false,
+        tradeEntered: true,
+        TRADE_ENTERED: true,
         timestamp: now - 20 * hour,
         resolvedAt: now - 14 * hour,
         durationMs: 6 * hour,
@@ -286,6 +308,8 @@ export class StrategyPerformanceTracker {
         outcomeStatus: 'TP_HIT',
         realizedRR: 2.2,
         isWin: true,
+        tradeEntered: true,
+        TRADE_ENTERED: true,
         timestamp: now - 12 * hour,
         resolvedAt: now - 4 * hour,
         durationMs: 8 * hour,
@@ -305,9 +329,11 @@ export class StrategyPerformanceTracker {
         stopLoss: 128.5,
         takeProfit: 140.0,
         plannedRR: 2.28,
-        outcomeStatus: 'EXPIRED',
+        outcomeStatus: 'NO_ENTRY / EXPIRED',
         realizedRR: 0.0,
         isWin: false,
+        tradeEntered: false,
+        TRADE_ENTERED: false,
         timestamp: now - 30 * hour,
         resolvedAt: now - 6 * hour,
         durationMs: 24 * hour,
@@ -421,6 +447,7 @@ export class StrategyPerformanceTracker {
       losses: 0,
       breakevens: 0,
       winRatePct: 50.0,
+      lossRatePct: 50.0,
       rollingWinRatePct: 50.0,
       profitFactor: 1.0,
       totalRealizedR: 0,
@@ -429,6 +456,11 @@ export class StrategyPerformanceTracker {
       maxDrawdownR: 0,
       maxLosingStreak: 0,
       currentStreak: 0,
+      totalSignals: 0,
+      signalConversionRatePct: 0.0,
+      entryOpportunityRatePct: 0.0,
+      expirationRatePct: 0.0,
+      expiredSignals: 0,
     };
   }
 
@@ -437,47 +469,88 @@ export class StrategyPerformanceTracker {
     record: TradeOutcomeRecord,
     tradeHistory: TradeOutcomeRecord[]
   ): void {
-    summary.totalTrades += 1;
-    if (record.outcomeStatus === 'TP_HIT' || record.isWin) {
-      summary.wins += 1;
-      summary.currentStreak = summary.currentStreak >= 0 ? summary.currentStreak + 1 : 1;
-    } else if (record.outcomeStatus === 'SL_HIT') {
-      summary.losses += 1;
-      summary.currentStreak = summary.currentStreak <= 0 ? summary.currentStreak - 1 : -1;
-      const absLosingStreak = Math.abs(summary.currentStreak);
-      if (absLosingStreak > summary.maxLosingStreak) {
-        summary.maxLosingStreak = absLosingStreak;
-      }
+    // Initialize signal tracking fields on summary if not already present
+    summary.totalSignals = (summary.totalSignals ?? 0) + 1;
+    summary.expiredSignals = summary.expiredSignals ?? 0;
+
+    const isEntered = record.tradeEntered !== false && record.TRADE_ENTERED !== false && record.outcomeStatus !== 'NO_ENTRY / EXPIRED';
+
+    if (!isEntered) {
+      summary.expiredSignals += 1;
     } else {
-      summary.breakevens += 1;
+      summary.totalTrades += 1;
+      if (record.outcomeStatus === 'TP_HIT' || record.isWin) {
+        summary.wins += 1;
+        summary.currentStreak = summary.currentStreak >= 0 ? summary.currentStreak + 1 : 1;
+      } else if (record.outcomeStatus === 'SL_HIT') {
+        summary.losses += 1;
+        summary.currentStreak = summary.currentStreak <= 0 ? summary.currentStreak - 1 : -1;
+        const absLosingStreak = Math.abs(summary.currentStreak);
+        if (absLosingStreak > summary.maxLosingStreak) {
+          summary.maxLosingStreak = absLosingStreak;
+        }
+      } else {
+        summary.breakevens += 1;
+        summary.currentStreak = 0; // Breakeven resets streak
+      }
     }
 
-    summary.totalRealizedR = Number((summary.totalRealizedR + record.realizedRR).toFixed(2));
-    summary.avgR = Number((summary.totalRealizedR / Math.max(1, summary.totalTrades)).toFixed(3));
-    summary.winRatePct = Number(((summary.wins / Math.max(1, summary.totalTrades)) * 100).toFixed(1));
+    // Calculate rates and metrics based on separated tracking
+    summary.winRatePct = summary.totalTrades > 0
+      ? Number(((summary.wins / summary.totalTrades) * 100).toFixed(1))
+      : 0.0;
 
-    // Calculate Rolling Win Rate over last 20 trades
-    const last20 = tradeHistory.slice(-20);
+    summary.lossRatePct = summary.totalTrades > 0
+      ? Number(((summary.losses / summary.totalTrades) * 100).toFixed(1))
+      : 0.0;
+
+    summary.signalConversionRatePct = summary.totalSignals > 0
+      ? Number(((summary.totalTrades / summary.totalSignals) * 100).toFixed(1))
+      : 0.0;
+
+    summary.entryOpportunityRatePct = summary.signalConversionRatePct;
+
+    summary.expirationRatePct = summary.totalSignals > 0
+      ? Number(((summary.expiredSignals / summary.totalSignals) * 100).toFixed(1))
+      : 0.0;
+
+    // Filter actual entered trades for trade win rate, streak, expectancy and profit factor
+    const actualTradesHistory = tradeHistory.filter(
+      (t) => t.tradeEntered !== false && t.TRADE_ENTERED !== false && t.outcomeStatus !== 'NO_ENTRY / EXPIRED'
+    );
+
+    // Calculate Rolling Win Rate over last 20 actual entered trades
+    const last20 = actualTradesHistory.slice(-20);
     const last20Wins = last20.filter((t) => t.outcomeStatus === 'TP_HIT' || t.isWin).length;
-    summary.rollingWinRatePct = Number(((last20Wins / Math.max(1, last20.length)) * 100).toFixed(1));
+    summary.rollingWinRatePct = last20.length > 0
+      ? Number(((last20Wins / Math.max(1, last20.length)) * 100).toFixed(1))
+      : 0.0;
 
-    // Calculate Profit Factor: Total Gross Win R / Total Gross Loss R
+    // Calculate Profit Factor: Total Gross Win R / Total Gross Loss R (actual entered trades only)
     let totalWinR = 0;
     let totalLossR = 0;
-    for (const t of tradeHistory) {
+    for (const t of actualTradesHistory) {
       if (t.realizedRR > 0) totalWinR += t.realizedRR;
       else if (t.realizedRR < 0) totalLossR += Math.abs(t.realizedRR);
     }
-    summary.profitFactor = totalLossR > 0 ? Number((totalWinR / totalLossR).toFixed(2)) : (totalWinR > 0 ? 3.0 : 1.0);
+    summary.profitFactor = totalLossR > 0
+      ? Number((totalWinR / totalLossR).toFixed(2))
+      : (totalWinR > 0 ? 3.0 : 1.0);
 
-    // Calculate Expectancy: (Win% * AvgWinR) - (Loss% * AvgLossR)
+    // Calculate Expectancy: (Win% * AvgWinR) - (Loss% * AvgLossR) (actual entered trades only)
     const winProb = summary.winRatePct / 100;
-    const lossProb = 1 - winProb;
-    const winTrades = tradeHistory.filter((t) => t.realizedRR > 0);
-    const lossTrades = tradeHistory.filter((t) => t.realizedRR < 0);
+    const lossProb = summary.totalTrades > 0 ? (summary.losses / summary.totalTrades) : 0.0;
+    const winTrades = actualTradesHistory.filter((t) => t.realizedRR > 0);
+    const lossTrades = actualTradesHistory.filter((t) => t.realizedRR < 0);
     const avgWin = winTrades.length > 0 ? winTrades.reduce((acc, t) => acc + t.realizedRR, 0) / winTrades.length : 2.0;
     const avgLoss = lossTrades.length > 0 ? Math.abs(lossTrades.reduce((acc, t) => acc + t.realizedRR, 0) / lossTrades.length) : 1.0;
     summary.expectancyR = Number((winProb * avgWin - lossProb * avgLoss).toFixed(3));
+
+    // Calculate Average realized R per trade (actual entered trades only)
+    summary.totalRealizedR = Number(actualTradesHistory.reduce((acc, t) => acc + t.realizedRR, 0).toFixed(2));
+    summary.avgR = summary.totalTrades > 0
+      ? Number((summary.totalRealizedR / summary.totalTrades).toFixed(3))
+      : 0.0;
   }
 
   /**

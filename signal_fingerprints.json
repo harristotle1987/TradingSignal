@@ -1,0 +1,11 @@
+[
+  {
+    "fingerprint": "EURUSD_BUY_1.1_1h_breakout",
+    "symbol": "EURUSD",
+    "direction": "BUY",
+    "entryZone": 1.1,
+    "timeframe": "1h",
+    "primaryStrategy": "Breakout",
+    "timestamp": 1787407737377
+  }
+]

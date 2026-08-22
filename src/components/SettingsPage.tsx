@@ -69,6 +69,49 @@ export function SettingsPage({
   const [triggeringScan, setTriggeringScan] = useState<boolean>(false);
   const [scannerMessage, setScannerMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  const [frequencyConfig, setFrequencyConfig] = useState<{
+    dailySignalCap: number;
+    preset: '5' | '10' | '15' | 'CUSTOM';
+  } | null>(null);
+  const [customCapInput, setCustomCapInput] = useState<number>(5);
+
+  const fetchFrequencyConfig = useCallback(async () => {
+    try {
+      const res = await api.getFrequencyConfig();
+      if (res.success && res.data) {
+        setFrequencyConfig({
+          dailySignalCap: res.data.dailySignalCap,
+          preset: res.data.preset,
+        });
+        setCustomCapInput(res.data.dailySignalCap);
+      }
+    } catch (err) {
+      console.error('Failed to fetch frequency config:', err);
+    }
+  }, []);
+
+  const handleUpdateFrequency = async (preset: '5' | '10' | '15' | 'CUSTOM', customCap?: number) => {
+    try {
+      const res = await api.updateFrequencyConfig({
+        preset,
+        customCap,
+      });
+      if (res.success && res.data) {
+        setFrequencyConfig({
+          dailySignalCap: res.data.dailySignalCap,
+          preset: res.data.preset,
+        });
+        await fetchScannerSettings();
+        setScannerMessage({ type: 'success', text: res.message });
+        setTimeout(() => setScannerMessage(null), 4000);
+      }
+    } catch (err) {
+      console.error('Failed to update frequency config:', err);
+      setScannerMessage({ type: 'error', text: 'Failed to update daily cap.' });
+      setTimeout(() => setScannerMessage(null), 4000);
+    }
+  };
+
   const fetchScannerSettings = useCallback(async () => {
     setLoadingScanner(true);
     try {
@@ -216,7 +259,8 @@ export function SettingsPage({
     fetchMarketStatus();
     fetchScannerSettings();
     checkPushSubscription();
-  }, [fetchMarketStatus, fetchScannerSettings, checkPushSubscription]);
+    fetchFrequencyConfig();
+  }, [fetchMarketStatus, fetchScannerSettings, checkPushSubscription, fetchFrequencyConfig]);
 
   const envProviders = configStatus?.providers;
   const activeMarketProviders = marketStatus?.providers;
@@ -500,7 +544,7 @@ export function SettingsPage({
                 )}
               </div>
               <p className="text-[11px] text-slate-400 leading-relaxed max-w-2xl">
-                Uses W3C standard Push API with cryptographically signed VAPID envelopes. Only genuinely qualifying BEST TRADEs (Score &ge; 75, R:R &ge; 2.0) are notified.
+                Uses W3C standard Push API with cryptographically signed VAPID envelopes. Only genuinely qualifying actionable signals (passed all hard gates and minimum R:R) are notified.
               </p>
             </div>
 
@@ -638,7 +682,7 @@ export function SettingsPage({
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-400">
-                  Enables instant real-time push notifications delivered via Web Push service specifically for high-priority trading signals (Top Trades / Score &gt;= 85).
+                  Enables instant real-time push notifications delivered via Web Push service specifically for high-priority trading signals (Top Trades / Actionable Signals).
                 </p>
               </div>
 
@@ -698,6 +742,61 @@ export function SettingsPage({
                 <option value={45}>45 minutes</option>
                 <option value={60}>60 minutes (1 hour)</option>
               </select>
+            </div>
+          </div>
+
+          {/* Daily Automated Signal Cap Configuration (Gate 36 / 53) */}
+          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <span className="text-xs font-semibold text-white block">
+                Daily Signal Cap Preset
+              </span>
+              <p className="text-[11px] text-slate-400">
+                Choose the maximum allowed automated trading signals generated per UTC day. Default is 5.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 shrink-0">
+              <div className="min-w-[120px]">
+                <select
+                  id="daily-signal-cap-preset-select"
+                  value={frequencyConfig?.preset || '5'}
+                  onChange={(e) => {
+                    const preset = e.target.value as '5' | '10' | '15' | 'CUSTOM';
+                    if (preset !== 'CUSTOM') {
+                      handleUpdateFrequency(preset);
+                    } else {
+                      handleUpdateFrequency('CUSTOM', customCapInput);
+                    }
+                  }}
+                  className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-emerald-500 cursor-pointer"
+                >
+                  <option value="5">5 Signals (Default)</option>
+                  <option value="10">10 Signals</option>
+                  <option value="15">15 Signals</option>
+                  <option value="CUSTOM">Custom Cap</option>
+                </select>
+              </div>
+
+              {frequencyConfig?.preset === 'CUSTOM' && (
+                <div className="flex items-center gap-1.5 max-w-[150px]">
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={customCapInput}
+                    onChange={(e) => setCustomCapInput(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    className="w-16 bg-slate-900 border border-slate-700/80 rounded-lg px-2 py-1.5 text-xs font-mono text-white text-center focus:outline-none focus:border-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleUpdateFrequency('CUSTOM', customCapInput)}
+                    className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
+                  >
+                    Set
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 

@@ -50,6 +50,10 @@ export interface ScoringResult {
   targetDistance?: number;
   stopDistance?: number;
   pipPointUnit?: 'PIPS' | 'POINTS';
+  alignedCount: number;
+  totalEvaluated: number;
+  timeframeAlignmentRatio: number;
+  strategyAgreementRatio?: number;
   timeframesAligned: number;
   totalTimeframesEvaluated: number;
   agreeingStrategiesCount: number;
@@ -154,10 +158,10 @@ export class ScoringEngine {
    * - Entry quality: 10
    * - News / sentiment: 5
    *
-   * Thresholds:
-   * - 85+ = BEST TRADE
-   * - 75–84 = HIGH QUALITY
-   * - Below 75 = REJECT
+   * Thresholds (Centralized Configuration):
+   * - score >= signalThreshold → ACTIONABLE SIGNAL
+   * - score >= qualifiedCandidateThreshold → QUALIFIED CANDIDATE
+   * - score >= watchingThreshold → WATCHING
    */
   static calculateScore(
     symbol: string,
@@ -181,11 +185,15 @@ export class ScoringEngine {
     // 2. Evaluate Strategy Agreement and Market Classification
     const strategyEval = StrategyEngine.evaluate(cleanSymbol, entryPrice, candlesMap);
     if (!strategyEval.hasStrongConfluence || !strategyEval.dominantDirection) {
-      return this.createRejection(
+      const rej = this.createRejection(
         strategyEval.rejectionReason || 'REJECTED: INSUFFICIENT_STRATEGY_AGREEMENT. Failed strategy confluence agreement',
         strategyEval.marketRegime,
         strategyEval.regimeDetails
       );
+      rej.strategyAgreementRatio = strategyEval.agreementRatio;
+      rej.agreeingStrategiesCount = strategyEval.agreeingStrategiesCount;
+      rej.totalStrategiesCount = strategyEval.totalStrategiesCount || 6;
+      return rej;
     }
 
     const direction: SignalDirection = strategyEval.dominantDirection;
@@ -321,9 +329,10 @@ export class ScoringEngine {
       higherTfTrendScore = 8;
     }
 
-    if (timeframesAligned < thresholds.minimumTimeframeAlignment) {
+    const timeframeAlignmentRatio = totalTfsEvaluated > 0 ? timeframesAligned / totalTfsEvaluated : 0;
+    if (timeframeAlignmentRatio < thresholds.minimumTimeframeAlignment) {
       return this.createRejection(
-        `REJECTED: INSUFFICIENT_TIMEFRAME_ALIGNMENT. Insufficient timeframe confirmation: only ${timeframesAligned}/${totalTfsEvaluated} aligned (minimum ${thresholds.minimumTimeframeAlignment} required)`,
+        `REJECTED: INSUFFICIENT_TIMEFRAME_ALIGNMENT. Insufficient timeframe confirmation: ${(timeframeAlignmentRatio * 100).toFixed(0)}% aligned (${timeframesAligned}/${totalTfsEvaluated}, minimum ${thresholds.minimumTimeframeAlignment * 100}% required)`,
         marketRegime,
         regimeDetails
       );
@@ -599,10 +608,10 @@ export class ScoringEngine {
     const calculatedReward = (Math.abs(tp1 - entryPrice) + Math.abs(tp2 - entryPrice) + Math.abs(tp3 - entryPrice)) / 3;
     const rawRR = calculatedRisk > 0 ? Number((calculatedReward / calculatedRisk).toFixed(2)) : 0;
 
-    // Minimum R:R ratio from config
+    // GATE 45 Step 1 & 2: Calculate Gross R:R & Reject if gross R:R < minimum acceptable GROSS R:R
     if (rawRR < thresholds.minimumRR) {
       return this.createRejection(
-        `REJECTED: RR_BELOW_THRESHOLD. Risk/Reward ratio (${rawRR}:1) is below minimum ${thresholds.minimumRR}:1 requirement`,
+        `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${thresholds.minimumRR}:1)`,
         marketRegime,
         regimeDetails
       );
@@ -627,25 +636,25 @@ export class ScoringEngine {
       );
     }
 
-    // Minimum Actionable Score = 70
-    // 90+ = BEST TRADE (EXCEPTIONAL)
-    // 80–89 = HIGH QUALITY (STRONG)
-    // 70–79 = VALID
-    // Below 70 = REJECT
+    // Score Classification using Centralized Configuration:
+    // score >= signalThreshold → ACTIONABLE SIGNAL (HIGH_QUALITY)
+    // score >= qualifiedCandidateThreshold → QUALIFIED CANDIDATE (VALID)
+    // score >= watchingThreshold → WATCHING (VALID)
+    // Below watchingThreshold → REJECT
     let qualityTier: QualityTier = 'REJECT';
-    if (totalScore >= 90) qualityTier = 'BEST_TRADE';
-    else if (totalScore >= 80) qualityTier = 'HIGH_QUALITY';
-    else if (totalScore >= 70) qualityTier = 'VALID';
+    if (totalScore >= thresholds.signalThreshold) qualityTier = 'HIGH_QUALITY';
+    else if (totalScore >= thresholds.qualifiedCandidateThreshold) qualityTier = 'VALID';
+    else if (totalScore >= thresholds.watchingThreshold) qualityTier = 'VALID';
 
     if (totalScore < thresholds.minimumScore) {
       return this.createRejection(
-        `REJECTED: SCORE_BELOW_THRESHOLD. Deterministic quality score ${totalScore}/100 is below minimum actionable threshold of ${thresholds.minimumScore} (90+ = EXCEPTIONAL, 80-89 = STRONG, 70-79 = VALID)`,
+        `REJECTED: SCORE_BELOW_THRESHOLD. Deterministic quality score ${totalScore}/100 is below minimum actionable threshold of ${thresholds.minimumScore}`,
         marketRegime,
         regimeDetails
       );
     }
 
-    // Friction Hurdle & Gate 34 Execution Friction Stress Test
+    // GATE 45 Step 3, 4, 5, 6: Friction Hurdle & Gate 34 Execution Friction Stress Test
     const spreadUnits = profile.estimatedSpreadUnits;
     const feePct = profile.estimatedFeeBufferPct;
 
@@ -655,6 +664,33 @@ export class ScoringEngine {
       stopLoss,
       takeProfit
     );
+
+    // GATE 45 Step 4: Reject if normal net R:R < minimumNetRR
+    if (stressTest.normal.netRR < thresholds.minimumNetRR) {
+      return this.createRejection(
+        `REJECTED: NET_RR_BELOW_THRESHOLD. Normal Net Risk/Reward ratio (${stressTest.normal.netRR.toFixed(2)}:1) is below minimum acceptable NET R:R (${thresholds.minimumNetRR}:1) (Gross R:R: ${rawRR.toFixed(2)}:1)`,
+        marketRegime,
+        regimeDetails
+      );
+    }
+
+    // GATE 45 Step 5 & 6: Adverse Net R:R as risk-quality modifier unless hard gate enabled
+    if (thresholds.enforceAdverseNetRRHardGate && stressTest.adverse.netRR < (thresholds.minimumAdverseNetRR ?? 1.0)) {
+      return this.createRejection(
+        `REJECTED: ADVERSE_NET_RR_BELOW_THRESHOLD. Adverse Net Risk/Reward ratio (${stressTest.adverse.netRR.toFixed(2)}:1) is below required stress floor (${(thresholds.minimumAdverseNetRR ?? 1.0)}:1)`,
+        marketRegime,
+        regimeDetails
+      );
+    }
+
+    // Safety buffer / execution cost checks from Gate 34
+    if (!stressTest.isPassed && stressTest.rejectionReason && stressTest.rejectionReason !== 'ADVERSE_NET_RR_BELOW_THRESHOLD') {
+      return this.createRejection(
+        stressTest.reasons[0] || `REJECTED: ${stressTest.rejectionReason}. Execution friction stress test failed.`,
+        marketRegime,
+        regimeDetails
+      );
+    }
 
     const netRR = stressTest.normal.netRR;
 
@@ -702,11 +738,15 @@ export class ScoringEngine {
       targetDistance,
       stopDistance,
       pipPointUnit: profile.pipPointUnit,
+      alignedCount: timeframesAligned,
+      totalEvaluated: totalTfsEvaluated,
+      timeframeAlignmentRatio,
       timeframesAligned,
       totalTimeframesEvaluated: totalTfsEvaluated,
       agreeingStrategiesCount: strategyEval.agreeingStrategiesCount,
       totalStrategiesCount: 6,
-      isTopTradeCandidate: totalScore >= 85 && timeframesAligned >= 4,
+      strategyAgreementRatio: strategyEval.agreementRatio,
+      isTopTradeCandidate: totalScore >= thresholds.signalThreshold && timeframeAlignmentRatio >= (thresholds.minimumTimeframeAlignment || 0.60),
       estimatedFriction: {
         spreadPipsOrPoints: spreadUnits,
         feeBufferPct: feePct,
@@ -805,7 +845,7 @@ export class ScoringEngine {
       tp2 = Math.max(baseTp2, tp1 + minStep);
 
       // Verify the minimum risk/reward requirement is met for TP2 (primary target)
-      const minRequiredReward = risk * thresholds.minimumNetRR;
+      const minRequiredReward = risk * thresholds.minimumRR;
       if (tp2 < entryPrice + minRequiredReward) {
         tp2 = entryPrice + minRequiredReward;
       }
@@ -844,7 +884,7 @@ export class ScoringEngine {
       tp2 = Math.min(baseTp2, tp1 - minStep);
 
       // Verify the minimum risk/reward requirement is met for TP2 (primary target)
-      const minRequiredReward = risk * thresholds.minimumNetRR;
+      const minRequiredReward = risk * thresholds.minimumRR;
       if (tp2 > entryPrice - minRequiredReward) {
         tp2 = entryPrice - minRequiredReward;
       }
@@ -943,6 +983,9 @@ export class ScoringEngine {
       riskRewardRatio: 0,
       estimatedWinRate: 0,
       expectancy: 0,
+      alignedCount: 0,
+      totalEvaluated: 6,
+      timeframeAlignmentRatio: 0,
       timeframesAligned: 0,
       totalTimeframesEvaluated: 6,
       agreeingStrategiesCount: 0,
@@ -970,4 +1013,49 @@ export class ScoringEngine {
       },
     };
   }
+
+  /**
+   * Centralized score classification based on serverConfig thresholds:
+   * score >= signalThreshold → ACTIONABLE SIGNAL
+   * score >= qualifiedCandidateThreshold → QUALIFIED CANDIDATE
+   * score >= watchingThreshold → WATCHING
+   */
+  static classifyScore(score: number, customThresholds?: { signalThreshold: number; qualifiedCandidateThreshold: number; watchingThreshold: number }) {
+    const thresholds = customThresholds || serverConfig.getConfig().thresholds;
+    if (score >= thresholds.signalThreshold) {
+      return {
+        tier: 'ACTIONABLE_SIGNAL' as const,
+        label: `ACTIONABLE SIGNAL (${thresholds.signalThreshold}+)`,
+        isActionable: true,
+        isQualifiedCandidate: true,
+        isWatching: true,
+      };
+    }
+    if (score >= thresholds.qualifiedCandidateThreshold) {
+      return {
+        tier: 'QUALIFIED_CANDIDATE' as const,
+        label: `QUALIFIED CANDIDATE (${thresholds.qualifiedCandidateThreshold}-${thresholds.signalThreshold - 1})`,
+        isActionable: false,
+        isQualifiedCandidate: true,
+        isWatching: true,
+      };
+    }
+    if (score >= thresholds.watchingThreshold) {
+      return {
+        tier: 'WATCHING' as const,
+        label: `WATCHING (${thresholds.watchingThreshold}-${thresholds.qualifiedCandidateThreshold - 1})`,
+        isActionable: false,
+        isQualifiedCandidate: false,
+        isWatching: true,
+      };
+    }
+    return {
+      tier: 'REJECT' as const,
+      label: `REJECT (< ${thresholds.watchingThreshold})`,
+      isActionable: false,
+      isQualifiedCandidate: false,
+      isWatching: false,
+    };
+  }
 }
+

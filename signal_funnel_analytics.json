@@ -1,0 +1,37 @@
+[
+  {
+    "id": "funnel_1787407765369_BTCUSD_vic31",
+    "timestamp": 1787407765369,
+    "symbol": "BTCUSD",
+    "direction": "BUY",
+    "stage": "GATE_3",
+    "score": 82,
+    "regime": "UNKNOWN",
+    "strategy": "Breakout",
+    "rejectionCode": null,
+    "rejectionReason": null,
+    "rejectionCategory": null,
+    "initialScore": 82,
+    "estimatedWinRate": 68,
+    "empiricalProbability": null,
+    "probabilitySampleSize": 0,
+    "rejectionStage": "GATE_3"
+  },
+  {
+    "id": "test_em94hhd",
+    "timestamp": 1787407747971,
+    "symbol": "ADAUSDT",
+    "direction": "BUY",
+    "stage": "GATE_4",
+    "score": 75,
+    "regime": "UNKNOWN",
+    "strategy": "Test Strategy",
+    "rejectionCode": "CLASSIFICATION_WATCHING",
+    "rejectionReason": "Signal classification: WATCHING",
+    "rejectionCategory": "OTHER",
+    "initialScore": 75,
+    "grossRR": 2,
+    "estimatedWinRate": 80,
+    "rejectionStage": "GATE_4"
+  }
+]

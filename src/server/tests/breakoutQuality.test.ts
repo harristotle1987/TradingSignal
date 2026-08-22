@@ -237,8 +237,9 @@ export async function runBreakoutQualityTestSuite() {
   }
 }
 
-// Run when executed directly
-runBreakoutQualityTestSuite().catch((err) => {
-  console.error(err);
-  process.exit(1);
+import { describe, it } from "vitest";
+describe("breakoutQuality.test.ts", () => {
+  it("runs successfully", async () => {
+    await runBreakoutQualityTestSuite();
+  });
 });

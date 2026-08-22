@@ -28,6 +28,7 @@ import { marketCache } from '../market/CacheStore.js';
 import { logger } from '../logger.js';
 import { ScannerPersistence, PersistedSentSignal } from '../signals/ScannerPersistence.js';
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
+import { adminAuthMiddleware } from '../middleware/adminAuth.js';
 
 const router = Router();
 
@@ -48,7 +49,7 @@ router.get('/scanner/settings', async (_req: Request, res: Response) => {
  * POST /api/scanner/settings
  * Updates automated hourly scanner configurations (enabled, notifications, notifyOnNoTrade).
  */
-router.post('/scanner/settings', async (req: Request, res: Response) => {
+router.post('/scanner/settings', adminAuthMiddleware, async (req: Request, res: Response) => {
   const { enabled, notificationsEnabled, notifyOnNoTrade, intervalMinutes } = req.body || {};
   hourlyScanner.updateSettings({ enabled, notificationsEnabled, notifyOnNoTrade, intervalMinutes });
   const settings = await hourlyScanner.getSettingsAsync();
@@ -166,7 +167,7 @@ router.post('/scanner/trigger', async (req: Request, res: Response) => {
  * POST /api/scanner/manual-trigger
  * Separate endpoint for in-app UI manual/admin scanner execution.
  */
-router.post('/scanner/manual-trigger', async (_req: Request, res: Response) => {
+router.post('/scanner/manual-trigger', adminAuthMiddleware, async (_req: Request, res: Response) => {
   try {
     const result = await hourlyScanner.triggerManualScan();
     const httpCode = result.status === 'ERROR' ? 500 : 200;
@@ -248,7 +249,7 @@ router.get('/signals/outcomes', async (req: Request, res: Response) => {
  * DELETE /api/signals/outcomes
  * Clears persistent Signal Outcome logs.
  */
-router.delete('/signals/outcomes', async (_req: Request, res: Response) => {
+router.delete('/signals/outcomes', adminAuthMiddleware, async (_req: Request, res: Response) => {
   try {
     await SignalOutcomeLogger.clearLogs();
     res.status(200).json({
@@ -271,7 +272,7 @@ router.delete('/signals/outcomes', async (_req: Request, res: Response) => {
  * POST /api/signals/monitor
  * Triggers immediate, on-demand evaluation of active signals against live prices and candle progression.
  */
-router.post('/signals/monitor', async (_req: Request, res: Response) => {
+router.post('/signals/monitor', adminAuthMiddleware, async (_req: Request, res: Response) => {
   try {
     const result = await SignalLifecycleManager.evaluateActiveSignals();
     res.status(200).json({
@@ -296,7 +297,7 @@ router.post('/signals/monitor', async (_req: Request, res: Response) => {
  * Manually checks the latest verified market price for an individual active signal.
  * Guarantees idempotency, target pricing preservation, and correct status outcomes.
  */
-router.post('/signals/refresh', async (req: Request, res: Response) => {
+router.post('/signals/refresh', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const { id } = req.body || {};
     if (!id || typeof id !== 'string') {
@@ -353,10 +354,11 @@ router.post('/signals/refresh', async (req: Request, res: Response) => {
             timeframe: logRecord.timeframe || '1h',
             dataSource: logRecord.provider || 'binance',
             status: rawStatus === 'ACTIVE' ? 'ACTIVE' : 
+                    (rawStatus === 'WAITING_ENTRY' ? 'WAITING_ENTRY' :
                     (isCompleted ? 'COMPLETED' : 
                      (isStopped ? 'STOPPED_OUT' : 
                       (rawStatus === 'TP1 HIT' ? 'TP1_HIT' : 
-                       (rawStatus === 'TP2 HIT' ? 'TP2_HIT' : rawStatus as any)))),
+                       (rawStatus === 'TP2 HIT' ? 'TP2_HIT' : rawStatus as any))))),
             tp1Status: rawStatus.includes('TP') || isCompleted ? 'HIT' : 'PENDING',
             tp2Status: rawStatus.includes('TP2') || rawStatus.includes('TP3') || isCompleted ? 'HIT' : 'PENDING',
             tp3Status: rawStatus.includes('TP3') || isCompleted ? 'HIT' : 'PENDING',
@@ -653,7 +655,7 @@ router.post('/signals/refresh', async (req: Request, res: Response) => {
  * POST /api/signals/backfill-outcomes
  * Triggers historical outcome backfill across all ACTIVE and progressive signals.
  */
-router.post('/signals/backfill-outcomes', async (_req: Request, res: Response) => {
+router.post('/signals/backfill-outcomes', adminAuthMiddleware, async (_req: Request, res: Response) => {
   try {
     const result = await SignalLifecycleManager.backfillHistoricalOutcomesForActiveSignals();
     res.status(200).json({
@@ -701,7 +703,7 @@ router.get('/signals/log', async (_req: Request, res: Response) => {
  * DELETE /api/signals/log/:id
  * Deletes an individual dedicated signal log entry by ID.
  */
-router.delete('/signals/log/:id', async (req: Request, res: Response) => {
+router.delete('/signals/log/:id', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
     const success = await SignalLogger.deleteLog(id);
@@ -738,7 +740,7 @@ router.delete('/signals/log/:id', async (req: Request, res: Response) => {
  * DELETE /api/signals/log
  * Clears dedicated signal log records.
  */
-router.delete('/signals/log', async (_req: Request, res: Response) => {
+router.delete('/signals/log', adminAuthMiddleware, async (_req: Request, res: Response) => {
   try {
     await SignalLogger.clearLogs();
     signalEngine.clearSignals();
@@ -777,7 +779,7 @@ router.get('/signals', async (_req: Request, res: Response) => {
  * POST /api/signals/generate
  * Triggers multi-timeframe signal analysis and validation for a symbol (default EURUSD).
  */
-router.post('/signals/generate', async (req: Request, res: Response) => {
+router.post('/signals/generate', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const symbol = (req.body?.symbol as string) || 'EURUSD';
     const category = req.body?.category as string | undefined;
@@ -804,7 +806,7 @@ router.post('/signals/generate', async (req: Request, res: Response) => {
  * DELETE /api/signals
  * Resets/clears active signals cache.
  */
-router.delete('/signals', async (_req: Request, res: Response) => {
+router.delete('/signals', adminAuthMiddleware, async (_req: Request, res: Response) => {
   signalEngine.clearSignals();
   await ScannerPersistence.clearSentSignals();
   res.status(200).json({
@@ -901,7 +903,7 @@ router.post('/signals/walk-forward', async (req: Request, res: Response) => {
  * POST /api/signals/test-outcome
  * Executes the complete integration test suite for automated Signal Outcome Tracking.
  */
-router.post('/signals/test-outcome', async (_req: Request, res: Response) => {
+router.post('/signals/test-outcome', adminAuthMiddleware, async (_req: Request, res: Response) => {
   try {
     const report = await OutcomeTrackerTester.runSuite();
     const httpCode = report.success ? 200 : 500;
@@ -1059,7 +1061,7 @@ router.post('/signals/regime-thresholds/evaluate', (req: Request, res: Response)
  * POST /api/signals/regime-thresholds/policy
  * Updates regime threshold policy configuration (guarded against tiny sample size over-fitting).
  */
-router.post('/signals/regime-thresholds/policy', (req: Request, res: Response) => {
+router.post('/signals/regime-thresholds/policy', adminAuthMiddleware, (req: Request, res: Response) => {
   try {
     const { policy, sampleSize } = req.body;
     if (!policy) {
@@ -1269,7 +1271,7 @@ router.get('/signals/news-risk/events', (_req: Request, res: Response) => {
  * POST /api/signals/news-risk/register
  * Dynamically registers or updates a scheduled news event in the system calendar.
  */
-router.post('/signals/news-risk/register', (req: Request, res: Response) => {
+router.post('/signals/news-risk/register', adminAuthMiddleware, (req: Request, res: Response) => {
   try {
     const event = req.body;
     if (!event || !event.id || !event.title || !event.scheduledTimeMs) {
@@ -1401,7 +1403,7 @@ router.get('/signals/funnel-analytics', (req: Request, res: Response) => {
  * DELETE /api/signals/funnel-analytics
  * Resets/clears the recorded funnel analytics candidates data
  */
-router.delete('/signals/funnel-analytics', (req: Request, res: Response) => {
+router.delete('/signals/funnel-analytics', adminAuthMiddleware, (req: Request, res: Response) => {
   try {
     Gate35SignalFunnelAnalytics.clear();
     res.status(200).json({
@@ -1477,7 +1479,7 @@ const updateFrequencyHandler = async (req: Request, res: Response) => {
   }
 };
 
-router.post('/signals/frequency-config', updateFrequencyHandler);
-router.put('/signals/frequency-config', updateFrequencyHandler);
+router.post('/signals/frequency-config', adminAuthMiddleware, updateFrequencyHandler);
+router.put('/signals/frequency-config', adminAuthMiddleware, updateFrequencyHandler);
 
 export default router;

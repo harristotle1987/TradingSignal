@@ -59,6 +59,18 @@ export class QuotaManager {
   }
 
   /**
+   * Returns the remaining API quota for a given provider in the rolling 60-second window.
+   */
+  public getRemainingQuota(providerId: string = 'twelvedata'): number {
+    const cleanProvider = providerId.toLowerCase();
+    const now = Date.now();
+    this.cleanupLogs(cleanProvider, now);
+    const logs = this.requestLogs.get(cleanProvider) || [];
+    const quota = this.providerQuotas[cleanProvider] || { maxPerMinute: 10, lowThreshold: 8 };
+    return Math.max(0, quota.maxPerMinute - logs.length);
+  }
+
+  /**
    * Evaluates if a request should proceed or be blocked due to lock/cooldown or low quota.
    */
   public canMakeRequest(providerId: string, critical: boolean): boolean {

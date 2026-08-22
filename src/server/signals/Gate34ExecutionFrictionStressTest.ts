@@ -45,25 +45,38 @@ export interface FrictionStressTestResult {
   takeProfit: number;
   rawRisk: number;
   rawReward: number;
-  grossRR: number;
+  grossRR: number;                   // GROSS_RR (pre-friction reward / risk)
+  netRR: number;                     // NET_RR (normal friction adjusted)
+  adverseNetRR: number;              // ADVERSE_NET_RR (stressed friction adjusted)
   normal: FrictionBreakdown;
   adverse: FrictionBreakdown;
+  adverseRiskModifier: number;       // Risk-quality modifier from adverse stress test
   isPassed: boolean;
-  rejectionReason?: string;
+  rejectionReason?: 'GROSS_RR_BELOW_THRESHOLD' | 'NET_RR_BELOW_THRESHOLD' | 'ADVERSE_NET_RR_BELOW_THRESHOLD' | 'INSUFFICIENT_SAFETY_BUFFER' | 'EXECUTION_COST_TOO_HIGH' | string;
   reasons: string[];
   explanation: string;
 }
 
 export interface FrictionTestThresholds {
-  minimumNetRR?: number;          // Default from config or 1.50
-  minimumAdverseNetRR?: number;   // Default 1.00 (must be net breakeven or better under adverse stress)
-  maxFrictionRatio?: number;      // Default 0.25 (25% max friction of raw reward)
+  minimumRR?: number;                 // Minimum acceptable GROSS R:R (default: 1.8)
+  minimumNetRR?: number;              // Minimum acceptable NET R:R (default: 1.5)
+  minimumAdverseNetRR?: number;       // Optional stress-test floor (default: 1.0)
+  enforceAdverseNetRRHardGate?: boolean; // Whether adverse net RR is a hard gate (default: false)
+  maxFrictionRatio?: number;          // Default 0.25 (25% max friction of raw reward)
   minSafetyBufferMultiplier?: number; // Default 3.5 (rawReward >= friction * 3.5)
 }
 
 export class Gate34ExecutionFrictionStressTest {
   /**
    * Main Gate 34 Entry Point: Evaluates execution friction stress test for a signal.
+   *
+   * GATE 45 R:R POLICY:
+   * 1. Calculate GROSS_RR.
+   * 2. Reject if GROSS_RR < minimumRR.
+   * 3. Calculate NET_RR (normal friction).
+   * 4. Reject if NET_RR < minimumNetRR.
+   * 5. Calculate ADVERSE_NET_RR (stress test).
+   * 6. Use ADVERSE_NET_RR as risk-quality modifier unless explicitly configured as hard gate.
    */
   public static evaluate(
     symbol: string,
@@ -82,16 +95,23 @@ export class Gate34ExecutionFrictionStressTest {
 
     const rawRisk = Math.abs(entryPrice - stopLoss);
     const rawReward = Math.abs(takeProfit - entryPrice);
+    
+    // 1. Calculate GROSS_RR
     const grossRR = rawRisk > 0 ? parseFloat((rawReward / rawRisk).toFixed(2)) : 0;
 
     // Build normal and adverse friction breakdowns based on asset-specific profile
     const normalFriction = this.calculateNormalFriction(cleanSymbol, assetClass, entryPrice, rawReward, rawRisk);
     const adverseFriction = this.calculateAdverseFriction(cleanSymbol, assetClass, entryPrice, rawReward, rawRisk);
 
+    const normalNetRR = normalFriction.netRR;   // NET_RR
+    const adverseNetRR = adverseFriction.netRR; // ADVERSE_NET_RR
+
     // Resolve safety thresholds
     const cfg = serverConfig.getConfig().thresholds;
+    const minGrossRR = thresholdOverrides?.minimumRR ?? cfg.minimumRR ?? 1.80;
     const minNetRR = thresholdOverrides?.minimumNetRR ?? cfg.minimumNetRR ?? 1.50;
-    const minAdverseNetRR = thresholdOverrides?.minimumAdverseNetRR ?? 1.00;
+    const minAdverseNetRR = thresholdOverrides?.minimumAdverseNetRR ?? cfg.minimumAdverseNetRR ?? 1.00;
+    const enforceAdverseHardGate = thresholdOverrides?.enforceAdverseNetRRHardGate ?? cfg.enforceAdverseNetRRHardGate ?? false;
     const maxFrictionRatio = thresholdOverrides?.maxFrictionRatio ?? 0.25;
     const minSafetyBufferMult = thresholdOverrides?.minSafetyBufferMultiplier ?? 3.5;
 
@@ -99,8 +119,17 @@ export class Gate34ExecutionFrictionStressTest {
     let isPassed = true;
     let rejectionReason: string | undefined = undefined;
 
-    // 1. Safety Buffer Check (Reward must be at least minSafetyBufferMult x normal friction)
-    if (rawReward < normalFriction.totalFrictionPrice * minSafetyBufferMult) {
+    // 1. GROSS R:R Check (Do NOT compare NET R:R against minimumRR, only GROSS R:R)
+    if (grossRR < minGrossRR) {
+      isPassed = false;
+      rejectionReason = 'GROSS_RR_BELOW_THRESHOLD';
+      reasons.push(
+        `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross R:R (${grossRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${minGrossRR}:1).`
+      );
+    }
+
+    // 2. Safety Buffer Check (Reward must be at least minSafetyBufferMult x normal friction)
+    if (isPassed && rawReward < normalFriction.totalFrictionPrice * minSafetyBufferMult) {
       isPassed = false;
       rejectionReason = 'INSUFFICIENT_SAFETY_BUFFER';
       reasons.push(
@@ -108,7 +137,7 @@ export class Gate34ExecutionFrictionStressTest {
       );
     }
 
-    // 2. Friction Ratio Check (Friction must not consume > maxFrictionRatio of raw reward)
+    // 3. Friction Ratio Check (Friction must not consume > maxFrictionRatio of raw reward)
     if (isPassed && normalFriction.frictionRatio > maxFrictionRatio) {
       isPassed = false;
       rejectionReason = 'EXECUTION_COST_TOO_HIGH';
@@ -117,31 +146,45 @@ export class Gate34ExecutionFrictionStressTest {
       );
     }
 
-    // 3. Normal Net R:R Threshold Check
-    if (isPassed && normalFriction.netRR < minNetRR) {
+    // 4. Normal NET R:R Check (Do NOT compare GROSS R:R against minimumNetRR, only normal NET R:R)
+    if (isPassed && normalNetRR < minNetRR) {
       isPassed = false;
       rejectionReason = 'NET_RR_BELOW_THRESHOLD';
       reasons.push(
-        `REJECTED: NET_RR_BELOW_THRESHOLD. Normal Net R:R (${normalFriction.netRR}:1) is below minimum threshold of ${minNetRR}:1 (Gross R:R: ${grossRR}:1).`
+        `REJECTED: NET_RR_BELOW_THRESHOLD. Normal Net R:R (${normalNetRR.toFixed(2)}:1) is below minimum acceptable NET R:R (${minNetRR}:1) (Gross R:R: ${grossRR.toFixed(2)}:1).`
       );
     }
 
-    // 4. Adverse Net R:R Stress Test Threshold Check
-    if (isPassed && adverseFriction.netRR < minAdverseNetRR) {
+    // 5. Adverse Net R:R Stress Test Check (Hard gate ONLY if explicitly configured)
+    if (enforceAdverseHardGate && isPassed && adverseNetRR < minAdverseNetRR) {
       isPassed = false;
       rejectionReason = 'ADVERSE_NET_RR_BELOW_THRESHOLD';
       reasons.push(
-        `REJECTED: ADVERSE_NET_RR_BELOW_THRESHOLD. Under adverse market stress (slippage/wide spread), Net R:R drops to ${adverseFriction.netRR}:1, falling below required ${minAdverseNetRR}:1 breakeven safety floor.`
+        `REJECTED: ADVERSE_NET_RR_BELOW_THRESHOLD. Under adverse market stress (slippage/wide spread), Net R:R drops to ${adverseNetRR.toFixed(2)}:1, falling below required ${minAdverseNetRR}:1 stress floor.`
       );
+    }
+
+    // 6. Calculate risk-quality modifier from adverse stress test
+    let adverseRiskModifier = 0;
+    if (adverseNetRR >= 1.5) {
+      adverseRiskModifier = 1.0;
+    } else if (adverseNetRR >= 1.2) {
+      adverseRiskModifier = 0.5;
+    } else if (adverseNetRR >= 1.0) {
+      adverseRiskModifier = 0.0;
+    } else if (adverseNetRR >= 0.8) {
+      adverseRiskModifier = -0.5;
+    } else {
+      adverseRiskModifier = -1.0;
     }
 
     if (isPassed) {
       reasons.push(
-        `PASSED: Execution friction stress test passed. Gross R:R=${grossRR}:1, Normal Net R:R=${normalFriction.netRR}:1, Adverse Net R:R=${adverseFriction.netRR}:1.`
+        `PASSED: Execution friction stress test passed. Gross R:R=${grossRR.toFixed(2)}:1, Normal Net R:R=${normalNetRR.toFixed(2)}:1, Adverse Net R:R=${adverseNetRR.toFixed(2)}:1 (Modifier: ${adverseRiskModifier >= 0 ? '+' : ''}${adverseRiskModifier}).`
       );
     }
 
-    const explanation = `Gate 34 Stress Test for ${cleanSymbol} (${assetClass}): Passed=${isPassed}. Gross R:R=${grossRR}:1 | Normal Net R:R=${normalFriction.netRR}:1 (Friction=${normalFriction.totalFrictionPrice.toFixed(5)}) | Adverse Net R:R=${adverseFriction.netRR}:1 (Friction=${adverseFriction.totalFrictionPrice.toFixed(5)}).`;
+    const explanation = `Gate 34 Stress Test for ${cleanSymbol} (${assetClass}): Passed=${isPassed}. Gross R:R=${grossRR.toFixed(2)}:1 | Normal Net R:R=${normalNetRR.toFixed(2)}:1 (Friction=${normalFriction.totalFrictionPrice.toFixed(5)}) | Adverse Net R:R=${adverseNetRR.toFixed(2)}:1 (Friction=${adverseFriction.totalFrictionPrice.toFixed(5)}).`;
 
     logger.debug(`[Gate 34 Execution Friction] ${explanation}`);
 
@@ -154,8 +197,11 @@ export class Gate34ExecutionFrictionStressTest {
       rawRisk,
       rawReward,
       grossRR,
+      netRR: normalNetRR,
+      adverseNetRR,
       normal: normalFriction,
       adverse: adverseFriction,
+      adverseRiskModifier,
       isPassed,
       rejectionReason,
       reasons,

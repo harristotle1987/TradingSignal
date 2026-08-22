@@ -14,6 +14,33 @@ import {
 } from '../types/index.js';
 
 class ApiClient {
+  private adminToken: string | null = null;
+
+  /**
+   * Dynamically sets admin authentication token for administrative requests
+   */
+  public setAdminToken(token: string | null): void {
+    this.adminToken = token;
+    if (typeof localStorage !== 'undefined') {
+      if (token) {
+        localStorage.setItem('admin_token', token);
+      } else {
+        localStorage.removeItem('admin_token');
+      }
+    }
+  }
+
+  /**
+   * Retrieves active admin authentication token
+   */
+  public getAdminToken(): string | null {
+    if (this.adminToken) return this.adminToken;
+    if (typeof localStorage !== 'undefined') {
+      return localStorage.getItem('admin_token') || localStorage.getItem('ADMIN_API_KEY') || null;
+    }
+    return null;
+  }
+
   private async fetchJson<T>(endpoint: string, options?: RequestInit, retries = 3): Promise<T> {
     try {
       const isNativeCapacitor = typeof window !== 'undefined' && Boolean((window as any).Capacitor?.isNativePlatform?.());
@@ -25,11 +52,20 @@ class ApiClient {
       const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
       const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
       const fullUrl = endpoint.startsWith('http') ? endpoint : `${cleanBaseUrl}${cleanEndpoint}`;
+
+      const activeAdminToken = this.getAdminToken();
+      const authHeaders: Record<string, string> = {};
+      if (activeAdminToken) {
+        authHeaders['Authorization'] = `Bearer ${activeAdminToken}`;
+        authHeaders['x-admin-key'] = activeAdminToken;
+      }
+
       const response = await fetch(fullUrl, {
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache',
+          ...authHeaders,
           ...(options?.headers || {}),
         },
         ...options,
@@ -327,6 +363,27 @@ class ApiClient {
     timestamp: number;
   }> {
     return this.fetchJson<any>('/api/signals/regime-thresholds/evaluate', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  /**
+   * Fetch Gate 36 configurable frequency metrics
+   */
+  async getFrequencyConfig(): Promise<{ success: boolean; data: any }> {
+    return this.fetchJson<any>('/api/signals/frequency-config');
+  }
+
+  /**
+   * Update Gate 36 configurable frequency settings
+   */
+  async updateFrequencyConfig(params: {
+    preset: '5' | '10' | '15' | 'CUSTOM';
+    customCap?: number;
+    maxClusterAllocationPct?: number;
+  }): Promise<{ success: boolean; message: string; data: any }> {
+    return this.fetchJson<any>('/api/signals/frequency-config', {
       method: 'POST',
       body: JSON.stringify(params),
     });

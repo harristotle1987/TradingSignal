@@ -280,8 +280,9 @@ export async function runPullbackQualityTestSuite() {
   }
 }
 
-// Run when executed directly
-runPullbackQualityTestSuite().catch((err) => {
-  console.error(err);
-  process.exit(1);
+import { describe, it } from "vitest";
+describe("pullbackQuality.test.ts", () => {
+  it("runs successfully", async () => {
+    await runPullbackQualityTestSuite();
+  });
 });

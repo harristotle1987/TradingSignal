@@ -50,6 +50,9 @@ export interface HardGateEvaluationResult {
     | 'IMPOSSIBLE_PRICE'
     | 'INVALID_SL'
     | 'NEGATIVE_EXPECTANCY'
+    | 'GROSS_RR_BELOW_THRESHOLD'
+    | 'NET_RR_BELOW_THRESHOLD'
+    | 'ADVERSE_NET_RR_BELOW_THRESHOLD'
     | 'UNACCEPTABLE_NET_RR'
     | 'SEVERE_SPREAD_SLIPPAGE'
     | 'MAJOR_NEWS_BLOCK'
@@ -94,6 +97,8 @@ export class HardGatesEvaluator {
     tp2?: number;
     tp3?: number;
     riskRewardRatio: number;
+    netRiskRewardRatio?: number;
+    adverseNetRiskRewardRatio?: number;
     liveTicker: NormalizedTicker | null;
     candlesMap: Record<string, NormalizedCandle[]>;
     estimatedWinRate?: number;
@@ -219,12 +224,31 @@ export class HardGatesEvaluator {
       };
     }
 
-    // 6. HARD GATE 6: Unacceptable Net R:R
+    // 6. HARD GATE 6: Gross & Net Risk/Reward Hurdle Checks
+    // 6a: Gross R:R check
     if (params.riskRewardRatio < thresholds.minimumRR) {
       return {
         passed: false,
-        failedGate: 'UNACCEPTABLE_NET_RR',
-        rejectionReason: `REJECTED: RR_BELOW_THRESHOLD. Risk/Reward ratio (${params.riskRewardRatio.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum hurdle`,
+        failedGate: 'GROSS_RR_BELOW_THRESHOLD',
+        rejectionReason: `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${params.riskRewardRatio.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum acceptable GROSS R:R`,
+      };
+    }
+
+    // 6b: Net R:R check
+    if (params.netRiskRewardRatio !== undefined && params.netRiskRewardRatio < thresholds.minimumNetRR) {
+      return {
+        passed: false,
+        failedGate: 'NET_RR_BELOW_THRESHOLD',
+        rejectionReason: `REJECTED: NET_RR_BELOW_THRESHOLD. Net Risk/Reward ratio (${params.netRiskRewardRatio.toFixed(2)}:1) is below ${thresholds.minimumNetRR}:1 minimum acceptable NET R:R (Gross R:R: ${params.riskRewardRatio.toFixed(2)}:1)`,
+      };
+    }
+
+    // 6c: Optional Adverse Net R:R hard gate
+    if (thresholds.enforceAdverseNetRRHardGate && params.adverseNetRiskRewardRatio !== undefined && params.adverseNetRiskRewardRatio < (thresholds.minimumAdverseNetRR ?? 1.0)) {
+      return {
+        passed: false,
+        failedGate: 'ADVERSE_NET_RR_BELOW_THRESHOLD',
+        rejectionReason: `REJECTED: ADVERSE_NET_RR_BELOW_THRESHOLD. Adverse Net Risk/Reward ratio (${params.adverseNetRiskRewardRatio.toFixed(2)}:1) is below ${(thresholds.minimumAdverseNetRR ?? 1.0)}:1 stress floor`,
       };
     }
 
@@ -538,7 +562,7 @@ export class OpportunityFunnelEngine {
     }
 
     if (effectiveScore < thresholds.qualifiedCandidateThreshold) {
-      // 70–74: WATCHING
+      // Score < qualifiedCandidateThreshold: WATCHING
       return {
         stage: 'WATCHING',
         isActionableSignal: false,
@@ -550,7 +574,7 @@ export class OpportunityFunnelEngine {
     }
 
     if (effectiveScore < thresholds.signalThreshold) {
-      // 75–81: QUALIFIED CANDIDATE (CONFIRMED)
+      // Score >= qualifiedCandidateThreshold but < signalThreshold: QUALIFIED CANDIDATE (CONFIRMED)
       return {
         stage: 'CONFIRMED',
         isActionableSignal: false,
@@ -561,7 +585,7 @@ export class OpportunityFunnelEngine {
       };
     }
 
-    // 82+: FULL SIGNAL
+    // Score >= signalThreshold: FULL ACTIONABLE SIGNAL
     return {
       stage: 'WAITING_ENTRY',
       isActionableSignal: true,

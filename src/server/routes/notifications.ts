@@ -5,6 +5,7 @@
 import { Router, Request, Response } from 'express';
 import { PushNotificationService } from '../notifications/PushNotificationService.js';
 import { logger } from '../logger.js';
+import { adminAuthMiddleware } from '../middleware/adminAuth.js';
 
 const router = Router();
 
@@ -94,7 +95,7 @@ router.post('/notifications/unsubscribe', async (req: Request, res: Response) =>
  * POST /api/notifications/test
  * Triggers a test push notification to verify delivery.
  */
-router.post('/notifications/test', async (req: Request, res: Response) => {
+router.post('/notifications/test', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const { subscription } = req.body || {};
     const result = await PushNotificationService.sendTestPush(subscription);

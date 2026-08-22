@@ -13,6 +13,7 @@ export interface NvidiaEvaluationResult {
   aiAssessment: string;
   classification: AiQualitativeClassification;
   refinedConfidence: number; // Strictly equals deterministic confidenceScore — NO AI +2 BOOST!
+  documentedConfidence?: number; // Real documented confidence returned by the AI service
   isAiValidated: boolean;
   neverBoostConfidenceEnforced: true;
   neverInventProbabilityEnforced: true;

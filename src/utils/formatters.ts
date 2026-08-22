@@ -23,6 +23,8 @@ const KNOWN_LABEL_MAP: Record<string, string> = {
   VALIDATED: 'VALIDATED',
 
   // Signal Lifecycle Statuses
+  WAITING_ENTRY: 'WAITING ENTRY',
+  ENTRY_CONFIRMED: 'ENTRY CONFIRMED',
   ACTIVE: 'ACTIVE',
   TP1_HIT: 'TP1 HIT',
   TP2_HIT: 'TP2 HIT',

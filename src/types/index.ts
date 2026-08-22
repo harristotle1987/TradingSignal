@@ -119,6 +119,16 @@ export type SignalValidationReason =
 
 export type RankTier = 'BEST_TRADE' | 'SECOND_BEST' | 'SUGGESTION';
 
+export type ExecutionEvidenceState =
+  | 'CONFIRMED_EXECUTABLE'
+  | 'CONFIRMED_CANDLE_TOUCH'
+  | 'HISTORICAL_CANDLE_TOUCH'
+  | 'UNVERIFIABLE'
+  | 'NOT_REACHED'
+  | 'AMBIGUOUS';
+
+export type HistoricalEntryPolicy = 'CONSERVATIVE' | 'CANDLE_TOUCH' | 'UNVERIFIABLE';
+
 export interface TradingSignal {
   id: string;
   snapshotId: string;
@@ -140,14 +150,22 @@ export interface TradingSignal {
   tp2Rr?: number;
   tp3Rr?: number;
   riskRewardRatio: number;
+  grossRiskRewardRatio?: number;
+  netRiskRewardRatio?: number;
+  adverseNetRiskRewardRatio?: number;
   timestamp: number;
   validatedAt: number;
   dataSource: string;
   status: 'WAITING_ENTRY' | 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'REJECTED' | 'SUPERSEDED' | 'AMBIGUOUS';
+  isTradeableSignal?: boolean;
+  signalClassification?: 'TRADEABLE' | 'WATCHING' | 'QUALIFIED_CANDIDATE' | 'CANDIDATE' | 'REJECTED' | 'FILTERED' | 'BLOCKED' | 'INVALID' | 'EXPIRED_BEFORE_ENTRY' | 'NON_TRADEABLE' | 'ANALYTICS_ONLY' | 'DIAGNOSTIC';
+  isActionableSignal?: boolean;
+  executionEvidence?: ExecutionEvidenceState;
+  historicalEntryPolicy?: HistoricalEntryPolicy;
   tp1Status?: 'PENDING' | 'HIT';
   tp2Status?: 'PENDING' | 'HIT';
   tp3Status?: 'PENDING' | 'HIT';
-  slStatus?: 'ACTIVE' | 'HIT';
+  slStatus?: 'ACTIVE' | 'HIT' | 'ACTIVE_FOR_ENTRY_ONLY';
   tp1HitAt?: string;
   tp2HitAt?: string;
   tp3HitAt?: string;
@@ -167,6 +185,10 @@ export interface TradingSignal {
   isSuggestion?: boolean;
   rankTier?: RankTier;
   estimatedWinRate?: number;
+  modelEstimatedWinRate?: number;
+  empiricalCalibratedProbability?: number | null;
+  probabilitySourceUsed?: 'EMPIRICAL' | 'MODEL' | 'NONE';
+  isEmpiricallyCalibrated?: boolean;
   isAiValidated?: boolean;
   targetDistance?: number;
   stopDistance?: number;
@@ -174,6 +196,11 @@ export interface TradingSignal {
   suggestedRiskAmount?: number; // Hypothetical analysis only
   suggestedPositionSize?: number; // Hypothetical analysis only
   pipPointUnit?: 'PIPS' | 'POINTS';
+  alignedCount?: number;
+  totalEvaluated?: number;
+  timeframeAlignmentRatio?: number;
+  timeframesAligned?: number;
+  totalTimeframesEvaluated?: number;
   estimatedFriction?: {
     spreadPipsOrPoints: number;
     feeBufferPct: number;
@@ -206,6 +233,7 @@ export interface TradingSignal {
   monteCarloRiskOfRuinPct?: number | null;
   monteCarloSimulationStatus?: 'INSUFFICIENT_DATA' | 'ROBUST_STABLE' | 'ELEVATED_DRAWDOWN_RISK' | 'HIGH_RUIN_RISK';
   expiresAt?: number;
+  notifiedStates?: string[];
 }
 
 export interface SignalGenerationResponse {
@@ -243,10 +271,18 @@ export type SignalLogStatus =
   | 'WAITING_ENTRY'
   | 'ENTRY_CONFIRMED'
   | 'ACTIVE' 
+  | 'TP1_HIT'
+  | 'TP2_HIT'
+  | 'TP3_HIT'
+  | 'SL_HIT'
+  | 'STOPPED_OUT'
   | 'TP1_REACHED' 
   | 'TP2_REACHED' 
   | 'TP3_REACHED' 
   | 'STOPPED' 
+  | 'COMPLETED'
+  | 'REJECTED'
+  | 'SUPERSEDED'
   | 'EXPIRED' 
   | 'INVALIDATED' 
   | 'CLOSED' 
@@ -327,6 +363,8 @@ export interface SignalLogRecord {
   isTopTrade?: boolean;
   isBestTrade?: boolean;
   entryHitTimestamp?: string | null;
+  isTradeableSignal?: boolean;
+  signalClassification?: 'TRADEABLE' | 'WATCHING' | 'QUALIFIED_CANDIDATE' | 'CANDIDATE' | 'REJECTED' | 'FILTERED' | 'BLOCKED' | 'INVALID' | 'EXPIRED_BEFORE_ENTRY' | 'NON_TRADEABLE' | 'ANALYTICS_ONLY' | 'DIAGNOSTIC';
   expiresAt?: number;
   updatedAt?: number;
 }
@@ -349,6 +387,11 @@ export interface SignalHistoryItem {
   score?: number;
   confidenceScore?: number;
   targetQualityScore?: number;
+  modelEstimatedWinRate?: number;
+  empiricalProbability?: number | null;
+  probabilitySampleSize?: number;
+  isEmpiricallyCalibrated?: boolean;
+  probabilityConfidenceInterval?: { lower: number; upper: number } | null;
   isTopTrade?: boolean;
   isBestTrade?: boolean;
   isSecondBest?: boolean;
@@ -368,7 +411,7 @@ export interface SignalHistoryItem {
   tp1Status?: 'PENDING' | 'HIT';
   tp2Status?: 'PENDING' | 'HIT';
   tp3Status?: 'PENDING' | 'HIT';
-  slStatus?: 'ACTIVE' | 'HIT';
+  slStatus?: 'ACTIVE' | 'HIT' | 'ACTIVE_FOR_ENTRY_ONLY';
   tp1HitAt?: string;
   tp2HitAt?: string;
   tp3HitAt?: string;
@@ -390,6 +433,8 @@ export interface SignalHistoryItem {
     feeBufferPct?: number;
     netRiskRewardRatio?: number;
   };
+  isTradeableSignal?: boolean;
+  signalClassification?: 'TRADEABLE' | 'WATCHING' | 'QUALIFIED_CANDIDATE' | 'CANDIDATE' | 'REJECTED' | 'FILTERED' | 'BLOCKED' | 'INVALID' | 'EXPIRED_BEFORE_ENTRY' | 'NON_TRADEABLE' | 'ANALYTICS_ONLY' | 'DIAGNOSTIC';
 }
 
 export interface MetricSummary {
@@ -398,6 +443,7 @@ export interface MetricSummary {
   losses: number;
   breakevens: number;
   winRatePct: number;
+  lossRatePct?: number;
   rollingWinRatePct: number;
   profitFactor: number;
   totalRealizedR: number;
@@ -406,6 +452,11 @@ export interface MetricSummary {
   maxDrawdownR: number;
   maxLosingStreak: number;
   currentStreak: number;
+  totalSignals?: number;
+  signalConversionRatePct?: number;
+  entryOpportunityRatePct?: number;
+  expirationRatePct?: number;
+  expiredSignals?: number;
 }
 
 export interface TradeOutcomeRecord {
@@ -423,12 +474,14 @@ export interface TradeOutcomeRecord {
   stopLoss: number;
   takeProfit: number;
   plannedRR: number;
-  outcomeStatus: 'TP_HIT' | 'SL_HIT' | 'EXPIRED' | 'INVALIDATED';
+  outcomeStatus: 'TP_HIT' | 'SL_HIT' | 'EXPIRED' | 'INVALIDATED' | 'NO_ENTRY / EXPIRED';
   realizedRR: number;
   isWin: boolean;
   timestamp: number;
   resolvedAt: number;
   durationMs: number;
+  tradeEntered?: boolean;
+  TRADE_ENTERED?: boolean;
 }
 
 export interface StrategyPerformanceState {
@@ -450,6 +503,41 @@ export interface PerformanceMetricsResponse {
   performance: StrategyPerformanceState;
   disclaimer: string;
   timestamp: number;
+}
+
+/**
+ * Gate 46: Evaluates whether a signal is actionable/qualified.
+ *
+ * Separates "signal is actionable" from "trade has entered":
+ * - WAITING_ENTRY: Valid emitted final signal awaiting market entry crossing -> Actionable
+ * - ACTIVE: Market crossed executable entry -> Trade entered & Actionable
+ * - TP1_HIT / TP2_HIT: Progressive target milestones -> Active trade management & Actionable
+ * - TERMINAL (SL_HIT, STOPPED_OUT, COMPLETED, TP3_HIT, EXPIRED, SUPERSEDED, AMBIGUOUS, REJECTED): Not actionable
+ */
+export function isActionableSignal(signal: {
+  status?: string;
+  isActionableSignal?: boolean;
+  expiresAt?: number;
+  timestamp?: number;
+} | null | undefined): boolean {
+  if (!signal) return false;
+  if (typeof signal.isActionableSignal === 'boolean') {
+    return signal.isActionableSignal;
+  }
+  const status = signal.status;
+  if (!status) return false;
+  if (
+    status === 'WAITING_ENTRY' ||
+    status === 'ACTIVE' ||
+    status === 'TP1_HIT' ||
+    status === 'TP2_HIT'
+  ) {
+    if (signal.expiresAt && Date.now() > signal.expiresAt) {
+      return false;
+    }
+    return true;
+  }
+  return false;
 }
 
 

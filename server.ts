@@ -12,6 +12,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { logger } from './src/server/logger.js';
+import { corsMiddleware } from './src/server/middleware/cors.js';
 import { globalErrorHandler } from './src/server/middleware/errorHandler.js';
 import healthRouter from './src/server/routes/health.js';
 import configStatusRouter from './src/server/routes/configStatus.js';
@@ -31,16 +32,8 @@ export async function createServer() {
 
   app.use(express.json());
 
-  // CORS Middleware for Production Connection Resilience
-  app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    if (req.method === 'OPTIONS') {
-      return res.status(200).end();
-    }
-    next();
-  });
+  // Explicit Allowed-Origin CORS Middleware (Gate 69)
+  app.use(corsMiddleware);
 
   // Request logger middleware
   app.use((req, _res, next) => {
@@ -59,6 +52,17 @@ export async function createServer() {
 
   // Global Express Error Handler
   app.use(globalErrorHandler);
+
+  // Explicit route for Service Worker to prevent catch-all SPA fallback returning HTML
+  app.get('/sw.js', (req, res) => {
+    const swPath = path.join(process.cwd(), 'public', 'sw.js');
+    res.setHeader('Content-Type', 'application/javascript');
+    res.sendFile(swPath, (err) => {
+      if (err) {
+        res.status(404).send('Service worker not found');
+      }
+    });
+  });
 
   // Vite Middleware in Dev or Static Serve in Prod
   if (process.env.NODE_ENV !== 'production') {

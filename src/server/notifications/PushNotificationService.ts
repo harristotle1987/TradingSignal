@@ -262,6 +262,12 @@ export class PushNotificationService {
       return { sentCount: 0, failureCount: 0 };
     }
 
+    // GATE 79: Every user-facing trade signal MUST require isTradeableSignal === true and signalClassification === 'TRADEABLE'
+    if (signal.isTradeableSignal !== true || signal.signalClassification !== 'TRADEABLE') {
+      logger.warn(`[Push Notification Service] Rejecting non-tradeable signal from push notification: ${signal.symbol}. Classification: ${signal.signalClassification}`);
+      return { sentCount: 0, failureCount: 0 };
+    }
+
     // 2. Prevent duplicate notifications for the same signal snapshot / ID
     const dedupKey = `${signal.id || signal.snapshotId || signal.symbol}_${signal.direction}_${signal.timeframe || '1h'}_${Math.floor((signal.timestamp || Date.now()) / (30 * 60 * 1000))}`;
     if (this.notifiedSignalKeys.has(dedupKey)) {
@@ -283,9 +289,23 @@ export class PushNotificationService {
 
     // 3. Format Notification Content
     const precision = signal.entryPrice < 10 ? 5 : 2;
-    const score = signal.score ?? signal.confidenceScore ?? 80;
-    const isBestTrade = score >= 85 || signal.isBestTrade || signal.rankTier === 'BEST_TRADE';
-    const tierLabel = isBestTrade ? '★ BEST TRADE' : 'HIGH QUALITY';
+    const thresholds = serverConfig.getConfig().thresholds;
+    const score = signal.score ?? signal.confidenceScore ?? thresholds.signalThreshold;
+    const isBestTrade = signal.isBestTrade === true || signal.rankTier === 'BEST_TRADE';
+    const isSecondBest = signal.isSecondBest === true || signal.rankTier === 'SECOND_BEST';
+    
+    let tierLabel = 'ACTIONABLE SIGNAL';
+    if (isBestTrade) {
+      tierLabel = '★ BEST TRADE';
+    } else if (isSecondBest) {
+      tierLabel = 'SECOND BEST';
+    } else if (score >= thresholds.signalThreshold) {
+      tierLabel = 'ACTIONABLE SIGNAL';
+    } else if (score >= thresholds.qualifiedCandidateThreshold) {
+      tierLabel = 'QUALIFIED CANDIDATE';
+    } else {
+      tierLabel = 'WATCHING';
+    }
     
     const title = `🚨 [${tierLabel}] ${signal.symbol} ${signal.direction}`;
     const tpDisplay = signal.takeProfit ? signal.takeProfit.toFixed(precision) : 'N/A';
@@ -307,7 +327,7 @@ export class PushNotificationService {
       takeProfit: signal.takeProfit,
       stopLoss: signal.stopLoss,
       score,
-      rankTier: isBestTrade ? 'BEST_TRADE' : 'HIGH_QUALITY',
+      rankTier: isBestTrade ? 'BEST_TRADE' : isSecondBest ? 'SECOND_BEST' : 'SUGGESTION',
       timestamp: signal.timestamp || Date.now(),
       expiresAt: signal.expiresAt || ((signal.timestamp || Date.now()) + serverConfig.getConfig().signalExpirationMs),
       requireInteraction: true,

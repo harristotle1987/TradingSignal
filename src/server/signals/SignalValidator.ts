@@ -463,15 +463,13 @@ export class SignalValidator {
       };
     }
 
-    // 5. Net Risk / Reward Ratio Check: Minimum from config
-    const rawRR = reward / risk;
-    const adjustedNetRR = Number(rawRR.toFixed(2));
-
+    // 5. Gross Risk / Reward Ratio Check: Minimum acceptable GROSS R:R from config
+    const rawRR = Number((reward / risk).toFixed(2));
     const thresholds = serverConfig.getConfig().thresholds;
-    if (adjustedNetRR < thresholds.minimumRR) {
+    if (rawRR < thresholds.minimumRR) {
       return {
         isValid: false,
-        message: `REJECTED: RR_BELOW_THRESHOLD. Risk/Reward ratio (${adjustedNetRR}:1) is below ${thresholds.minimumRR}:1 minimum hurdle`,
+        message: `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum acceptable GROSS R:R`,
       };
     }
 

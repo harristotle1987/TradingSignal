@@ -37,8 +37,8 @@ export class RepairService {
       // Add from ScannerPersistence
       const localSent = ScannerPersistence.localData.sentSignals;
       for (const s of localSent) {
-        // Enforce check on ACTIVE or specifically the requested INJUSDT snapshot
-        if (s.status === 'ACTIVE' || s.snapshotId === 'snap_1787008003492_INJUSDT_3gfn8' || s.symbol === 'INJUSDT') {
+        // Enforce check on ACTIVE / WAITING_ENTRY or specifically the requested INJUSDT snapshot
+        if (s.status === 'ACTIVE' || s.status === 'WAITING_ENTRY' || s.snapshotId === 'snap_1787008003492_INJUSDT_3gfn8' || s.symbol === 'INJUSDT') {
           signalsToExamine.push({
             id: s.id,
             snapshotId: s.snapshotId,
@@ -58,7 +58,7 @@ export class RepairService {
       // Add from SignalLogger if they aren't duplicate IDs
       const logRecords = await SignalLogger.getSignalLogs(500);
       for (const log of logRecords) {
-        if (log.status === 'ACTIVE' || log.snapshotId === 'snap_1787008003492_INJUSDT_3gfn8' || log.symbol === 'INJUSDT') {
+        if (log.status === 'ACTIVE' || log.status === 'WAITING_ENTRY' || log.snapshotId === 'snap_1787008003492_INJUSDT_3gfn8' || log.symbol === 'INJUSDT') {
           if (!signalsToExamine.some((s) => s.id === log.id || s.snapshotId === log.snapshotId)) {
             signalsToExamine.push({
               id: log.id,

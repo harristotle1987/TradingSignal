@@ -16,12 +16,13 @@ import { BitgetAdapter } from './adapters/BitgetAdapter.js';
 import { FinnhubAdapter } from './adapters/FinnhubAdapter.js';
 import { TwelveDataAdapter } from './adapters/TwelveDataAdapter.js';
 import { ExchangeRateAdapter } from './adapters/ExchangeRateAdapter.js';
-import { NormalizedTicker, NormalizedCandle, MarketStatusResponse, ProviderHealth } from './types.js';
+import { NormalizedTicker, NormalizedCandle, MarketStatusResponse, ProviderHealth, TruthfulMarketHealth } from './types.js';
 import { SymbolNormalizer } from './SymbolNormalizer.js';
 import { marketCache } from './CacheStore.js';
 import { quotaManager } from './QuotaManager.js';
 import { serverConfig } from '../config.js';
 import { logger } from '../logger.js';
+import { ScannerPersistence } from '../signals/ScannerPersistence.js';
 
 class ProviderRequestQueue {
   private lastCallTime = new Map<string, number>();
@@ -64,12 +65,241 @@ const providerQueue = new ProviderRequestQueue();
 
 export class MarketDataManager {
   private providers = new Map<string, IMarketDataProvider>();
+  private lastHealthCheckTime = 0;
+  private cachedTruthfulHealth: TruthfulMarketHealth | null = null;
+  private lastSuccessfulQuotes = new Map<string, number>();
 
   constructor() {
     this.registerProvider(new BitgetAdapter());
     this.registerProvider(new FinnhubAdapter());
     this.registerProvider(new TwelveDataAdapter());
     this.registerProvider(new ExchangeRateAdapter());
+  }
+
+  /**
+   * Evaluates truthful market data connectivity, quote freshness, provider reachability,
+   * scanner readiness, and overall system readiness without hardcoded status.
+   */
+  async getTruthfulMarketHealth(forceProbe = false): Promise<TruthfulMarketHealth> {
+    const now = Date.now();
+    const cacheTtlMs = 5000;
+
+    if (!forceProbe && this.cachedTruthfulHealth && (now - this.lastHealthCheckTime < cacheTtlMs)) {
+      return this.cachedTruthfulHealth;
+    }
+
+    const config = serverConfig.getConfig();
+    const isProd = config.nodeEnv === 'production';
+    const productionPersistenceReady = config.productionPersistenceReady;
+
+    // 1. Bitget (Crypto)
+    let bitgetReachable = false;
+    let bitgetQuoteTs: number | null = this.lastSuccessfulQuotes.get('bitget') || null;
+    let bitgetErrMsg: string | undefined;
+
+    try {
+      const ticker = await this.getPrice('BTCUSDT', 'bitget', forceProbe);
+      if (ticker.status === 'OK' || (ticker.status === 'STALE' && ticker.price > 0)) {
+        bitgetReachable = true;
+        bitgetQuoteTs = ticker.timestamp || ticker.receivedAt;
+        this.lastSuccessfulQuotes.set('bitget', bitgetQuoteTs);
+      } else {
+        bitgetErrMsg = ticker.errorMessage || 'Bitget ticker returned invalid status or zero price';
+      }
+    } catch (err) {
+      bitgetErrMsg = err instanceof Error ? err.message : String(err);
+    }
+
+    const bitgetQuoteAge = bitgetQuoteTs ? Math.max(0, now - bitgetQuoteTs) : null;
+    const bitgetFresh = bitgetQuoteAge !== null && bitgetQuoteAge <= config.marketDataMaxAgeMs;
+
+    // 2. Twelve Data (Forex)
+    const twelveDataConfigured = Boolean(process.env.TWELVE_DATA_API_KEY && process.env.TWELVE_DATA_API_KEY.trim().length > 0);
+    let twelveDataReachable = false;
+    let twelveDataQuoteTs: number | null = this.lastSuccessfulQuotes.get('twelvedata') || null;
+    let twelveDataErrMsg: string | undefined;
+
+    if (twelveDataConfigured) {
+      try {
+        const ticker = await this.getPrice('EURUSD', 'twelvedata', forceProbe);
+        if (ticker.status === 'OK' || (ticker.status === 'STALE' && ticker.price > 0)) {
+          twelveDataReachable = true;
+          twelveDataQuoteTs = ticker.timestamp || ticker.receivedAt;
+          this.lastSuccessfulQuotes.set('twelvedata', twelveDataQuoteTs);
+        } else {
+          twelveDataErrMsg = ticker.errorMessage || 'Twelve Data ticker returned invalid status';
+        }
+      } catch (err) {
+        twelveDataErrMsg = err instanceof Error ? err.message : String(err);
+      }
+    } else {
+      twelveDataErrMsg = 'TWELVE_DATA_API_KEY environment variable not configured';
+    }
+
+    const twelveDataQuoteAge = twelveDataQuoteTs ? Math.max(0, now - twelveDataQuoteTs) : null;
+    const twelveDataFresh = twelveDataQuoteAge !== null && twelveDataQuoteAge <= 24 * 3600 * 1000;
+
+    // 3. ExchangeRate (Forex Fallback)
+    const exchangeRateConfigured = true;
+    let exchangeRateReachable = false;
+    let exchangeRateQuoteTs: number | null = this.lastSuccessfulQuotes.get('exchangerate') || null;
+    let exchangeRateErrMsg: string | undefined;
+
+    try {
+      const ticker = await this.getPrice('EURUSD', 'exchangerate', forceProbe);
+      if (ticker.status === 'OK' || (ticker.status === 'STALE' && ticker.price > 0)) {
+        exchangeRateReachable = true;
+        exchangeRateQuoteTs = ticker.timestamp || ticker.receivedAt;
+        this.lastSuccessfulQuotes.set('exchangerate', exchangeRateQuoteTs);
+      } else {
+        exchangeRateErrMsg = ticker.errorMessage || 'ExchangeRate ticker returned invalid status';
+      }
+    } catch (err) {
+      exchangeRateErrMsg = err instanceof Error ? err.message : String(err);
+    }
+
+    const exchangeRateQuoteAge = exchangeRateQuoteTs ? Math.max(0, now - exchangeRateQuoteTs) : null;
+    const exchangeRateFresh = exchangeRateQuoteAge !== null && exchangeRateQuoteAge <= 24 * 3600 * 1000;
+
+    // 4. Finnhub (Stock)
+    const finnhubConfigured = Boolean(process.env.FINNHUB_API_KEY && process.env.FINNHUB_API_KEY.trim().length > 0);
+    let finnhubReachable = false;
+    let finnhubQuoteTs: number | null = this.lastSuccessfulQuotes.get('finnhub') || null;
+    let finnhubErrMsg: string | undefined;
+
+    if (finnhubConfigured) {
+      try {
+        const ticker = await this.getPrice('AAPL', 'finnhub', forceProbe);
+        if (ticker.status === 'OK' || (ticker.status === 'STALE' && ticker.price > 0)) {
+          finnhubReachable = true;
+          finnhubQuoteTs = ticker.timestamp || ticker.receivedAt;
+          this.lastSuccessfulQuotes.set('finnhub', finnhubQuoteTs);
+        } else {
+          finnhubErrMsg = ticker.errorMessage || 'Finnhub ticker returned invalid status';
+        }
+      } catch (err) {
+        finnhubErrMsg = err instanceof Error ? err.message : String(err);
+      }
+    } else {
+      finnhubErrMsg = 'FINNHUB_API_KEY environment variable not configured';
+    }
+
+    const finnhubQuoteAge = finnhubQuoteTs ? Math.max(0, now - finnhubQuoteTs) : null;
+    const finnhubFresh = finnhubQuoteAge !== null && finnhubQuoteAge <= 24 * 3600 * 1000;
+
+    // Asset Class Readiness
+    const cryptoReady = bitgetReachable && bitgetFresh;
+    const forexReady = (twelveDataReachable && twelveDataFresh) || (exchangeRateReachable && exchangeRateFresh);
+    const stockReady = (finnhubReachable && finnhubFresh) || (twelveDataReachable && twelveDataFresh);
+
+    // Aggregate Connectivity
+    const marketDataConnected = cryptoReady || forexReady || stockReady;
+
+    const validQuoteTsList = [bitgetQuoteTs, twelveDataQuoteTs, exchangeRateQuoteTs, finnhubQuoteTs].filter((ts): ts is number => ts !== null && ts > 0);
+    const lastSuccessfulQuote = validQuoteTsList.length > 0 ? Math.max(...validQuoteTsList) : null;
+    const quoteAge = lastSuccessfulQuote ? Math.max(0, now - lastSuccessfulQuote) : null;
+    const dataFreshness = quoteAge !== null && quoteAge <= config.marketDataMaxAgeMs;
+    const marketFeedsActive = marketDataConnected && (dataFreshness || cryptoReady || forexReady);
+
+    const providerConfigured = true;
+    const providerReachable = bitgetReachable || (twelveDataConfigured && twelveDataReachable) || (finnhubConfigured && finnhubReachable) || exchangeRateReachable;
+
+    // Scanner Readiness
+    let scannerEnabled = true;
+    try {
+      const settings = ScannerPersistence.getSettings();
+      scannerEnabled = settings.enabled;
+    } catch {
+      scannerEnabled = false;
+    }
+
+    const persistenceCheckPassed = !isProd || productionPersistenceReady;
+    const scannerReady = scannerEnabled && persistenceCheckPassed && marketDataConnected;
+    const signalsEnabled = marketDataConnected && scannerReady && persistenceCheckPassed;
+
+    // Overall Status
+    let overallStatus: 'OPERATIONAL' | 'DEGRADED' | 'UNAVAILABLE' = 'UNAVAILABLE';
+    if (!marketDataConnected) {
+      overallStatus = 'UNAVAILABLE';
+    } else if (!persistenceCheckPassed || (twelveDataConfigured && !twelveDataReachable) || (finnhubConfigured && !finnhubReachable) || !bitgetReachable) {
+      overallStatus = 'DEGRADED';
+    } else {
+      overallStatus = 'OPERATIONAL';
+    }
+
+    const health: TruthfulMarketHealth = {
+      status: overallStatus,
+      marketDataConnected,
+      marketFeedsActive,
+      providerConfigured,
+      providerReachable,
+      lastSuccessfulQuote,
+      quoteAge,
+      dataFreshness,
+      scannerReady,
+      signalsEnabled,
+      productionPersistenceReady,
+      providers: {
+        bitget: {
+          providerConfigured: true,
+          providerReachable: bitgetReachable,
+          lastSuccessfulQuote: bitgetQuoteTs,
+          quoteAge: bitgetQuoteAge,
+          dataFreshness: bitgetFresh,
+          status: bitgetReachable ? 'CONNECTED' : 'DEGRADED',
+          errorMessage: bitgetErrMsg,
+        },
+        twelvedata: {
+          providerConfigured: twelveDataConfigured,
+          providerReachable: twelveDataReachable,
+          lastSuccessfulQuote: twelveDataQuoteTs,
+          quoteAge: twelveDataQuoteAge,
+          dataFreshness: twelveDataFresh,
+          status: twelveDataConfigured ? (twelveDataReachable ? 'CONNECTED' : 'DEGRADED') : 'UNCONFIGURED',
+          errorMessage: twelveDataErrMsg,
+        },
+        finnhub: {
+          providerConfigured: finnhubConfigured,
+          providerReachable: finnhubReachable,
+          lastSuccessfulQuote: finnhubQuoteTs,
+          quoteAge: finnhubQuoteAge,
+          dataFreshness: finnhubFresh,
+          status: finnhubConfigured ? (finnhubReachable ? 'CONNECTED' : 'DEGRADED') : 'UNCONFIGURED',
+          errorMessage: finnhubErrMsg,
+        },
+        exchangerate: {
+          providerConfigured: exchangeRateConfigured,
+          providerReachable: exchangeRateReachable,
+          lastSuccessfulQuote: exchangeRateQuoteTs,
+          quoteAge: exchangeRateQuoteAge,
+          dataFreshness: exchangeRateFresh,
+          status: exchangeRateReachable ? 'CONNECTED' : 'DEGRADED',
+          errorMessage: exchangeRateErrMsg,
+        },
+      },
+      assetClasses: {
+        crypto: {
+          ready: cryptoReady,
+          provider: 'bitget',
+          quoteAge: bitgetQuoteAge,
+        },
+        forex: {
+          ready: forexReady,
+          provider: twelveDataReachable ? 'twelvedata' : 'exchangerate',
+          fallbackActive: !twelveDataReachable && exchangeRateReachable,
+          quoteAge: twelveDataReachable ? twelveDataQuoteAge : exchangeRateQuoteAge,
+        },
+        stock: {
+          ready: stockReady,
+          provider: finnhubReachable ? 'finnhub' : (twelveDataReachable ? 'twelvedata' : 'none'),
+          quoteAge: finnhubReachable ? finnhubQuoteAge : twelveDataQuoteAge,
+        },
+      },
+    };
+
+    this.lastHealthCheckTime = now;
+    this.cachedTruthfulHealth = health;
+    return health;
   }
 
   private registerProvider(provider: IMarketDataProvider): void {

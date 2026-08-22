@@ -37,7 +37,9 @@ export function SignalPerformanceChart() {
           api.getPerformanceMetrics().catch(() => null),
         ]);
 
-        const logs = logsRes.success && Array.isArray(logsRes.logs) ? logsRes.logs : [];
+        const logs = logsRes.success && Array.isArray(logsRes.logs)
+          ? logsRes.logs.filter((l: any) => l && l.isTradeableSignal === true && l.signalClassification === 'TRADEABLE')
+          : [];
 
         // Build a 30-day map
         const now = Date.now();
@@ -127,7 +129,7 @@ export function SignalPerformanceChart() {
             Historical Signal Performance & Success Rate Trends
           </h3>
           <p className="text-xs text-slate-400 mt-0.5">
-            Daily automated signal volume, confidence score averages, and target hit success rates over time.
+            Daily automated signal volume, signal score averages, and target hit success rates over time.
           </p>
         </div>
 

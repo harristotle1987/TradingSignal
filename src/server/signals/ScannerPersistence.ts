@@ -17,13 +17,20 @@ import * as path from 'path';
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { logger } from '../logger.js';
 import { serverConfig } from '../config.js';
-import { TradingSignal, RankTier } from '../../types/index.js';
+import { TradingSignal, RankTier, isActionableSignal, ExecutionEvidenceState, HistoricalEntryPolicy } from '../../types/index.js';
+
+export interface DailyCapReservation {
+  id: string;
+  status: 'RESERVED' | 'COMMITTED' | 'RELEASED';
+  timestamp: number;
+}
 
 export interface DailyCapState {
   date: string;
   dailySignalCount: number;
   dailySignalCap: number;
   lastScanTime: number;
+  reservations?: DailyCapReservation[];
 }
 
 export interface PersistedSentSignal {
@@ -48,10 +55,15 @@ export interface PersistedSentSignal {
   timeframe: string;
   dataSource: string;
   status: 'WAITING_ENTRY' | 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'SUPERSEDED' | 'AMBIGUOUS' | 'REJECTED';
+  isTradeableSignal?: boolean;
+  signalClassification?: string;
+  isActionableSignal?: boolean;
+  executionEvidence?: ExecutionEvidenceState;
+  historicalEntryPolicy?: HistoricalEntryPolicy;
   tp1Status?: 'PENDING' | 'HIT';
   tp2Status?: 'PENDING' | 'HIT';
   tp3Status?: 'PENDING' | 'HIT';
-  slStatus?: 'ACTIVE' | 'HIT';
+  slStatus?: 'ACTIVE' | 'HIT' | 'ACTIVE_FOR_ENTRY_ONLY';
   tp1HitAt?: string;
   tp2HitAt?: string;
   tp3HitAt?: string;
@@ -86,6 +98,7 @@ export interface PersistedSentSignal {
   isRecovered?: boolean;
   ambiguousDetails?: string;
   notifiedStates?: string[];
+  marketRegime?: string;
 }
 
 export interface PersistedRejectedCandidate {
@@ -101,7 +114,7 @@ export interface PersistedRejectedCandidate {
 export interface PersistedNotification {
   id: string;
   timestamp: number;
-  type: 'BEST_TRADE' | 'HIGH_QUALITY' | 'NO_TRADE' | 'SETUP_UPDATE';
+  type: 'BEST_TRADE' | 'HIGH_QUALITY' | 'NO_TRADE' | 'SETUP_UPDATE' | 'TRADE_UPDATE';
   symbol: string;
   title: string;
   message: string;
@@ -148,8 +161,9 @@ export class ScannerPersistence {
     capState: {
       date: new Date().toISOString().split('T')[0],
       dailySignalCount: 0,
-      dailySignalCap: serverConfig.getConfig().thresholds.dailySignalCap,
+      dailySignalCap: 5,
       lastScanTime: 0,
+      reservations: [],
     },
     sentSignals: [],
     rejectedCandidates: [],
@@ -164,11 +178,40 @@ export class ScannerPersistence {
 
   private static isInitialized = false;
 
+  public static isProductionMode(): boolean {
+    return process.env.NODE_ENV === 'production';
+  }
+
+  public static isProductionPersistenceReady(): boolean {
+    if (!ScannerPersistence.isProductionMode()) {
+      return true; // Local persistence allowed in dev/testing
+    }
+    const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
+    if (!sa || sa.trim().length === 0) {
+      return false;
+    }
+    return getFirestoreAdmin() !== null;
+  }
+
   /**
    * Initializes local cache from disk on startup.
    */
   static init(): void {
     if (this.isInitialized) return;
+    this.isInitialized = true;
+
+    try {
+      const configCap = serverConfig?.getConfig?.()?.thresholds?.dailySignalCap;
+      if (typeof configCap === 'number' && configCap > 0) {
+        this.localData.capState.dailySignalCap = configCap;
+      }
+    } catch {
+      // ignore uninitialized config during early bootstrap
+    }
+
+    if (this.isProductionMode() && !this.isProductionPersistenceReady()) {
+      logger.warn('[ScannerPersistence] PRODUCTION PERSISTENCE NOT READY: FIREBASE_SERVICE_ACCOUNT is required in production. Local disk persistence disabled.');
+    }
 
     try {
       if (fs.existsSync(LOCAL_PERSISTENCE_PATH)) {
@@ -190,6 +233,8 @@ export class ScannerPersistence {
           };
           logger.info('[ScannerPersistence] Loaded persisted scanner state from disk.');
         }
+      } else {
+        this.localData.capState.dailySignalCap = serverConfig.getConfig().thresholds.dailySignalCap;
       }
     } catch (err) {
       logger.warn('[ScannerPersistence] Could not load local state file:', { error: String(err) });
@@ -211,6 +256,7 @@ export class ScannerPersistence {
         dailySignalCount: 0,
         dailySignalCap: this.localData.capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap,
         lastScanTime: this.localData.capState.lastScanTime,
+        reservations: [],
       };
       this.saveLocalData();
       return true;
@@ -219,9 +265,14 @@ export class ScannerPersistence {
   }
 
   /**
-   * Saves data to local JSON disk file.
+   * Saves data to local JSON disk file (only in dev/testing mode).
    */
   private static saveLocalData(): void {
+    if (this.isProductionMode()) {
+      // In production mode, local disk persistence is forbidden
+      return;
+    }
+
     try {
       // Keep only last 100 rejected candidates & 100 notifications to prevent unbounded growth
       if (this.localData.rejectedCandidates.length > 100) {
@@ -251,6 +302,15 @@ export class ScannerPersistence {
     const firestore = getFirestoreAdmin();
 
     if (!firestore) {
+      if (this.isProductionMode()) {
+        logger.error('[ScannerPersistence] FAIL CLOSED: Production mode requires Firebase Admin persistence for daily cap state.');
+        return {
+          date: today,
+          dailySignalCount: defaultCap,
+          dailySignalCap: defaultCap,
+          lastScanTime: Date.now(),
+        };
+      }
       return this.localData.capState;
     }
 
@@ -264,6 +324,7 @@ export class ScannerPersistence {
           dailySignalCount: this.localData.capState.dailySignalCount,
           dailySignalCap: defaultCap,
           lastScanTime: this.localData.capState.lastScanTime,
+          reservations: this.localData.capState.reservations || [],
         };
         await docRef.set(state);
         return state;
@@ -280,6 +341,7 @@ export class ScannerPersistence {
           dailySignalCount: 0,
           dailySignalCap: remote.dailySignalCap || defaultCap,
           lastScanTime: remoteLastScan,
+          reservations: [],
         };
         await docRef.set(resetState);
         this.localData.capState = resetState;
@@ -293,33 +355,55 @@ export class ScannerPersistence {
         dailySignalCount: Math.max(this.localData.capState.dailySignalCount, remote.dailySignalCount || 0),
         dailySignalCap: remote.dailySignalCap || defaultCap,
         lastScanTime: remoteLastScan,
+        reservations: remote.reservations || this.localData.capState.reservations || [],
       };
       this.saveLocalData();
       return this.localData.capState;
     } catch (err) {
-      logger.warn('[ScannerPersistence] Firestore getCapState error, using local:', { error: String(err) });
+      logger.warn('[ScannerPersistence] Firestore getCapState error:', { error: String(err) });
+      if (this.isProductionMode()) {
+        return {
+          date: today,
+          dailySignalCount: defaultCap,
+          dailySignalCap: defaultCap,
+          lastScanTime: Date.now(),
+        };
+      }
       return this.localData.capState;
     }
   }
 
   /**
-   * Atomically verifies daily cap and increments counter if allowed.
+   * Atomically verifies daily cap and increments counter if allowed, returning a reservationId.
    */
-  static async tryIncrementCap(defaultCap = 5): Promise<{ allowed: boolean; count: number; cap: number }> {
+  static async tryIncrementCap(defaultCap = 5): Promise<{ allowed: boolean; count: number; cap: number; reservationId?: string }> {
     this.init();
     this.checkDailyRollover();
 
     const today = new Date().toISOString().split('T')[0];
     const firestore = getFirestoreAdmin();
     const limit = this.localData.capState.dailySignalCap || defaultCap;
+    const reservationId = `res_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
     if (!firestore) {
+      if (this.isProductionMode()) {
+        logger.error('[ScannerPersistence] FAIL CLOSED: Production mode requires Firebase Admin persistence for daily cap increment. No daily cap increment allowed.');
+        return { allowed: false, count: 0, cap: limit };
+      }
       if (this.localData.capState.dailySignalCount >= limit) {
         return { allowed: false, count: this.localData.capState.dailySignalCount, cap: limit };
       }
       this.localData.capState.dailySignalCount += 1;
+      if (!this.localData.capState.reservations) {
+        this.localData.capState.reservations = [];
+      }
+      this.localData.capState.reservations.push({
+        id: reservationId,
+        status: 'RESERVED',
+        timestamp: Date.now(),
+      });
       this.saveLocalData();
-      return { allowed: true, count: this.localData.capState.dailySignalCount, cap: limit };
+      return { allowed: true, count: this.localData.capState.dailySignalCount, cap: limit, reservationId };
     }
 
     try {
@@ -334,6 +418,7 @@ export class ScannerPersistence {
             dailySignalCount: 0,
             dailySignalCap: limit,
             lastScanTime: Date.now(),
+            reservations: [],
           };
         } else {
           data = snap.data() as DailyCapState;
@@ -343,6 +428,7 @@ export class ScannerPersistence {
               dailySignalCount: 0,
               dailySignalCap: data.dailySignalCap || limit,
               lastScanTime: Date.now(),
+              reservations: [],
             };
           }
         }
@@ -353,39 +439,186 @@ export class ScannerPersistence {
         }
 
         const newCount = data.dailySignalCount + 1;
+        const reservations = data.reservations || [];
+        reservations.push({
+          id: reservationId,
+          status: 'RESERVED',
+          timestamp: Date.now(),
+        });
+
         const updated: DailyCapState = {
           date: today,
           dailySignalCount: newCount,
           dailySignalCap: currentLimit,
           lastScanTime: Date.now(),
+          reservations,
         };
         tx.set(docRef, updated);
-        return { allowed: true, count: newCount, cap: currentLimit };
+        return { allowed: true, count: newCount, cap: currentLimit, reservationId, reservations };
       });
 
       if (result.allowed) {
         this.localData.capState.dailySignalCount = result.count;
+        this.localData.capState.reservations = (result as any).reservations;
         this.saveLocalData();
       }
-      return result;
+      return {
+        allowed: result.allowed,
+        count: result.count,
+        cap: result.cap,
+        reservationId: result.reservationId,
+      };
     } catch (err) {
-      logger.error('[ScannerPersistence] Transaction tryIncrementCap failed, fallback to local:', { error: String(err) });
+      logger.error('[ScannerPersistence] Transaction tryIncrementCap failed:', { error: String(err) });
+      if (this.isProductionMode()) {
+        return { allowed: false, count: 0, cap: limit };
+      }
       if (this.localData.capState.dailySignalCount >= limit) {
         return { allowed: false, count: this.localData.capState.dailySignalCount, cap: limit };
       }
       this.localData.capState.dailySignalCount += 1;
+      if (!this.localData.capState.reservations) {
+        this.localData.capState.reservations = [];
+      }
+      this.localData.capState.reservations.push({
+        id: reservationId,
+        status: 'RESERVED',
+        timestamp: Date.now(),
+      });
       this.saveLocalData();
-      return { allowed: true, count: this.localData.capState.dailySignalCount, cap: limit };
+      return { allowed: true, count: this.localData.capState.dailySignalCount, cap: limit, reservationId };
     }
   }
 
   /**
-   * Records a validated sent signal.
+   * Commits a previously reserved daily cap count.
    */
-  static async recordSentSignal(signal: TradingSignal): Promise<void> {
+  static async commitCap(reservationId?: string): Promise<void> {
+    if (!reservationId) {
+      logger.warn('[ScannerPersistence] commitCap called without a reservationId. No-op.');
+      return;
+    }
     this.init();
     const today = new Date().toISOString().split('T')[0];
+    const firestore = getFirestoreAdmin();
+
+    if (!firestore) {
+      if (!this.isProductionMode()) {
+        const reservations = this.localData.capState.reservations || [];
+        const res = reservations.find(r => r.id === reservationId);
+        if (res && res.status === 'RESERVED') {
+          res.status = 'COMMITTED';
+          this.saveLocalData();
+          logger.info(`[ScannerPersistence] Committed reservation locally: ${reservationId}`);
+        }
+      }
+      return;
+    }
+
+    try {
+      const docRef = firestore.doc(FIRESTORE_CAP_DOC);
+      await firestore.runTransaction(async (tx) => {
+        const snap = await tx.get(docRef);
+        if (snap.exists) {
+          const data = snap.data() as DailyCapState;
+          if (data.date === today) {
+            const reservations = data.reservations || [];
+            const res = reservations.find(r => r.id === reservationId);
+            if (res && res.status === 'RESERVED') {
+              res.status = 'COMMITTED';
+              tx.set(docRef, data);
+            }
+          }
+        }
+      });
+    } catch (err) {
+      logger.warn('[ScannerPersistence] commitCap Firestore transaction failed:', { error: String(err) });
+    }
+  }
+
+  /**
+   * Releases/rolls back a previously reserved cap count if persistence fails.
+   */
+  static async releaseCap(reservationId?: string): Promise<void> {
+    if (!reservationId) {
+      logger.warn('[ScannerPersistence] releaseCap called without a reservationId. No-op to prevent unowned count decrement.');
+      return;
+    }
+    this.init();
+    const today = new Date().toISOString().split('T')[0];
+    const firestore = getFirestoreAdmin();
+
+    if (!firestore) {
+      if (!this.isProductionMode()) {
+        const reservations = this.localData.capState.reservations || [];
+        const res = reservations.find(r => r.id === reservationId);
+        if (res && res.status === 'RESERVED') {
+          res.status = 'RELEASED';
+          if (this.localData.capState.dailySignalCount > 0) {
+            this.localData.capState.dailySignalCount -= 1;
+          }
+          this.saveLocalData();
+          logger.info(`[ScannerPersistence] Released reservation locally: ${reservationId}`);
+        } else {
+          logger.warn(`[ScannerPersistence] Local reservation ${reservationId} not found or not in RESERVED state.`);
+        }
+      }
+      return;
+    }
+
+    try {
+      const docRef = firestore.doc(FIRESTORE_CAP_DOC);
+      const updatedData = await firestore.runTransaction(async (tx) => {
+        const snap = await tx.get(docRef);
+        if (snap.exists) {
+          const data = snap.data() as DailyCapState;
+          if (data.date === today) {
+            const reservations = data.reservations || [];
+            const res = reservations.find(r => r.id === reservationId);
+            if (res && res.status === 'RESERVED') {
+              res.status = 'RELEASED';
+              if (data.dailySignalCount > 0) {
+                data.dailySignalCount -= 1;
+              }
+              tx.set(docRef, data);
+              return data;
+            }
+          }
+        }
+        return null;
+      });
+
+      if (updatedData) {
+        this.localData.capState.dailySignalCount = updatedData.dailySignalCount;
+        this.localData.capState.reservations = updatedData.reservations;
+        this.saveLocalData();
+      }
+    } catch (err) {
+      logger.warn('[ScannerPersistence] releaseCap Firestore transaction failed:', { error: String(err) });
+    }
+  }
+
+  /**
+   * Records a validated sent signal with strict persistence confirmation.
+   */
+  static async recordSentSignal(signal: TradingSignal): Promise<{ success: boolean; persistedId?: string; error?: string }> {
+    this.init();
+
+    // GATE 79: Reject non-tradeable signals from sent signals persistence
+    if (signal.isTradeableSignal !== true || signal.signalClassification !== 'TRADEABLE') {
+      logger.warn(`[ScannerPersistence] Rejecting non-tradeable signal from persistence: ${signal.symbol}. Classification: ${signal.signalClassification}`);
+      return { success: false, error: 'Rejected: Signal is not tradeable' };
+    }
+
+    const today = new Date().toISOString().split('T')[0];
     const now = Date.now();
+
+    const firestore = getFirestoreAdmin();
+    if (!firestore && this.isProductionMode()) {
+      const errStr = '[ScannerPersistence] FAIL CLOSED: Cannot record sent signal without Firestore in production mode.';
+      logger.error(errStr);
+      return { success: false, error: errStr };
+    }
 
     const persisted: PersistedSentSignal = {
       id: signal.id,
@@ -416,45 +649,80 @@ export class ScannerPersistence {
       date: today,
       estimatedWinRate: signal.estimatedWinRate,
       aiAssessment: signal.aiAssessment,
+      marketRegime: signal.marketRegime || 'UNKNOWN',
+      isTradeableSignal: signal.isTradeableSignal,
+      signalClassification: signal.signalClassification,
     };
 
-    // Add to local data
-    this.localData.sentSignals.push(persisted);
-    this.saveLocalData();
-
-    // Firestore async persist
-    const firestore = getFirestoreAdmin();
-    if (firestore) {
-      try {
-        await firestore.collection(FIRESTORE_SIGNALS_COL).doc(persisted.id).set(persisted);
-      } catch (err) {
-        logger.warn('[ScannerPersistence] Firestore recordSentSignal failed:', { error: String(err) });
+    if (!firestore) {
+      if (this.isProductionMode()) {
+        return { success: false, error: 'Firestore required in production mode' };
       }
+      this.localData.sentSignals.push(persisted);
+      this.saveLocalData();
+      return { success: true, persistedId: persisted.id };
+    }
+
+    try {
+      const cleanData = JSON.parse(JSON.stringify(persisted));
+      await firestore.collection(FIRESTORE_SIGNALS_COL).doc(persisted.id).set(cleanData);
+      if (!this.isProductionMode()) {
+        this.localData.sentSignals.push(persisted);
+        this.saveLocalData();
+      }
+      return { success: true, persistedId: persisted.id };
+    } catch (err) {
+      const errStr = String(err);
+      logger.error('[ScannerPersistence] Firestore recordSentSignal failed:', { error: errStr });
+      if (this.isProductionMode()) {
+        return { success: false, error: errStr };
+      }
+      // Development local fallback
+      this.localData.sentSignals.push(persisted);
+      this.saveLocalData();
+      return { success: true, persistedId: persisted.id };
     }
   }
 
   /**
-   * Clears/deletes all sent signals.
+   * Clears/deletes all sent signals and resets daily cap state in development.
    */
   static async clearSentSignals(): Promise<void> {
     this.init();
-    this.localData.sentSignals = [];
-    this.saveLocalData();
+    if (!this.isProductionMode()) {
+      this.localData.sentSignals = [];
+      this.localData.capState = {
+        date: new Date().toISOString().split('T')[0],
+        dailySignalCount: 0,
+        dailySignalCap: serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 10,
+        lastScanTime: Date.now(),
+      };
+      this.saveLocalData();
+    }
 
     const firestore = getFirestoreAdmin();
     if (firestore) {
       try {
         const query = await firestore.collection(FIRESTORE_SIGNALS_COL).get();
+        const batch = firestore.batch();
         if (!query.empty) {
-          const batch = firestore.batch();
           query.docs.forEach((doc) => {
             batch.delete(doc.ref);
           });
-          await batch.commit();
         }
+        const capDocRef = firestore.doc(FIRESTORE_CAP_DOC);
+        batch.set(capDocRef, {
+          date: new Date().toISOString().split('T')[0],
+          dailySignalCount: 0,
+          dailySignalCap: serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 10,
+          lastScanTime: Date.now(),
+        });
+        await batch.commit();
       } catch (err) {
         logger.warn('[ScannerPersistence] Firestore clearSentSignals failed:', { error: String(err) });
       }
+    } else if (this.isProductionMode()) {
+      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot clear sent signals without Firestore in production.');
     }
   }
 
@@ -464,11 +732,14 @@ export class ScannerPersistence {
   static async deleteSentSignal(id: string): Promise<boolean> {
     this.init();
 
-    const initialLength = this.localData.sentSignals.length;
-    this.localData.sentSignals = this.localData.sentSignals.filter((s) => s.id !== id && s.snapshotId !== id);
-    const deletedLocally = this.localData.sentSignals.length < initialLength;
-    if (deletedLocally) {
-      this.saveLocalData();
+    let deletedLocally = false;
+    if (!this.isProductionMode()) {
+      const initialLength = this.localData.sentSignals.length;
+      this.localData.sentSignals = this.localData.sentSignals.filter((s) => s.id !== id && s.snapshotId !== id);
+      deletedLocally = this.localData.sentSignals.length < initialLength;
+      if (deletedLocally) {
+        this.saveLocalData();
+      }
     }
 
     let deletedInFirestore = false;
@@ -501,6 +772,9 @@ export class ScannerPersistence {
       } catch (err) {
         logger.warn('[ScannerPersistence] Firestore deleteSentSignal failed:', { error: String(err) });
       }
+    } else if (this.isProductionMode()) {
+      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot delete sent signal without Firestore in production.');
+      return false;
     }
 
     return deletedLocally || deletedInFirestore;
@@ -524,10 +798,12 @@ export class ScannerPersistence {
         if (!query.empty) {
           const signals: PersistedSentSignal[] = [];
           query.forEach((doc) => signals.push(doc.data() as PersistedSentSignal));
-          // Merge with local signals
+          // Merge with local signals if not production
           const map = new Map<string, PersistedSentSignal>();
-          for (const s of this.localData.sentSignals.filter((s) => s.date === today)) {
-            map.set(s.id, s);
+          if (!this.isProductionMode()) {
+            for (const s of this.localData.sentSignals.filter((s) => s.date === today)) {
+              map.set(s.id, s);
+            }
           }
           for (const s of signals) {
             map.set(s.id, s);
@@ -535,8 +811,13 @@ export class ScannerPersistence {
           return Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp);
         }
       } catch (err) {
-        logger.warn('[ScannerPersistence] Firestore getSentSignalsToday failed, using local:', { error: String(err) });
+        logger.warn('[ScannerPersistence] Firestore getSentSignalsToday failed:', { error: String(err) });
       }
+    }
+
+    if (this.isProductionMode()) {
+      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot read sent signals from local disk in production mode.');
+      return [];
     }
 
     return this.localData.sentSignals
@@ -573,8 +854,10 @@ export class ScannerPersistence {
       return item;
     });
 
-    this.localData.rejectedCandidates.push(...newItems);
-    this.saveLocalData();
+    if (!this.isProductionMode()) {
+      this.localData.rejectedCandidates.push(...newItems);
+      this.saveLocalData();
+    }
 
     const firestore = getFirestoreAdmin();
     if (firestore) {
@@ -588,6 +871,8 @@ export class ScannerPersistence {
       } catch (err) {
         logger.warn('[ScannerPersistence] Firestore recordRejectedCandidates failed:', { error: String(err) });
       }
+    } else if (this.isProductionMode()) {
+      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot record rejected candidates without Firestore in production.');
     }
   }
 
@@ -614,8 +899,13 @@ export class ScannerPersistence {
           return items;
         }
       } catch (err) {
-        logger.debug('[ScannerPersistence] Firestore getRejectedCandidatesToday fallback to local');
+        logger.debug('[ScannerPersistence] Firestore getRejectedCandidatesToday error');
       }
+    }
+
+    if (this.isProductionMode()) {
+      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot read rejected candidates from local disk in production mode.');
+      return [];
     }
 
     return this.localData.rejectedCandidates
@@ -628,7 +918,7 @@ export class ScannerPersistence {
    * Records a notification history item.
    */
   static async recordNotification(notification: {
-    type: 'BEST_TRADE' | 'HIGH_QUALITY' | 'NO_TRADE' | 'SETUP_UPDATE';
+    type: 'BEST_TRADE' | 'HIGH_QUALITY' | 'NO_TRADE' | 'SETUP_UPDATE' | 'TRADE_UPDATE';
     symbol: string;
     title: string;
     message: string;
@@ -646,21 +936,26 @@ export class ScannerPersistence {
       symbol: notification.symbol,
       title: notification.title,
       message: notification.message,
-      score: notification.score,
-      rankTier: notification.rankTier,
+      ...(notification.score !== undefined ? { score: notification.score } : {}),
+      ...(notification.rankTier !== undefined ? { rankTier: notification.rankTier } : {}),
       date: today,
     };
 
-    this.localData.notifications.push(item);
-    this.saveLocalData();
+    if (!this.isProductionMode()) {
+      this.localData.notifications.push(item);
+      this.saveLocalData();
+    }
 
     const firestore = getFirestoreAdmin();
     if (firestore) {
       try {
-        await firestore.collection(FIRESTORE_NOTIFICATIONS_COL).doc(item.id).set(item);
+        const firestoreData = JSON.parse(JSON.stringify(item));
+        await firestore.collection(FIRESTORE_NOTIFICATIONS_COL).doc(item.id).set(firestoreData);
       } catch (err) {
         logger.warn('[ScannerPersistence] Firestore recordNotification failed:', { error: String(err) });
       }
+    } else if (this.isProductionMode()) {
+      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot record notification without Firestore in production.');
     }
   }
 
@@ -685,8 +980,13 @@ export class ScannerPersistence {
           return list;
         }
       } catch (err) {
-        logger.debug('[ScannerPersistence] Firestore getNotificationHistory fallback to local');
+        logger.debug('[ScannerPersistence] Firestore getNotificationHistory error');
       }
+    }
+
+    if (this.isProductionMode()) {
+      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot read notification history from local disk in production mode.');
+      return [];
     }
 
     return [...this.localData.notifications].sort((a, b) => b.timestamp - a.timestamp).slice(0, limit);
@@ -701,13 +1001,15 @@ export class ScannerPersistence {
     metadata?: Partial<PersistedSentSignal>
   ): Promise<void> {
     this.init();
-    const target = this.localData.sentSignals.find((s) => s.id === signalId);
-    if (target) {
-      target.status = status;
-      if (metadata) {
-        Object.assign(target, metadata);
+    if (!this.isProductionMode()) {
+      const target = this.localData.sentSignals.find((s) => s.id === signalId);
+      if (target) {
+        target.status = status;
+        if (metadata) {
+          Object.assign(target, metadata);
+        }
+        this.saveLocalData();
       }
-      this.saveLocalData();
     }
 
     const firestore = getFirestoreAdmin();
@@ -725,6 +1027,8 @@ export class ScannerPersistence {
       } catch (err) {
         logger.warn('[ScannerPersistence] Firestore updateSignalStatus failed:', { error: String(err) });
       }
+    } else if (this.isProductionMode()) {
+      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot update signal status without Firestore in production.');
     }
   }
 
@@ -741,14 +1045,16 @@ export class ScannerPersistence {
     riskRewardRatio: number
   ): Promise<void> {
     this.init();
-    const target = this.localData.sentSignals.find((s) => s.id === signalIdOrSnapshotId || s.snapshotId === signalIdOrSnapshotId);
-    if (target) {
-      target.tp1 = tp1;
-      target.tp2 = tp2;
-      target.tp3 = tp3;
-      target.takeProfit = takeProfit;
-      target.riskRewardRatio = riskRewardRatio;
-      this.saveLocalData();
+    if (!this.isProductionMode()) {
+      const target = this.localData.sentSignals.find((s) => s.id === signalIdOrSnapshotId || s.snapshotId === signalIdOrSnapshotId);
+      if (target) {
+        target.tp1 = tp1;
+        target.tp2 = tp2;
+        target.tp3 = tp3;
+        target.takeProfit = takeProfit;
+        target.riskRewardRatio = riskRewardRatio;
+        this.saveLocalData();
+      }
     }
 
     const firestore = getFirestoreAdmin();
@@ -803,6 +1109,8 @@ export class ScannerPersistence {
           logger.warn('[ScannerPersistence] Firestore updateSignalTps failed:', { error: String(queryErr) });
         }
       }
+    } else if (this.isProductionMode()) {
+      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot update signal TPs without Firestore in production.');
     }
   }
 
@@ -821,7 +1129,12 @@ export class ScannerPersistence {
 
         const signals: PersistedSentSignal[] = [];
         if (!query.empty) {
-          query.forEach((doc) => signals.push(doc.data() as PersistedSentSignal));
+          query.forEach((doc) => {
+            const data = doc.data() as PersistedSentSignal;
+            if (data && data.isTradeableSignal === true && data.signalClassification === 'TRADEABLE') {
+              signals.push(data);
+            }
+          });
         }
 
         // Also query other potential non-terminal progressive statuses to ensure active monitoring of progressive levels
@@ -832,58 +1145,71 @@ export class ScannerPersistence {
             .where('status', '==', stat)
             .get();
           if (!q.empty) {
-            q.forEach((doc) => signals.push(doc.data() as PersistedSentSignal));
+            q.forEach((doc) => {
+              const data = doc.data() as PersistedSentSignal;
+              if (data && data.isTradeableSignal === true && data.signalClassification === 'TRADEABLE') {
+                signals.push(data);
+              }
+            });
           }
         }
 
-        const firestoreActiveIds = new Set(signals.map((s) => s.id));
-        const localActive = this.localData.sentSignals.filter((s) => 
-          s.status === 'ACTIVE' || s.status === 'TP1_HIT' || s.status === 'TP2_HIT' || s.status === 'WAITING_ENTRY'
-        );
+        if (!this.isProductionMode()) {
+          const firestoreActiveIds = new Set(signals.map((s) => s.id));
+          const localActive = this.localData.sentSignals.filter((s) => 
+            s.isTradeableSignal === true && s.signalClassification === 'TRADEABLE' &&
+            (s.status === 'ACTIVE' || s.status === 'TP1_HIT' || s.status === 'TP2_HIT' || s.status === 'WAITING_ENTRY')
+          );
 
-        const missingFromActive = localActive.filter((s) => !firestoreActiveIds.has(s.id));
-        let localUpdated = false;
+          const missingFromActive = localActive.filter((s) => !firestoreActiveIds.has(s.id));
+          let localUpdated = false;
 
-        if (missingFromActive.length > 0) {
-          await Promise.all(
-            missingFromActive.map(async (localSig) => {
-              try {
-                const docRef = firestore.collection(FIRESTORE_SIGNALS_COL).doc(localSig.id);
-                const docSnap = await docRef.get();
-                if (!docSnap.exists) {
-                  // Completely deleted in Firestore -> remove locally
-                  this.localData.sentSignals = this.localData.sentSignals.filter((s) => s.id !== localSig.id);
-                  localUpdated = true;
-                } else {
-                  // Updated to terminal status in Firestore -> sync status locally
-                  const fsData = docSnap.data();
-                  if (fsData && fsData.status) {
-                    const target = this.localData.sentSignals.find((s) => s.id === localSig.id);
-                    if (target) {
-                      target.status = fsData.status;
-                      localUpdated = true;
+          if (missingFromActive.length > 0) {
+            await Promise.all(
+              missingFromActive.map(async (localSig) => {
+                try {
+                  const docRef = firestore.collection(FIRESTORE_SIGNALS_COL).doc(localSig.id);
+                  const docSnap = await docRef.get();
+                  if (!docSnap.exists) {
+                    // Completely deleted in Firestore -> remove locally
+                    this.localData.sentSignals = this.localData.sentSignals.filter((s) => s.id !== localSig.id);
+                    localUpdated = true;
+                  } else {
+                    // Updated to terminal status in Firestore -> sync status locally
+                    const fsData = docSnap.data();
+                    if (fsData && fsData.status) {
+                      const target = this.localData.sentSignals.find((s) => s.id === localSig.id);
+                      if (target) {
+                        target.status = fsData.status;
+                        localUpdated = true;
+                      }
                     }
                   }
+                } catch (docErr) {
+                  logger.warn(`[ScannerPersistence] Failed to reconcile missing active signal ${localSig.id}:`, docErr);
                 }
-              } catch (docErr) {
-                logger.warn(`[ScannerPersistence] Failed to reconcile missing active signal ${localSig.id}:`, docErr);
-              }
-            })
-          );
-        }
+              })
+            );
+          }
 
-        if (localUpdated) {
-          this.saveLocalData();
+          if (localUpdated) {
+            this.saveLocalData();
+          }
         }
 
         return signals.sort((a, b) => b.timestamp - a.timestamp);
       } catch (err) {
-        logger.warn('[ScannerPersistence] Firestore getActiveSignals failed, using local:', { error: String(err) });
+        logger.warn('[ScannerPersistence] Firestore getActiveSignals failed:', { error: String(err) });
       }
     }
 
+    if (this.isProductionMode()) {
+      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot read active signals from local disk in production mode.');
+      return [];
+    }
+
     return this.localData.sentSignals
-      .filter((s) => s.status === 'ACTIVE' || s.status === 'TP1_HIT' || s.status === 'TP2_HIT' || s.status === 'WAITING_ENTRY')
+      .filter((s) => s.isTradeableSignal === true && s.signalClassification === 'TRADEABLE' && (s.status === 'ACTIVE' || s.status === 'TP1_HIT' || s.status === 'TP2_HIT' || s.status === 'WAITING_ENTRY'))
       .sort((a, b) => b.timestamp - a.timestamp);
   }
 
@@ -912,8 +1238,10 @@ export class ScannerPersistence {
    */
   static async updateLastScanTime(timestamp = Date.now()): Promise<void> {
     this.init();
-    this.localData.capState.lastScanTime = timestamp;
-    this.saveLocalData();
+    if (!this.isProductionMode()) {
+      this.localData.capState.lastScanTime = timestamp;
+      this.saveLocalData();
+    }
 
     const firestore = getFirestoreAdmin();
     if (firestore) {
@@ -924,6 +1252,8 @@ export class ScannerPersistence {
       } catch (err) {
         logger.warn('[ScannerPersistence] Failed to update lastScanTime in Firestore:', { error: String(err) });
       }
+    } else if (this.isProductionMode()) {
+      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot update lastScanTime without Firestore in production.');
     }
   }
 
@@ -935,13 +1265,15 @@ export class ScannerPersistence {
     this.init();
     const now = Date.now();
 
-    // Check in-memory local lock first
-    if (this.localLock.isScanning && now - this.localLock.lockAcquiredAt < lockTimeoutMs) {
-      return { acquired: false, reason: 'Scan lock currently held in local process.' };
-    }
-
     const firestore = getFirestoreAdmin();
     if (!firestore) {
+      if (this.isProductionMode()) {
+        logger.error('[ScannerPersistence] FAIL CLOSED: Firestore required to acquire lock in production mode.');
+        return { acquired: false, reason: 'FAIL CLOSED: Production mode requires Firestore to acquire concurrency lock across serverless instances.' };
+      }
+      if (this.localLock.isScanning && now - this.localLock.lockAcquiredAt < lockTimeoutMs) {
+        return { acquired: false, reason: 'Scan lock currently held in local process.' };
+      }
       this.localLock = { isScanning: true, lockAcquiredAt: now, instanceId };
       return { acquired: true };
     }
@@ -970,7 +1302,10 @@ export class ScannerPersistence {
       }
       return result;
     } catch (err) {
-      logger.warn('[ScannerPersistence] Firestore tryAcquireLock error, using local fallback:', { error: String(err) });
+      logger.warn('[ScannerPersistence] Firestore tryAcquireLock error:', { error: String(err) });
+      if (this.isProductionMode()) {
+        return { acquired: false, reason: 'FAIL CLOSED: Firestore lock transaction failed in production mode.' };
+      }
       if (this.localLock.isScanning && now - this.localLock.lockAcquiredAt < lockTimeoutMs) {
         return { acquired: false, reason: 'Scan lock held in local fallback memory.' };
       }

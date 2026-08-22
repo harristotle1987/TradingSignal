@@ -6,6 +6,23 @@ import { ScannerPersistence, DailyCapState } from './signals/ScannerPersistence.
 let db: Firestore | null = null;
 
 /**
+ * Checks if production persistence requirements are met.
+ * For NODE_ENV=production, FIREBASE_SERVICE_ACCOUNT is REQUIRED.
+ */
+export function isProductionPersistenceReady(): boolean {
+  const isProd = process.env.NODE_ENV === 'production';
+  if (!isProd) {
+    return true; // Local persistence allowed in development/testing
+  }
+  const saJson = process.env.FIREBASE_SERVICE_ACCOUNT;
+  if (!saJson || saJson.trim().length === 0) {
+    return false;
+  }
+  const firestore = getFirestoreAdmin();
+  return firestore !== null;
+}
+
+/**
  * Returns the Firestore admin instance.
  * Initializes Firebase Admin lazily if process.env.FIREBASE_SERVICE_ACCOUNT is available.
  * Handles missing credentials gracefully without crashing the server.
@@ -58,4 +75,5 @@ export async function getOrInitializeCapState(defaultCap = 5): Promise<CapState>
 export async function tryIncrementCapCount(defaultCap = 5): Promise<{ allowed: boolean; count: number; cap: number }> {
   return await ScannerPersistence.tryIncrementCap(defaultCap);
 }
+
 

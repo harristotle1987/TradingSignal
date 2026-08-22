@@ -21,6 +21,8 @@ import { serverConfig } from '../config.js';
 import { ScannerPersistence } from './ScannerPersistence.js';
 import { TradeRankingEngine } from './TradeRankingEngine.js';
 import { logger } from '../logger.js';
+import { SignalDirection } from '../../types/index.js';
+import { Gate17CorrelationExposure } from './Gate17CorrelationExposure.js';
 
 export type SignalCapPreset = '5' | '10' | '15' | 'CUSTOM';
 
@@ -176,6 +178,104 @@ export class Gate36ConfigurableSignalFrequency {
     }
 
     return { allowed: true, cluster, currentCount, maxAllowed };
+  }
+
+  /**
+   * GATE 54 — CORRELATION ALLOCATION POLICY
+   * Evaluates if a high-quality signal can be admitted under correlation rules,
+   * supporting superseding weaker active setups in the same cluster to respect the exposure limit.
+   */
+  public static evaluateCorrelationAllocation(params: {
+    symbol: string;
+    score: number;
+    direction: SignalDirection;
+    activeSignalsInCluster: Array<{ id: string; symbol: string; score: number }>;
+  }): {
+    allowed: boolean;
+    cluster: string;
+    existingExposure: number;
+    newExposure: number;
+    correlation: number;
+    signalToSupersede?: string; // id of signal to supersede
+    reason: string;
+  } {
+    const cluster = TradeRankingEngine.getAssetCluster(params.symbol) || 'UNCLUSTERED';
+    const correlation = Gate17CorrelationExposure.identifyCluster(params.symbol).baseCorrelation;
+    const maxAllowed = this.getMaxSignalsPerCluster();
+    const existingExposure = params.activeSignalsInCluster.length;
+
+    if (cluster === 'UNCLUSTERED') {
+      const decision = {
+        allowed: true,
+        cluster,
+        existingExposure,
+        newExposure: existingExposure,
+        correlation,
+        reason: 'Allowed: Asset is unclustered.'
+      };
+      logger.info(`[Gate 54] Correlation evaluation: ${JSON.stringify(decision)}`);
+      return decision;
+    }
+
+    // If portfolio exposure limit is NOT exceeded, we can add it freely
+    if (existingExposure < maxAllowed) {
+      const decision = {
+        allowed: true,
+        cluster,
+        existingExposure,
+        newExposure: existingExposure + 1,
+        correlation,
+        reason: `Allowed: Cluster exposure (${existingExposure}/${maxAllowed}) is below the portfolio limit.`
+      };
+      logger.info(`[Gate 54] Correlation evaluation: ${JSON.stringify(decision)}`);
+      return decision;
+    }
+
+    // Cluster is full (existingExposure >= maxAllowed)
+    // Check if there's any active signal in the cluster with score >= candidate score (equivalent or stronger active)
+    const strongerActive = params.activeSignalsInCluster.find(s => s.score >= params.score);
+    if (strongerActive) {
+      const decision = {
+        allowed: false,
+        cluster,
+        existingExposure,
+        newExposure: existingExposure,
+        correlation,
+        reason: `Rejected: An equivalent/stronger correlated signal (${strongerActive.symbol} with score ${strongerActive.score}) is already active in cluster [${cluster}].`
+      };
+      logger.info(`[Gate 54] Correlation evaluation: ${JSON.stringify(decision)}`);
+      return decision;
+    }
+
+    // Find the weakest active signal to supersede
+    const sortedActive = [...params.activeSignalsInCluster].sort((a, b) => a.score - b.score);
+    const weakest = sortedActive[0];
+
+    if (weakest && weakest.score < params.score) {
+      const decision = {
+        allowed: true,
+        cluster,
+        existingExposure,
+        newExposure: existingExposure, // exposure count remains same after swap
+        correlation,
+        signalToSupersede: weakest.id,
+        reason: `Allowed via Swap: Superseding weaker active signal ${weakest.symbol} (Score: ${weakest.score}) with stronger candidate ${params.symbol} (Score: ${params.score}) in cluster [${cluster}] to respect the portfolio limit.`
+      };
+      logger.info(`[Gate 54] Correlation evaluation: ${JSON.stringify(decision)}`);
+      return decision;
+    }
+
+    // No weaker active signal to supersede and cluster is full
+    const decision = {
+      allowed: false,
+      cluster,
+      existingExposure,
+      newExposure: existingExposure,
+      correlation,
+      reason: `Rejected: The configured portfolio exposure limit (${maxAllowed}) is actually exceeded for cluster [${cluster}] and candidate is weaker than all active setups.`
+    };
+    logger.info(`[Gate 54] Correlation evaluation: ${JSON.stringify(decision)}`);
+    return decision;
   }
 
   /**

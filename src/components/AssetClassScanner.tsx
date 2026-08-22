@@ -47,6 +47,10 @@ import {
 
 export type AssetCategory = 'CRYPTO' | 'FOREX' | 'STOCKS';
 
+function isStrictlyTradeable(sig: any): boolean {
+  return !!(sig && sig.isTradeableSignal === true && sig.signalClassification === 'TRADEABLE');
+}
+
 export interface CategorySymbolInfo {
   symbol: string;
   name: string;
@@ -327,7 +331,11 @@ export function AssetClassScanner({
       {/* ========================================================================= */}
       {/* SCAN RESULT DISPLAY (1. BEST TRADE, 2. SECOND BEST, 3. SUGGESTIONS)       */}
       {/* ========================================================================= */}
-      {scanResult && scanResult.success && (scanResult.bestTrade || scanResult.secondBest || (scanResult.signals && scanResult.signals.length > 0)) ? (
+      {scanResult && scanResult.success && (
+        isStrictlyTradeable(scanResult.bestTrade) ||
+        isStrictlyTradeable(scanResult.secondBest) ||
+        (scanResult.signals && scanResult.signals.some(isStrictlyTradeable))
+      ) ? (
         <div className="space-y-4 animate-in fade-in duration-200">
           <div className="flex items-center justify-between px-1">
             <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
@@ -340,8 +348,10 @@ export function AssetClassScanner({
           </div>
 
           {/* 1. BEST TRADE */}
-          {scanResult.bestTrade || (scanResult.signals && scanResult.signals.find(s => s.isBestTrade || s.rankTier === 'BEST_TRADE')) ? (() => {
-            const best = scanResult.bestTrade || scanResult.signals!.find(s => s.isBestTrade || s.rankTier === 'BEST_TRADE')!;
+          {(() => {
+            const bestCandidate = scanResult.bestTrade || (scanResult.signals && scanResult.signals.find(s => s.isBestTrade || s.rankTier === 'BEST_TRADE'));
+            if (!isStrictlyTradeable(bestCandidate)) return null;
+            const best = bestCandidate;
             const bestPrec = best.entryPrice < 10 ? 5 : 2;
             return (
               <div className="bg-slate-950 border-2 border-amber-500/80 rounded-xl p-6 sm:p-7 space-y-5 shadow-xl relative overflow-hidden">
@@ -414,12 +424,45 @@ export function AssetClassScanner({
                   </div>
 
                   <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
-                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Confidence</span>
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Signal Score</span>
                     <span className="text-lg font-bold text-sky-400 block tracking-tight">
                       {best.confidenceScore ? `${best.confidenceScore}/100` : '--'}
                     </span>
                   </div>
                 </div>
+
+                {/* Gate 72: Separate Win Rate & Empirical Calibration Display */}
+                {(() => {
+                  const modelWin = best.estimatedWinRate ?? best.modelEstimatedWinRate;
+                  const isCalibrated = best.isEmpiricallyCalibrated === true && best.empiricalProbability != null;
+                  if (modelWin === undefined && !isCalibrated) return null;
+                  return (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 font-mono text-xs pt-1">
+                      {modelWin !== undefined && (
+                        <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+                          <span className="text-[10px] text-slate-400 font-bold uppercase">Model Est. Win Rate:</span>
+                          <strong className="text-emerald-400 font-bold">{modelWin.toFixed(1)}%</strong>
+                        </div>
+                      )}
+                      {isCalibrated && (
+                        <div className="bg-slate-900/90 border border-emerald-900/60 rounded-xl p-3 flex flex-col gap-1 col-span-1 sm:col-span-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-emerald-400 font-bold uppercase">Empirical Win Rate:</span>
+                            <strong className="text-emerald-300 font-bold">{best.empiricalProbability.toFixed(1)}%</strong>
+                          </div>
+                          <div className="text-[10px] text-slate-400 flex items-center justify-between pt-1 border-t border-slate-800">
+                            <span>N={best.probabilitySampleSize || '--'}</span>
+                            {best.probabilityConfidenceInterval && (
+                              <span className="text-sky-300">
+                                95% CI: {best.probabilityConfidenceInterval.lower.toFixed(1)}%–{best.probabilityConfidenceInterval.upper.toFixed(1)}%
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Target Tracker Progress Card */}
                 <TargetTracker signal={best} precision={bestPrec} />
@@ -435,11 +478,13 @@ export function AssetClassScanner({
                 )}
               </div>
             );
-          })() : null}
+          })()}
 
           {/* 2. SECOND BEST */}
-          {scanResult.secondBest || (scanResult.signals && scanResult.signals.find(s => s.isSecondBest || s.rankTier === 'SECOND_BEST')) ? (() => {
-            const second = scanResult.secondBest || scanResult.signals!.find(s => s.isSecondBest || s.rankTier === 'SECOND_BEST')!;
+          {(() => {
+            const secondCandidate = scanResult.secondBest || (scanResult.signals && scanResult.signals.find(s => s.isSecondBest || s.rankTier === 'SECOND_BEST'));
+            if (!isStrictlyTradeable(secondCandidate)) return null;
+            const second = secondCandidate;
             const secondPrec = second.entryPrice < 10 ? 5 : 2;
             return (
               <div className="bg-slate-950 border border-emerald-500/80 rounded-xl p-6 sm:p-7 space-y-5 shadow-lg relative overflow-hidden">
@@ -512,22 +557,56 @@ export function AssetClassScanner({
                   </div>
 
                   <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
-                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Confidence</span>
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Signal Score</span>
                     <span className="text-lg font-bold text-sky-400 block tracking-tight">
                       {second.confidenceScore ? `${second.confidenceScore}/100` : '--'}
                     </span>
                   </div>
                 </div>
 
+                {/* Gate 72: Separate Win Rate & Empirical Calibration Display */}
+                {(() => {
+                  const modelWin = second.estimatedWinRate ?? second.modelEstimatedWinRate;
+                  const isCalibrated = second.isEmpiricallyCalibrated === true && second.empiricalProbability != null;
+                  if (modelWin === undefined && !isCalibrated) return null;
+                  return (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 font-mono text-xs pt-1">
+                      {modelWin !== undefined && (
+                        <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+                          <span className="text-[10px] text-slate-400 font-bold uppercase">Model Est. Win Rate:</span>
+                          <strong className="text-emerald-400 font-bold">{modelWin.toFixed(1)}%</strong>
+                        </div>
+                      )}
+                      {isCalibrated && (
+                        <div className="bg-slate-900/90 border border-emerald-900/60 rounded-xl p-3 flex flex-col gap-1 col-span-1 sm:col-span-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-emerald-400 font-bold uppercase">Empirical Win Rate:</span>
+                            <strong className="text-emerald-300 font-bold">{second.empiricalProbability.toFixed(1)}%</strong>
+                          </div>
+                          <div className="text-[10px] text-slate-400 flex items-center justify-between pt-1 border-t border-slate-800">
+                            <span>N={second.probabilitySampleSize || '--'}</span>
+                            {second.probabilityConfidenceInterval && (
+                              <span className="text-sky-300">
+                                95% CI: {second.probabilityConfidenceInterval.lower.toFixed(1)}%–{second.probabilityConfidenceInterval.upper.toFixed(1)}%
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* Target Tracker Progress Card */}
                 <TargetTracker signal={second} precision={secondPrec} />
               </div>
             );
-          })() : null}
+          })()}
 
           {/* 3. SUGGESTIONS (Up to 3) */}
           {(() => {
-            const sugList = scanResult.suggestions || (scanResult.signals ? scanResult.signals.filter(s => s.isSuggestion || s.rankTier === 'SUGGESTION') : []);
+            const rawSugList = scanResult.suggestions || (scanResult.signals ? scanResult.signals.filter(s => s.isSuggestion || s.rankTier === 'SUGGESTION') : []);
+            const sugList = (rawSugList || []).filter(isStrictlyTradeable);
             if (!sugList || sugList.length === 0) return null;
             return (
               <div className="space-y-3 pt-2">
@@ -576,12 +655,42 @@ export function AssetClassScanner({
                             </strong>
                           </div>
                           <div className="bg-slate-900/80 p-2 rounded border border-slate-800/80">
-                            <span className="text-[10px] text-slate-400 block uppercase">Confidence</span>
+                            <span className="text-[10px] text-slate-400 block uppercase">Signal Score</span>
                             <strong className="text-sky-400 text-sm">
                               {sug.confidenceScore ? `${sug.confidenceScore}/100` : '--'}
                             </strong>
                           </div>
                         </div>
+
+                        {/* Gate 72: Suggestion Win Rate & Empirical Calibration Display */}
+                        {(() => {
+                          const modelWin = sug.estimatedWinRate ?? sug.modelEstimatedWinRate;
+                          const isCalibrated = sug.isEmpiricallyCalibrated === true && sug.empiricalProbability != null;
+                          if (modelWin === undefined && !isCalibrated) return null;
+                          return (
+                            <div className="space-y-1.5 pt-1 border-t border-slate-800 text-[11px]">
+                              {modelWin !== undefined && (
+                                <div className="flex justify-between items-center text-slate-300">
+                                  <span className="text-[9px] text-slate-400 uppercase">Model Win:</span>
+                                  <strong className="text-emerald-400">{modelWin.toFixed(1)}%</strong>
+                                </div>
+                              )}
+                              {isCalibrated && (
+                                <div className="flex flex-col gap-0.5 bg-emerald-950/40 p-1.5 rounded border border-emerald-900/50">
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-[9px] text-emerald-400 uppercase">Empirical Win:</span>
+                                    <strong className="text-emerald-300">{sug.empiricalProbability.toFixed(1)}% (N={sug.probabilitySampleSize || '--'})</strong>
+                                  </div>
+                                  {sug.probabilityConfidenceInterval && (
+                                    <div className="text-[8px] text-sky-300">
+                                      95% CI: {sug.probabilityConfidenceInterval.lower.toFixed(1)}%–{sug.probabilityConfidenceInterval.upper.toFixed(1)}%
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
                         {sug.tp1 !== undefined && (
                           <div className="text-xs text-slate-300 bg-slate-900/60 p-2 rounded border border-slate-800/60 space-y-1">
                             <div className="flex justify-between"><span>TP1 (Conservative):</span><strong className="text-emerald-400">{sug.tp1.toFixed(sugPrec)}</strong></div>

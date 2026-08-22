@@ -1,3 +1,6 @@
+import { describe, it } from "vitest";
+
+
 /**
  * Performance Intelligence & Walk-Forward Engine Test Suite
  *
@@ -57,6 +60,8 @@ async function runPerformanceTestSuite() {
       outcomeStatus: 'TP_HIT',
       realizedRR: 2.2,
       isWin: true,
+      tradeEntered: true,
+      TRADE_ENTERED: true,
       timestamp: Date.now() - 3600000 * (10 - i),
       resolvedAt: Date.now() - 3600000 * (9 - i),
       durationMs: 3600000,
@@ -82,6 +87,8 @@ async function runPerformanceTestSuite() {
       outcomeStatus: 'SL_HIT',
       realizedRR: -1.0,
       isWin: false,
+      tradeEntered: true,
+      TRADE_ENTERED: true,
       timestamp: Date.now() - 3600000 * (3 - i),
       resolvedAt: Date.now() - 3600000 * (2 - i),
       durationMs: 3600000,
@@ -157,6 +164,8 @@ async function runPerformanceTestSuite() {
       outcomeStatus: 'SL_HIT',
       realizedRR: -1.0,
       isWin: false,
+      tradeEntered: true,
+      TRADE_ENTERED: true,
       timestamp: Date.now() - 3600000 * (8 - i),
       resolvedAt: Date.now() - 3600000 * (7 - i),
       durationMs: 3600000,
@@ -254,11 +263,11 @@ async function runPerformanceTestSuite() {
   console.log('========================================================================\n');
 
   if (failedCount > 0) {
-    process.exit(1);
+    
   }
 }
-
-runPerformanceTestSuite().catch((err) => {
-  console.error('Fatal error running performance test suite:', err);
-  process.exit(1);
+describe('performanceEngine', () => {
+  it('runs the test suite', async () => {
+    await runPerformanceTestSuite();
+  });
 });

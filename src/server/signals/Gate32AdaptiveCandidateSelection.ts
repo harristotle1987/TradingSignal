@@ -205,7 +205,7 @@ export class Gate32AdaptiveCandidateSelection {
     }
 
     // 1. Resolve API Quota Ceiling & Configuration
-    const cfgServerCap = serverConfig.getConfig().thresholds.candidateThreshold || 10;
+    const cfgServerCap = serverConfig.getConfig().thresholds.candidateLimit || 10;
     const maxApiQuotaLimit = configOverride?.maxApiQuotaLimit ?? Math.max(10, cfgServerCap);
     const healthyCap = configOverride?.healthyQuotaLimit ?? Math.min(10, maxApiQuotaLimit);
     const moderateCap = configOverride?.moderateQuotaLimit ?? Math.min(7, maxApiQuotaLimit);
@@ -257,9 +257,18 @@ export class Gate32AdaptiveCandidateSelection {
 
       const scoreDelta = cutoffCandidate.compositeScore - nextCandidate.compositeScore;
 
-      if (scoreDelta <= deltaThreshold) {
-        // Candidate #6 is tightly clustered with candidate #5!
-        // Expand candidate pool to avoid missing a high-quality setup due to a cheap pre-screen ranking gap.
+      // Map prompt-specific adaptive candidate expansion criteria:
+      const scoreIsCloseToCutoff = scoreDelta <= deltaThreshold; // e.g. score delta is within the deltaThreshold (4.0 pts)
+      const clusterIsStrong = nextCandidate.marketRegimeScore >= 65; // e.g. strong cluster with high-regime alignment
+      const relativeStrengthIsStrong = nextCandidate.relativeStrengthScore >= 70; // e.g. high relative strength ranking
+      const apiBudgetAllowsExpansion = budgetStatus !== 'CONSTRAINED' && finalQuotaLimit < maxApiQuotaLimit; // API budget allows expansion
+
+      // A high-quality candidate ranked just outside the initial cutoff is admitted when:
+      // 1. score is close to cutoff (scoreIsCloseToCutoff)
+      // 2. OR (clusterIsStrong AND relativeStrengthIsStrong AND apiBudgetAllowsExpansion)
+      const shouldTriggerExpansion = scoreIsCloseToCutoff || (clusterIsStrong && relativeStrengthIsStrong && apiBudgetAllowsExpansion);
+
+      if (shouldTriggerExpansion) {
         clusterExpansionTriggered = true;
 
         let bonusAdded = 0;
@@ -274,8 +283,11 @@ export class Gate32AdaptiveCandidateSelection {
           const prevCand = scoredList[currIdx - 1];
           const prevDelta = prevCand.compositeScore - cand.compositeScore;
 
-          // Add if within tight cluster threshold of cutoff or preceding clustered candidate
-          if (prevDelta <= deltaThreshold || (cutoffCandidate.compositeScore - cand.compositeScore) <= (deltaThreshold * 1.5)) {
+          // Admit if within tight cluster threshold of cutoff, or if it meets the explicit criteria
+          const candCloseToPrev = prevDelta <= deltaThreshold;
+          const candMeetsStrength = cand.relativeStrengthScore >= 70 && cand.marketRegimeScore >= 65 && budgetStatus !== 'CONSTRAINED';
+
+          if (candCloseToPrev || candMeetsStrength || (cutoffCandidate.compositeScore - cand.compositeScore) <= (deltaThreshold * 1.5)) {
             cand.isExpandedSlot = true;
             bonusAdded++;
             finalQuotaLimit++;
@@ -287,11 +299,17 @@ export class Gate32AdaptiveCandidateSelection {
         }
 
         reasons.push(
-          `Cluster Expansion Triggered: Candidate #${initialCount + 1} (${nextCandidate.asset}, score ${nextCandidate.compositeScore}) was tightly clustered (delta ${scoreDelta.toFixed(1)} <= ${deltaThreshold}pt) with #${initialCount} (${cutoffCandidate.asset}, score ${cutoffCandidate.compositeScore}). Expanded pool by +${expandedCandidateCount} candidates (Total limit: ${finalQuotaLimit}).`
+          `Cluster Expansion Triggered: Next candidate #${initialCount + 1} (${nextCandidate.asset}, score ${nextCandidate.compositeScore}) qualified. ` +
+          `Score close: ${scoreIsCloseToCutoff} (delta: ${scoreDelta.toFixed(1)} <= ${deltaThreshold}), ` +
+          `Cluster strong: ${clusterIsStrong} (regime: ${nextCandidate.marketRegimeScore}), ` +
+          `RS strong: ${relativeStrengthIsStrong} (rs: ${nextCandidate.relativeStrengthScore}), ` +
+          `Budget allows: ${apiBudgetAllowsExpansion}. Expanded pool by +${expandedCandidateCount} candidates (Total limit: ${finalQuotaLimit}).`
         );
       } else {
         reasons.push(
-          `No Cluster Expansion: Score gap between #${initialCount} (${cutoffCandidate.asset}: ${cutoffCandidate.compositeScore}pt) and #${initialCount + 1} (${nextCandidate.asset}: ${nextCandidate.compositeScore}pt) was ${scoreDelta.toFixed(1)}pt (> ${deltaThreshold}pt threshold).`
+          `No Cluster Expansion: Candidate #${initialCount + 1} (${nextCandidate.asset}: ${nextCandidate.compositeScore}pt) did not meet expansion criteria. ` +
+          `Score close: ${scoreIsCloseToCutoff} (delta: ${scoreDelta.toFixed(1)} > ${deltaThreshold} threshold), ` +
+          `Cluster strong: ${clusterIsStrong}, RS strong: ${relativeStrengthIsStrong}, Budget allows: ${apiBudgetAllowsExpansion}.`
         );
       }
     }

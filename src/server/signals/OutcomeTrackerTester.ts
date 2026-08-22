@@ -1039,7 +1039,7 @@ export class OutcomeTrackerTester {
           typeof thresholds.minimumTimeframeAlignment === 'number' &&
           typeof thresholds.AIConfirmationMode === 'string' &&
           typeof thresholds.dailySignalCap === 'number' &&
-          typeof thresholds.candidateThreshold === 'number' &&
+          typeof thresholds.candidateLimit === 'number' &&
           typeof thresholds.signalThreshold === 'number'
         );
 

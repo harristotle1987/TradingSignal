@@ -213,8 +213,9 @@ export async function runLiquiditySweepTestSuite() {
   }
 }
 
-// Run when executed directly
-runLiquiditySweepTestSuite().catch((err) => {
-  console.error(err);
-  process.exit(1);
+import { describe, it } from "vitest";
+describe("liquiditySweep.test.ts", () => {
+  it("runs successfully", async () => {
+    await runLiquiditySweepTestSuite();
+  });
 });

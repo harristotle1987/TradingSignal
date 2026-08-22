@@ -29,10 +29,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { TradingSignal } from '../../types/index.js';
+import { serverConfig } from '../config.js';
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { logger } from '../logger.js';
+import { Gate35SignalFunnelAnalytics } from './Gate35SignalFunnelAnalytics.js';
 
-export type SignalLogStatus = 'ACTIVE' | 'TP HIT' | 'SL HIT' | 'EXPIRED' | 'INVALIDATED' | 'TP1 HIT' | 'TP2 HIT' | 'TP3 HIT' | 'AMBIGUOUS';
+export type SignalLogStatus = 'WAITING_ENTRY' | 'ENTRY_CONFIRMED' | 'ACTIVE' | 'TP HIT' | 'SL HIT' | 'EXPIRED' | 'INVALIDATED' | 'TP1 HIT' | 'TP2 HIT' | 'TP3 HIT' | 'AMBIGUOUS';
 
 export interface SignalLogRecord {
   id: string;
@@ -65,6 +67,41 @@ export interface SignalLogRecord {
   isBestTrade?: boolean;
   entryHitTimestamp?: string | null;
   updatedAt?: number;
+  isTradeableSignal?: boolean;
+  signalClassification?: 'TRADEABLE' | 'WATCHING' | 'QUALIFIED_CANDIDATE' | 'CANDIDATE' | 'REJECTED' | 'FILTERED' | 'BLOCKED' | 'INVALID' | 'EXPIRED_BEFORE_ENTRY' | 'NON_TRADEABLE' | 'ANALYTICS_ONLY' | 'DIAGNOSTIC';
+}
+
+/**
+ * Helper to determine if a signal log record is an EXPLICITLY TRADEABLE SIGNAL.
+ * Strictly excludes internal candidates and non-tradeable statuses.
+ */
+export function isTradeableLogRecord(record: SignalLogRecord | undefined | null): boolean {
+  if (!record) return false;
+
+  const classification = (record.signalClassification || '').toUpperCase().trim();
+
+  const nonTradeableClassifications = new Set([
+    'WATCHING',
+    'QUALIFIED_CANDIDATE',
+    'CANDIDATE',
+    'REJECTED',
+    'FILTERED',
+    'BLOCKED',
+    'INVALID',
+    'EXPIRED_BEFORE_ENTRY',
+    'NON_TRADEABLE',
+    'ANALYTICS_ONLY',
+    'DIAGNOSTIC',
+    'LEGACY UNKNOWN',
+    'LEGACY_UNKNOWN',
+    'UNKNOWN',
+  ]);
+
+  if (classification && nonTradeableClassifications.has(classification)) {
+    return false;
+  }
+
+  return record.isTradeableSignal === true && classification === 'TRADEABLE';
 }
 
 const LOCAL_SIGNAL_LOG_PATH = path.join(process.cwd(), 'signal_logs.json');
@@ -194,23 +231,28 @@ export class SignalLogger {
     const firestore = getFirestoreAdmin();
     if (!firestore) return;
 
+    // Clean undefined values for Firestore
+    const cleanRecord = Object.fromEntries(
+      Object.entries(record).filter(([_, v]) => v !== undefined)
+    );
+
     firestore
       .collection(FIRESTORE_COLLECTION)
       .doc(record.id)
-      .set(record, { merge: true })
+      .set(cleanRecord, { merge: true })
       .catch((err) => {
         logger.debug(`[SignalLogger] Firestore sync deferred for signal ${record.id}`, { error: String(err) });
       });
   }
 
   /**
-   * Records a newly generated trading signal into the dedicated Signal Log.
+   * Records a newly generated trading signal into the dedicated Signal Log with strict persistence checks.
    */
   public static async logSignal(
     signal: TradingSignal,
     marketRegime = 'TREND',
     overrideStatus?: SignalLogStatus
-  ): Promise<SignalLogRecord> {
+  ): Promise<{ success: boolean; status: 'TRADEABLE_RECORD_PERSISTED' | 'PERSISTENCE_FAILED'; record?: SignalLogRecord; error?: string }> {
     await this.init();
 
     const id = signal.id || signal.snapshotId || `${signal.symbol}_${signal.timestamp}`;
@@ -223,7 +265,55 @@ export class SignalLogger {
         ? signal.confluenceReasons.join('; ')
         : 'Multi-Strategy Confluence');
 
-    const status: SignalLogStatus = overrideStatus || 'ACTIVE';
+    const status: SignalLogStatus =
+      overrideStatus ||
+      (signal.status === 'ACTIVE'
+        ? 'ACTIVE'
+        : signal.status === 'WAITING_ENTRY'
+        ? 'WAITING_ENTRY'
+        : (signal.status as SignalLogStatus) || 'WAITING_ENTRY');
+
+    if (signal.isTradeableSignal !== true || signal.signalClassification !== 'TRADEABLE') {
+      const directionStr = (signal.direction === 'BUY' || signal.direction === 'SELL') 
+        ? signal.direction 
+        : 'NEUTRAL';
+
+      const stageMap: Record<string, any> = {
+        'CANDIDATE': 'CANDIDATE',
+        'WATCHING': 'GATE_4',
+        'QUALIFIED_CANDIDATE': 'GATE_8',
+        'REJECTED': 'GATE_3',
+        'FILTERED': 'GATE_5',
+        'BLOCKED': 'GATE_7',
+        'DIAGNOSTIC': 'GATE_9',
+      };
+      const rawClassification = signal.signalClassification || 'CANDIDATE';
+      const stage = stageMap[rawClassification] || 'CANDIDATE';
+
+      Gate35SignalFunnelAnalytics.recordCandidate({
+        id,
+        symbol: signal.symbol,
+        direction: directionStr,
+        stage: stage,
+        score: signal.score || 0,
+        regime: signal.marketRegime || 'UNKNOWN',
+        strategy: signal.strategy || 'Unknown',
+        rejectionReason: signal.rejectionReason || `Signal classification: ${signal.signalClassification}`,
+        rejectionCode: signal.rejectionReason ? undefined : `CLASSIFICATION_${rawClassification}`,
+        grossRR: signal.riskRewardRatio,
+        netRR: (signal as any).netRR,
+        adverseNetRR: (signal as any).adverseNetRR,
+        estimatedWinRate: (signal as any).estimatedWinRate || signal.confidenceScore,
+        timeframeAlignmentRatio: (signal as any).timeframeAlignmentRatio,
+        strategyAgreementRatio: (signal as any).strategyAgreementRatio,
+      });
+
+      return {
+        success: false,
+        status: 'PERSISTENCE_FAILED',
+        error: `Signal classification ${signal.signalClassification} not allowed in SignalLogger.`,
+      };
+    }
 
     const record: SignalLogRecord = {
       id,
@@ -256,17 +346,63 @@ export class SignalLogger {
       isBestTrade: signal.isBestTrade || signal.rankTier === 'BEST_TRADE',
       entryHitTimestamp: signal.entryHitTimestamp ?? null,
       updatedAt: Date.now(),
+      isTradeableSignal: signal.isTradeableSignal === true,
+      signalClassification: signal.signalClassification,
     };
 
     this.logs.set(id, record);
     this.flushToDisk();
-    this.syncToFirestore(record);
 
-    logger.info(
-      `[SignalLogger] RECORDED SIGNAL LOG: ${record.symbol} [${record.direction}] | Type: ${record.marketType} | Provider: ${record.provider} | Status: ${record.status} | Regime: ${record.marketRegime} | Score: ${record.score} | Snapshot: ${record.snapshotId}`
+    const firestore = getFirestoreAdmin();
+    if (!firestore) {
+      if (serverConfig.getConfig().nodeEnv === 'production') {
+        const errStr = '[SignalLogger] FAIL CLOSED: Firestore required for signal log persistence in production mode.';
+        logger.error(errStr);
+        return {
+          success: false,
+          status: 'PERSISTENCE_FAILED',
+          record,
+          error: errStr,
+        };
+      }
+      return {
+        success: true,
+        status: 'TRADEABLE_RECORD_PERSISTED',
+        record,
+      };
+    }
+
+    const cleanRecord = Object.fromEntries(
+      Object.entries(record).filter(([_, v]) => v !== undefined)
     );
 
-    return record;
+    try {
+      await firestore
+        .collection(FIRESTORE_COLLECTION)
+        .doc(record.id)
+        .set(cleanRecord, { merge: true });
+      return {
+        success: true,
+        status: 'TRADEABLE_RECORD_PERSISTED',
+        record,
+      };
+    } catch (err) {
+      const errStr = String(err);
+      logger.error(`[SignalLogger] Firestore signal log persistence failed for ${record.id}`, { error: errStr });
+      if (serverConfig.getConfig().nodeEnv === 'production') {
+        return {
+          success: false,
+          status: 'PERSISTENCE_FAILED',
+          record,
+          error: errStr,
+        };
+      }
+      return {
+        success: true,
+        status: 'TRADEABLE_RECORD_PERSISTED',
+        record,
+      };
+    }
   }
 
   /**
@@ -349,9 +485,12 @@ export class SignalLogger {
   }
 
   /**
-   * Retrieves all dedicated Signal Log records (sorted newest first).
+   * Retrieves dedicated Signal Log records (sorted newest first).
+   * Strictly filters to explicitly tradeable signals only.
    */
-  public static async getSignalLogs(limit = 100): Promise<SignalLogRecord[]> {
+  public static async getSignalLogs(
+    limit = 100
+  ): Promise<SignalLogRecord[]> {
     await this.init();
 
     const now = Date.now();
@@ -359,19 +498,113 @@ export class SignalLogger {
       await this.syncFromFirestore();
     }
 
-    const sorted = Array.from(this.logs.values()).sort((a, b) => b.timestamp - a.timestamp);
+    const sorted = Array.from(this.logs.values())
+      .filter((r) => isTradeableLogRecord(r))
+      .sort((a, b) => b.timestamp - a.timestamp);
     return sorted.slice(0, limit);
   }
 
   /**
-   * Retrieves the most recent signal for a symbol from the signal log.
+   * Retrieves all signal log records including internal candidates for internal analytics.
    */
-  public static getLastSignalForSymbol(symbol: string): SignalLogRecord | undefined {
+  public static async getAllSignalLogs(limit = 100): Promise<SignalLogRecord[]> {
+    await this.init();
+    const tradeables = await this.getSignalLogs(limit);
+    const candidates = Gate35SignalFunnelAnalytics.getRecords(limit)
+      .filter((r) => r.stage !== 'FINAL_SIGNAL')
+      .map((r) => ({
+        id: r.id,
+        snapshotId: r.id,
+        timestamp: r.timestamp,
+        symbol: r.symbol,
+        marketType: this.detectMarketType(r.symbol),
+        provider: r.assetClass === 'Crypto' ? 'Bitget' : 'Twelve Data',
+        direction: (r.direction === 'BUY' || r.direction === 'SELL') ? r.direction : 'BUY',
+        entryPrice: 0,
+        stopLoss: 0,
+        takeProfit: 0,
+        riskRewardRatio: r.netRR || 2.0,
+        score: r.score,
+        confidenceScore: r.estimatedWinRate || 0,
+        strategy: r.strategy,
+        marketRegime: r.regime,
+        status: 'WAITING_ENTRY' as any,
+        isTradeableSignal: false,
+        signalClassification: (r.stage === 'GATE_4' ? 'WATCHING' : r.stage === 'GATE_8' ? 'QUALIFIED_CANDIDATE' : r.stage === 'GATE_3' ? 'REJECTED' : 'FILTERED') as any,
+      }));
+    const combined = [...tradeables, ...candidates]
+      .sort((a, b) => b.timestamp - a.timestamp);
+    return combined.slice(0, limit);
+  }
+
+  /**
+   * Retrieves the most recent signal for a symbol from the signal log.
+   * By default, tradeableOnly is true so tradeability/cooldown/duplicate logic
+   * only evaluates explicitly tradeable signals.
+   */
+  public static getLastSignalForSymbol(
+    symbol: string,
+    options?: { tradeableOnly?: boolean }
+  ): SignalLogRecord | undefined {
     const sym = symbol.toUpperCase();
+    const tradeableOnly = options?.tradeableOnly !== false;
     const records = Array.from(this.logs.values())
-      .filter((r) => r.symbol === sym)
+      .filter((r) => r.symbol === sym && (!tradeableOnly || isTradeableLogRecord(r)))
       .sort((a, b) => b.timestamp - a.timestamp);
     return records[0];
+  }
+
+  /**
+   * Explicitly retrieves the last tradeable signal for a symbol.
+   */
+  public static getLastTradeableSignalForSymbol(symbol: string): SignalLogRecord | undefined {
+    return this.getLastSignalForSymbol(symbol, { tradeableOnly: true });
+  }
+
+  /**
+   * Retrieves the last internal candidate (non-tradeable) signal record for internal analytics.
+   */
+  public static getLastCandidateForSymbol(symbol: string): SignalLogRecord | undefined {
+    const sym = symbol.toUpperCase();
+    const records = Gate35SignalFunnelAnalytics.getRecords(1000)
+      .filter((r) => r.symbol === sym && r.stage !== 'FINAL_SIGNAL');
+    if (records.length === 0) return undefined;
+    const r = records[0];
+    
+    return {
+      id: r.id,
+      snapshotId: r.id,
+      timestamp: r.timestamp,
+      symbol: r.symbol,
+      marketType: this.detectMarketType(r.symbol),
+      provider: r.assetClass === 'Crypto' ? 'Bitget' : 'Twelve Data',
+      direction: (r.direction === 'BUY' || r.direction === 'SELL') ? r.direction : 'BUY',
+      entryPrice: 0,
+      stopLoss: 0,
+      takeProfit: 0,
+      riskRewardRatio: r.netRR || 2.0,
+      score: r.score,
+      confidenceScore: r.estimatedWinRate || 0,
+      strategy: r.strategy,
+      marketRegime: r.regime,
+      status: 'WAITING_ENTRY' as any,
+      isTradeableSignal: false,
+      signalClassification: (r.stage === 'GATE_4' ? 'WATCHING' : r.stage === 'GATE_8' ? 'QUALIFIED_CANDIDATE' : r.stage === 'GATE_3' ? 'REJECTED' : 'FILTERED') as any,
+    };
+  }
+
+  /**
+   * Retrieves log records for a specific symbol.
+   */
+  public static getLogsForSymbol(
+    symbol: string,
+    options?: { tradeableOnly?: boolean }
+  ): SignalLogRecord[] {
+    const sym = symbol.toUpperCase();
+    const tradeableOnly = options?.tradeableOnly !== false;
+    return Array.from(this.logs.values())
+      .filter((r) => r.symbol === sym && (!tradeableOnly || isTradeableLogRecord(r)))
+      .sort((a, b) => b.timestamp - a.timestamp);
   }
 
   /**

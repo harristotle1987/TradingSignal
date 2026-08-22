@@ -61,7 +61,7 @@ export function SignalHistoryPanel({
   onTimeZoneChange,
   onSignalRefreshed,
 }: SignalHistoryPanelProps) {
-  const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'TOP_TRADE' | 'SUGGESTION' | 'NO_TRADE'>('ALL');
+  const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'TOP_TRADE' | 'SUGGESTION'>('ALL');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'list' | 'chart'>('list');
 
@@ -80,16 +80,18 @@ export function SignalHistoryPanel({
     }
   }, [toast]);
 
-  const activeCount = history.filter((item) => item.signalStatus === 'ACTIVE' || item.outcomeType === 'VALIDATED').length;
-  const topCount = history.filter((item) => item.isTopTrade || item.isBestTrade || item.outcomeType === 'TOP_TRADE' || item.outcomeType === 'BEST_TRADE').length;
-  const suggestionCount = history.filter((item) => item.isSuggestion || item.outcomeType === 'SUGGESTION').length;
-  const noTradeCount = history.filter((item) => item.direction === 'NO_TRADE' || item.outcomeType === 'NO_TRADE_OPPORTUNITY').length;
+  const activeCount = history.filter((item) => (item.isTradeableSignal === true && item.signalClassification === 'TRADEABLE') && (item.signalStatus === 'ACTIVE' || item.signalStatus === 'WAITING_ENTRY' || item.outcomeType === 'VALIDATED')).length;
+  const topCount = history.filter((item) => (item.isTradeableSignal === true && item.signalClassification === 'TRADEABLE') && (item.isTopTrade || item.isBestTrade || item.outcomeType === 'TOP_TRADE' || item.outcomeType === 'BEST_TRADE')).length;
+  const suggestionCount = history.filter((item) => (item.isTradeableSignal === true && item.signalClassification === 'TRADEABLE') && (item.isSuggestion || item.outcomeType === 'SUGGESTION')).length;
 
   const filteredHistory = history.filter((item) => {
-    if (filter === 'ACTIVE') return item.signalStatus === 'ACTIVE' || item.outcomeType === 'VALIDATED';
+    // GATE 79: Every user-facing trade signal MUST require isTradeableSignal === true and signalClassification === 'TRADEABLE'
+    if (item.isTradeableSignal !== true || item.signalClassification !== 'TRADEABLE') return false;
+    // GATE 64: NO_TRADE notifications and non-tradeable entries must NOT appear in this panel
+    if (item.direction === 'NO_TRADE' || item.outcomeType === 'NO_TRADE_OPPORTUNITY') return false;
+    if (filter === 'ACTIVE') return item.signalStatus === 'ACTIVE' || item.signalStatus === 'WAITING_ENTRY' || item.outcomeType === 'VALIDATED';
     if (filter === 'TOP_TRADE') return item.isTopTrade || item.isBestTrade || item.outcomeType === 'TOP_TRADE' || item.outcomeType === 'BEST_TRADE';
     if (filter === 'SUGGESTION') return item.isSuggestion || item.outcomeType === 'SUGGESTION';
-    if (filter === 'NO_TRADE') return item.direction === 'NO_TRADE' || item.outcomeType === 'NO_TRADE_OPPORTUNITY';
     return true;
   });
 
@@ -234,19 +236,6 @@ export function SignalHistoryPanel({
             >
               Suggestions ({suggestionCount})
             </button>
-            {noTradeCount > 0 && (
-              <button
-                type="button"
-                onClick={() => setFilter('NO_TRADE')}
-                className={`px-2 py-0.5 rounded transition cursor-pointer ${
-                  filter === 'NO_TRADE'
-                    ? 'bg-slate-800 text-slate-300 font-semibold border border-slate-700'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                No Trade ({noTradeCount})
-              </button>
-            )}
           </div>
 
           {/* Clear History Button */}
@@ -301,12 +290,13 @@ export function SignalHistoryPanel({
             const isDeleting = deletingIds.includes(item.id);
 
             // Determine custom visual statuses
-            let customStatus: 'ACTIVE' | 'EXPIRING' | 'PROCESSING' | null = null;
+            let customStatus: 'WAITING_ENTRY' | 'ACTIVE' | 'EXPIRING' | 'PROCESSING' | null = null;
             if (item.signalStatus === 'ACTIVE' || item.signalStatus === 'ENTRY_CONFIRMED' || item.signalStatus === 'CONFIRMED') {
               customStatus = 'ACTIVE';
+            } else if (item.signalStatus === 'WAITING_ENTRY') {
+              customStatus = 'WAITING_ENTRY';
             } else if (
-              item.signalStatus === 'WAITING_ENTRY' ||
-              (item.expiresAt && item.expiresAt - Date.now() > 0 && item.expiresAt - Date.now() < 30 * 60 * 1000)
+              item.expiresAt && item.expiresAt - Date.now() > 0 && item.expiresAt - Date.now() < 30 * 60 * 1000
             ) {
               customStatus = 'EXPIRING';
             } else if (
@@ -378,7 +368,12 @@ export function SignalHistoryPanel({
                       </span>
                     )}
 
-                    {customStatus === 'ACTIVE' ? (
+                    {customStatus === 'WAITING_ENTRY' ? (
+                      <span className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded border bg-blue-950/90 text-blue-300 border-blue-500/80 text-[10px] sm:text-xs font-mono font-bold shadow-[0_0_8px_rgba(59,130,246,0.15)]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                        WAITING ENTRY
+                      </span>
+                    ) : customStatus === 'ACTIVE' ? (
                       <span className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded border bg-emerald-950 text-emerald-300 border-emerald-500 text-[10px] sm:text-xs font-mono font-bold shadow-[0_0_8px_rgba(16,185,129,0.1)]">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                         ACTIVE
@@ -398,11 +393,13 @@ export function SignalHistoryPanel({
                         className={`text-[10px] sm:text-xs font-mono font-bold px-2 py-0.5 rounded border ${
                           item.signalStatus === 'ACTIVE'
                             ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
-                            : item.signalStatus === 'TP2_REACHED'
+                            : item.signalStatus === 'WAITING_ENTRY'
+                            ? 'bg-blue-950 text-blue-300 border-blue-500'
+                            : item.signalStatus === 'TP2_REACHED' || item.signalStatus === 'TP2_HIT'
                             ? 'bg-emerald-950 text-emerald-300 border-emerald-600'
-                            : item.signalStatus === 'TP1_REACHED'
+                            : item.signalStatus === 'TP1_REACHED' || item.signalStatus === 'TP1_HIT'
                             ? 'bg-teal-950 text-teal-300 border-teal-600'
-                            : item.signalStatus === 'STOPPED'
+                            : item.signalStatus === 'STOPPED' || item.signalStatus === 'SL_HIT' || item.signalStatus === 'STOPPED_OUT'
                             ? 'bg-rose-950 text-rose-300 border-rose-500'
                             : item.signalStatus === 'AMBIGUOUS'
                             ? 'bg-amber-950 text-amber-300 border-amber-500'
@@ -431,10 +428,6 @@ export function SignalHistoryPanel({
                       <span className="text-[10px] sm:text-xs font-mono font-bold bg-amber-950/90 text-amber-300 border border-amber-500/80 px-2 py-0.5 rounded">
                         {formatRankTier('TOP_TRADE', true)}
                       </span>
-                    ) : item.outcomeType === 'NO_TRADE_OPPORTUNITY' ? (
-                      <span className="text-[10px] sm:text-xs font-mono bg-slate-900 text-slate-400 border border-slate-800 px-2 py-0.5 rounded">
-                        {formatLabel('NO_TRADE_OPPORTUNITY')}
-                      </span>
                     ) : null}
                   </div>
 
@@ -442,7 +435,7 @@ export function SignalHistoryPanel({
                   <div className="flex flex-wrap items-center gap-1.5 text-[10px] sm:text-xs font-mono shrink-0">
                     {item.confidenceScore !== undefined && (
                       <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                        Confidence: <strong className="text-sky-400 font-bold">{item.confidenceScore}/100</strong>
+                        Signal Score: <strong className="text-sky-400 font-bold">{item.confidenceScore}/100</strong>
                       </span>
                     )}
 
@@ -450,9 +443,16 @@ export function SignalHistoryPanel({
                       Target Quality: <strong className="text-emerald-400 font-bold">{item.targetQualityScore !== undefined ? `${item.targetQualityScore}/100` : `${item.score || 75}/100`}</strong>
                     </span>
 
-                    {item.estimatedWinRate !== undefined && (
+                    {(item.estimatedWinRate !== undefined || item.modelEstimatedWinRate !== undefined) && (
                       <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                        Win: <strong className="text-emerald-400 font-bold">{item.estimatedWinRate.toFixed(1)}%</strong>
+                        Model Est. Win Rate: <strong className="text-emerald-400 font-bold">{(item.estimatedWinRate ?? item.modelEstimatedWinRate)?.toFixed(1)}%</strong>
+                      </span>
+                    )}
+
+                    {item.isEmpiricallyCalibrated === true && item.empiricalProbability != null && (
+                      <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-emerald-800/80">
+                        Empirical Win Rate: <strong className="text-emerald-300 font-bold">{item.empiricalProbability.toFixed(1)}%</strong>
+                        <span className="text-[9px] text-slate-400 ml-1">(N={item.probabilitySampleSize || '--'}{item.probabilityConfidenceInterval ? `, 95% CI: ${item.probabilityConfidenceInterval.lower.toFixed(1)}%–${item.probabilityConfidenceInterval.upper.toFixed(1)}%` : ''})</span>
                       </span>
                     )}
 

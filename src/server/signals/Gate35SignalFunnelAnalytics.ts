@@ -85,7 +85,12 @@ export type RejectionCategory =
   | 'ENTRY_QUALITY'
   | 'CORRELATION'
   | 'DAILY_CAP'
-  | 'OTHER';
+  | 'OTHER'
+  | 'SCORE'
+  | 'PROBABILITY'
+  | 'STRATEGY_AGREEMENT'
+  | 'TIMEFRAME_ALIGNMENT'
+  | 'NEWS';
 
 export interface CandidateFunnelRecord {
   id: string;
@@ -100,6 +105,29 @@ export interface CandidateFunnelRecord {
   rejectionReason: string | null;
   rejectionCategory: RejectionCategory | null;
   passedGates?: string[];
+
+  // Gate 55 Complete Telemetry Fields
+  assetClass?: string;
+  initialScore?: number;
+  watchingThreshold?: number;
+  qualifiedCandidateThreshold?: number;
+  signalThreshold?: number;
+  strategyAgreementRatio?: number;
+  timeframeAlignmentRatio?: number;
+  grossRR?: number;
+  netRR?: number;
+  adverseNetRR?: number;
+  estimatedWinRate?: number;
+  empiricalProbability?: number | null;
+  probabilitySampleSize?: number;
+  aiMode?: string;
+  aiResult?: string;
+  dataFreshness?: string;
+  entryQuality?: string;
+  newsStatus?: string;
+  correlationCluster?: string;
+  finalDecision?: string;
+  rejectionStage?: string;
 }
 
 export interface RejectionReasonStat {
@@ -136,6 +164,24 @@ export interface FunnelAnalyticsReport {
   };
   topRejectionReasons: RejectionReasonStat[];
   recordsCount: number;
+
+  // New Gate 55 metrics
+  funnelMetrics: {
+    candidatesScanned: number;
+    watching: number;
+    qualified: number;
+    signals: number;
+    rejectedByScore: number;
+    rejectedByRR: number;
+    rejectedByProbability: number;
+    rejectedByStrategyAgreement: number;
+    rejectedByTimeframeAlignment: number;
+    rejectedByData: number;
+    rejectedByEntryQuality: number;
+    rejectedByNews: number;
+    rejectedByCorrelation: number;
+    rejectedByDailyCap: number;
+  };
 }
 
 const LOCAL_FUNNEL_PATH = path.join(process.cwd(), 'signal_funnel_analytics.json');
@@ -177,7 +223,7 @@ export class Gate35SignalFunnelAnalytics {
   }
 
   /**
-   * Categorizes a rejection code or reason into one of the 7 core analytics buckets
+   * Categorizes a rejection code or reason into one of the core analytics buckets
    */
   public static categorizeRejection(code?: string | null, reason?: string | null): RejectionCategory {
     const text = `${code || ''} ${reason || ''}`.toUpperCase();
@@ -203,15 +249,92 @@ export class Gate35SignalFunnelAnalytics {
     }
 
     if (
+      text.includes('NEWS') ||
+      text.includes('ECONOMIC_EVENT') ||
+      text.includes('BLACKOUT') ||
+      text.includes('MARKET_CONTEXT_BLOCKED') ||
+      text.includes('GATE_7') ||
+      text.includes('NEWS_SENTIMENT')
+    ) {
+      return 'NEWS';
+    }
+
+    if (
       text.includes('DATA_STALE') ||
       text.includes('INVALID_DATA') ||
       text.includes('PRICE_MISMATCH') ||
       text.includes('CANDLE') ||
       text.includes('PROVIDER_DISAGREEMENT') ||
       text.includes('STALE_EXECUTABLE_QUOTE') ||
-      text.includes('IMPOSSIBLE_PRICE')
+      text.includes('IMPOSSIBLE_PRICE') ||
+      text.includes('STALE') ||
+      text.includes('INSUFFICIENT_DATA')
     ) {
       return 'DATA';
+    }
+
+    if (
+      text.includes('ENTRY') ||
+      text.includes('INVALID_SL') ||
+      text.includes('UNEXECUTABLE') ||
+      text.includes('CONFIRMATION_DIVERSITY') ||
+      text.includes('LOCATION') ||
+      text.includes('INVALID_SL_TP') ||
+      text.includes('SL_TP')
+    ) {
+      return 'ENTRY_QUALITY';
+    }
+
+    if (
+      text.includes('RR_BELOW') ||
+      text.includes('NET_RR') ||
+      text.includes('EXECUTION_COST') ||
+      text.includes('SAFETY_BUFFER') ||
+      text.includes('ADVERSE_NET_RR') ||
+      text.includes('EXECUTION_FRICTION') ||
+      text.includes('FRICTION') ||
+      text.includes('R:R')
+    ) {
+      return 'RR';
+    }
+
+    if (
+      text.includes('TIMEFRAME_ALIGNMENT') ||
+      text.includes('INSUFFICIENT_TIMEFRAME_ALIGNMENT') ||
+      text.includes('TIMEFRAME')
+    ) {
+      return 'TIMEFRAME_ALIGNMENT';
+    }
+
+    if (
+      text.includes('STRATEGY_AGREEMENT') ||
+      text.includes('INSUFFICIENT_STRATEGY_AGREEMENT') ||
+      text.includes('STRATEGY')
+    ) {
+      return 'STRATEGY_AGREEMENT';
+    }
+
+    if (
+      text.includes('WIN_RATE_BELOW') ||
+      text.includes('WIN_RATE') ||
+      text.includes('PROBABILITY') ||
+      text.includes('EXPECTANCY') ||
+      text.includes('EXPECTED_VALUE') ||
+      text.includes('NEGATIVE_EXPECTANCY')
+    ) {
+      return 'PROBABILITY';
+    }
+
+    if (
+      text.includes('THRESHOLD') ||
+      text.includes('SCORE_BELOW') ||
+      text.includes('COMPOSITE_SCORE') ||
+      text.includes('SCORE') ||
+      text.includes('INSUFFICIENT_CONFLUENCE') ||
+      text.includes('QUALITATIVE') ||
+      text.includes('SPECTRAL')
+    ) {
+      return 'SCORE';
     }
 
     if (
@@ -223,42 +346,6 @@ export class Gate35SignalFunnelAnalytics {
       text.includes('EXPANSION_FAILED')
     ) {
       return 'VOLATILITY';
-    }
-
-    if (
-      text.includes('RR_BELOW') ||
-      text.includes('NET_RR') ||
-      text.includes('EXECUTION_COST') ||
-      text.includes('SAFETY_BUFFER') ||
-      text.includes('ADVERSE_NET_RR') ||
-      text.includes('EXECUTION_FRICTION') ||
-      text.includes('FRICTION')
-    ) {
-      return 'RR';
-    }
-
-    if (
-      text.includes('ENTRY') ||
-      text.includes('INVALID_SL') ||
-      text.includes('UNEXECUTABLE') ||
-      text.includes('CONFIRMATION_DIVERSITY') ||
-      text.includes('LOCATION') ||
-      text.includes('TIMEFRAME')
-    ) {
-      return 'ENTRY_QUALITY';
-    }
-
-    if (
-      text.includes('THRESHOLD') ||
-      text.includes('SCORE_BELOW') ||
-      text.includes('WIN_RATE') ||
-      text.includes('INSUFFICIENT_CONFLUENCE') ||
-      text.includes('QUALITATIVE') ||
-      text.includes('EXPECTANCY') ||
-      text.includes('PROBABILITY') ||
-      text.includes('SPECTRAL')
-    ) {
-      return 'THRESHOLD';
     }
 
     return 'OTHER';
@@ -277,6 +364,30 @@ export class Gate35SignalFunnelAnalytics {
     rejectionCode?: string | null;
     rejectionReason?: string | null;
     passedGates?: string[];
+    id?: string;
+
+    // Gate 55 Complete Telemetry Fields
+    assetClass?: string;
+    initialScore?: number;
+    watchingThreshold?: number;
+    qualifiedCandidateThreshold?: number;
+    signalThreshold?: number;
+    strategyAgreementRatio?: number;
+    timeframeAlignmentRatio?: number;
+    grossRR?: number;
+    netRR?: number;
+    adverseNetRR?: number;
+    estimatedWinRate?: number;
+    empiricalProbability?: number | null;
+    probabilitySampleSize?: number;
+    aiMode?: string;
+    aiResult?: string;
+    dataFreshness?: string;
+    entryQuality?: string;
+    newsStatus?: string;
+    correlationCluster?: string;
+    finalDecision?: string;
+    rejectionStage?: string;
   }): CandidateFunnelRecord {
     this.init();
 
@@ -291,7 +402,59 @@ export class Gate35SignalFunnelAnalytics {
     const rejReason = params.rejectionReason || null;
     const rejCategory = rejCode || rejReason ? this.categorizeRejection(rejCode, rejReason) : null;
 
-    const id = `funnel_${now}_${symbolClean}_${Math.random().toString(36).substring(2, 7)}`;
+    // Find if we already have an active candidate record for this symbol within the last 5 minutes (same scan cycle)
+    let existingRecord: CandidateFunnelRecord | undefined = undefined;
+    const fiveMinutesAgo = now - 5 * 60 * 1000;
+    
+    for (const r of this.records.values()) {
+      if (r.symbol === symbolClean && r.timestamp >= fiveMinutesAgo && r.stage !== 'FINAL_SIGNAL') {
+        existingRecord = r;
+        break;
+      }
+    }
+
+    if (existingRecord) {
+      // Merge/update the properties
+      if (params.direction) existingRecord.direction = params.direction;
+      existingRecord.stage = params.stage;
+      if (params.score !== undefined) existingRecord.score = params.score;
+      if (params.regime) existingRecord.regime = params.regime;
+      if (params.strategy) existingRecord.strategy = params.strategy;
+      if (rejCode) existingRecord.rejectionCode = rejCode;
+      if (rejReason) {
+        existingRecord.rejectionReason = rejReason;
+        existingRecord.rejectionCategory = rejCategory;
+      }
+      if (params.passedGates) existingRecord.passedGates = params.passedGates;
+
+      // Merge Gate 55 telemetry
+      if (params.assetClass) existingRecord.assetClass = params.assetClass;
+      if (params.initialScore !== undefined) existingRecord.initialScore = params.initialScore;
+      if (params.watchingThreshold !== undefined) existingRecord.watchingThreshold = params.watchingThreshold;
+      if (params.qualifiedCandidateThreshold !== undefined) existingRecord.qualifiedCandidateThreshold = params.qualifiedCandidateThreshold;
+      if (params.signalThreshold !== undefined) existingRecord.signalThreshold = params.signalThreshold;
+      if (params.strategyAgreementRatio !== undefined) existingRecord.strategyAgreementRatio = params.strategyAgreementRatio;
+      if (params.timeframeAlignmentRatio !== undefined) existingRecord.timeframeAlignmentRatio = params.timeframeAlignmentRatio;
+      if (params.grossRR !== undefined) existingRecord.grossRR = params.grossRR;
+      if (params.netRR !== undefined) existingRecord.netRR = params.netRR;
+      if (params.adverseNetRR !== undefined) existingRecord.adverseNetRR = params.adverseNetRR;
+      if (params.estimatedWinRate !== undefined) existingRecord.estimatedWinRate = params.estimatedWinRate;
+      if (params.empiricalProbability !== undefined) existingRecord.empiricalProbability = params.empiricalProbability;
+      if (params.probabilitySampleSize !== undefined) existingRecord.probabilitySampleSize = params.probabilitySampleSize;
+      if (params.aiMode) existingRecord.aiMode = params.aiMode;
+      if (params.aiResult) existingRecord.aiResult = params.aiResult;
+      if (params.dataFreshness) existingRecord.dataFreshness = params.dataFreshness;
+      if (params.entryQuality) existingRecord.entryQuality = params.entryQuality;
+      if (params.newsStatus) existingRecord.newsStatus = params.newsStatus;
+      if (params.correlationCluster) existingRecord.correlationCluster = params.correlationCluster;
+      if (params.finalDecision) existingRecord.finalDecision = params.finalDecision;
+      if (params.rejectionStage) existingRecord.rejectionStage = params.rejectionStage;
+
+      this.persistLocal();
+      return existingRecord;
+    }
+
+    const id = params.id || `funnel_${now}_${symbolClean}_${Math.random().toString(36).substring(2, 7)}`;
 
     const record: CandidateFunnelRecord = {
       id,
@@ -306,6 +469,29 @@ export class Gate35SignalFunnelAnalytics {
       rejectionReason: rejReason,
       rejectionCategory: rejCategory,
       passedGates: params.passedGates,
+
+      // Gate 55 Complete Telemetry Fields
+      assetClass: params.assetClass,
+      initialScore: params.initialScore !== undefined ? params.initialScore : score,
+      watchingThreshold: params.watchingThreshold,
+      qualifiedCandidateThreshold: params.qualifiedCandidateThreshold,
+      signalThreshold: params.signalThreshold,
+      strategyAgreementRatio: params.strategyAgreementRatio,
+      timeframeAlignmentRatio: params.timeframeAlignmentRatio,
+      grossRR: params.grossRR,
+      netRR: params.netRR,
+      adverseNetRR: params.adverseNetRR,
+      estimatedWinRate: params.estimatedWinRate,
+      empiricalProbability: params.empiricalProbability,
+      probabilitySampleSize: params.probabilitySampleSize,
+      aiMode: params.aiMode,
+      aiResult: params.aiResult,
+      dataFreshness: params.dataFreshness,
+      entryQuality: params.entryQuality,
+      newsStatus: params.newsStatus,
+      correlationCluster: params.correlationCluster,
+      finalDecision: params.finalDecision,
+      rejectionStage: params.rejectionStage || params.stage,
     };
 
     this.records.set(id, record);
@@ -401,7 +587,7 @@ export class Gate35SignalFunnelAnalytics {
       };
     });
 
-    // Category breakdown
+    // Category breakdown (legacy counts)
     const categoryBreakdown = {
       signalsLostByThreshold: 0,
       signalsLostByRR: 0,
@@ -413,12 +599,31 @@ export class Gate35SignalFunnelAnalytics {
       signalsLostByOther: 0,
     };
 
+    // Gate 55 Complete Telemetry aggregation metrics
+    const funnelMetrics = {
+      candidatesScanned: filteredRecords.length,
+      watching: 0,
+      qualified: 0,
+      signals: 0,
+      rejectedByScore: 0,
+      rejectedByRR: 0,
+      rejectedByProbability: 0,
+      rejectedByStrategyAgreement: 0,
+      rejectedByTimeframeAlignment: 0,
+      rejectedByData: 0,
+      rejectedByEntryQuality: 0,
+      rejectedByNews: 0,
+      rejectedByCorrelation: 0,
+      rejectedByDailyCap: 0,
+    };
+
     const rejectionCodeMap: Map<string, { count: number; category: RejectionCategory; description: string }> = new Map();
 
     for (const r of filteredRecords) {
       if (r.rejectionCategory) {
         switch (r.rejectionCategory) {
           case 'THRESHOLD':
+          case 'SCORE':
             categoryBreakdown.signalsLostByThreshold++;
             break;
           case 'RR':
@@ -442,6 +647,43 @@ export class Gate35SignalFunnelAnalytics {
           default:
             categoryBreakdown.signalsLostByOther++;
             break;
+        }
+
+        // Increment specific Gate 55 metrics
+        const category = r.rejectionCategory;
+        if (category === 'SCORE' || category === 'THRESHOLD' || category === 'VOLATILITY') {
+          funnelMetrics.rejectedByScore++;
+        } else if (category === 'RR') {
+          funnelMetrics.rejectedByRR++;
+        } else if (category === 'PROBABILITY') {
+          funnelMetrics.rejectedByProbability++;
+        } else if (category === 'STRATEGY_AGREEMENT') {
+          funnelMetrics.rejectedByStrategyAgreement++;
+        } else if (category === 'TIMEFRAME_ALIGNMENT') {
+          funnelMetrics.rejectedByTimeframeAlignment++;
+        } else if (category === 'DATA') {
+          funnelMetrics.rejectedByData++;
+        } else if (category === 'ENTRY_QUALITY') {
+          funnelMetrics.rejectedByEntryQuality++;
+        } else if (category === 'NEWS') {
+          funnelMetrics.rejectedByNews++;
+        } else if (category === 'CORRELATION') {
+          funnelMetrics.rejectedByCorrelation++;
+        } else if (category === 'DAILY_CAP') {
+          funnelMetrics.rejectedByDailyCap++;
+        }
+      } else {
+        // Not rejected -> classify into WATCHING, QUALIFIED, SIGNALS
+        if (r.stage === 'FINAL_SIGNAL' || r.finalDecision === 'SIGNALS') {
+          funnelMetrics.signals++;
+        } else if (r.finalDecision === 'WATCHING' || (r.score >= (r.watchingThreshold || 70) && r.score < (r.qualifiedCandidateThreshold || 75))) {
+          funnelMetrics.watching++;
+        } else if (r.finalDecision === 'QUALIFIED' || (r.score >= (r.qualifiedCandidateThreshold || 75) && r.score < (r.signalThreshold || 78))) {
+          funnelMetrics.qualified++;
+        } else if (r.score >= (r.signalThreshold || 78)) {
+          funnelMetrics.signals++;
+        } else {
+          funnelMetrics.watching++; // fallback to watching
         }
       }
 
@@ -484,6 +726,7 @@ export class Gate35SignalFunnelAnalytics {
       categoryBreakdown,
       topRejectionReasons,
       recordsCount: filteredRecords.length,
+      funnelMetrics,
     };
   }
 

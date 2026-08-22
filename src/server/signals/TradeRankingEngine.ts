@@ -2,11 +2,10 @@
  * Opportunity-Ranking & Trade Selection Engine (Final)
  *
  * Evaluates all validated trade opportunities across Crypto, Forex, and Stocks.
- * Enforces the final scoring rubric:
- * 90–100: A+ (BEST TRADE)
- * 82–89: A (HIGH QUALITY)
- * 75–81: B (WATCHLIST OR WAIT)
- * Below 75: REJECT
+ * Ranks qualified candidates and assigns rank tiers based on ranking order:
+ * Rank 1: BEST_TRADE (Top Opportunity)
+ * Rank 2: SECOND_BEST
+ * Rank 3+: SUGGESTIONS
  */
 
 import { TradingSignal, RankTier, NormalizedCandle } from '../../types/index.js';
@@ -20,7 +19,7 @@ export interface ValidatedCandidate {
   signal: TradingSignal;
   scoring: ScoringResult;
   validation: ValidationResult;
-  aiConfidence: number;
+  aiConfidence?: number;
   timeframesAligned: number;
   candles?: NormalizedCandle[];
 }
@@ -43,6 +42,78 @@ export class TradeRankingEngine {
   };
 
   /**
+   * Calculates the centralized final required score for tradeability.
+   * finalRequiredScore = Math.max(thresholds.signalThreshold, regimeAdaptiveThreshold)
+   * Gate 27 can make the system MORE selective, but NEVER less selective than signalThreshold.
+   */
+  public static calculateFinalRequiredScore(params: {
+    symbol: string;
+    actualScore: number;
+    regime?: string;
+    strategy?: string;
+    assetClass?: string;
+    signalThreshold?: number;
+  }): {
+    isExecutable: boolean;
+    finalRequiredScore: number;
+    regimeAdaptiveThreshold: number;
+    signalThreshold: number;
+    actualScore: number;
+    passed: boolean;
+    marginAboveFinalThreshold: number;
+    rejectionReason?: string;
+  } {
+    const thresholds = serverConfig.getConfig().thresholds;
+    const globalSignalFloor = params.signalThreshold ?? thresholds.signalThreshold;
+
+    const adaptiveRes = Gate27RegimeThresholds.resolveThreshold({
+      symbol: params.symbol,
+      actualScore: params.actualScore,
+      regime: params.regime,
+      strategy: params.strategy,
+      assetClass: params.assetClass,
+    });
+
+    if (!adaptiveRes.isExecutable) {
+      return {
+        isExecutable: false,
+        finalRequiredScore: 999,
+        regimeAdaptiveThreshold: 999,
+        signalThreshold: globalSignalFloor,
+        actualScore: params.actualScore,
+        passed: false,
+        marginAboveFinalThreshold: params.actualScore - 999,
+        rejectionReason: `REJECTED: REGIME_UNTRADEABLE. Market regime '${params.regime || 'UNKNOWN'}' is classified as UNKNOWN / NO SIGNAL under Gate 27 policy.`,
+      };
+    }
+
+    const regimeAdaptiveThreshold = adaptiveRes.resolvedThreshold;
+    const finalRequiredScore = Math.max(globalSignalFloor, regimeAdaptiveThreshold);
+    const passed = params.actualScore >= finalRequiredScore;
+    const marginAboveFinalThreshold = Math.round((params.actualScore - finalRequiredScore) * 10) / 10;
+
+    let rejectionReason: string | undefined;
+    if (!passed) {
+      if (params.actualScore < globalSignalFloor && globalSignalFloor >= regimeAdaptiveThreshold) {
+        rejectionReason = `REJECTED: SCORE_BELOW_GLOBAL_THRESHOLD. Quality score (${params.actualScore}/100) below global signal floor (${globalSignalFloor}) (regime adaptive threshold: ${regimeAdaptiveThreshold}).`;
+      } else {
+        rejectionReason = `REJECTED: SCORE_BELOW_REGIME_THRESHOLD. Quality score (${params.actualScore}/100) below final required score (${finalRequiredScore}) for regime '${adaptiveRes.normalizedRegime}' & strategy '${params.strategy}' (margin: ${marginAboveFinalThreshold >= 0 ? '+' : ''}${marginAboveFinalThreshold}).`;
+      }
+    }
+
+    return {
+      isExecutable: true,
+      finalRequiredScore,
+      regimeAdaptiveThreshold,
+      signalThreshold: globalSignalFloor,
+      actualScore: params.actualScore,
+      passed,
+      marginAboveFinalThreshold,
+      rejectionReason,
+    };
+  }
+
+  /**
    * Evaluates, ranks, and filters validated candidates based on the centralized scoring policy.
    */
   static rankOpportunities(candidates: ValidatedCandidate[]): RankingResult {
@@ -61,73 +132,80 @@ export class TradeRankingEngine {
     for (const cand of scoredCandidates) {
       const score = Math.round(cand.compositeScore);
       
-      // Resolve regime-adaptive threshold
-      const adaptiveThreshold = Gate27RegimeThresholds.resolveThreshold({
+      // GATE 65: Resolve centralized final tradeability evaluation
+      const tradeability = this.calculateFinalRequiredScore({
         symbol: cand.signal.symbol,
         actualScore: score,
         regime: cand.signal.marketRegime || cand.scoring.marketRegime,
         strategy: cand.signal.strategy,
         assetClass: cand.signal.assetClass,
+        signalThreshold: thresholds.signalThreshold,
       });
 
-      if (!adaptiveThreshold.isExecutable) {
+      if (!tradeability.isExecutable || !tradeability.passed) {
         rejectedCandidates.push({
           symbol: cand.signal.symbol,
-          reason: `REJECTED: REGIME_UNTRADEABLE. Market regime '${cand.signal.marketRegime || 'UNKNOWN'}' is classified as UNKNOWN / NO SIGNAL under Gate 27 policy.`,
-        });
-        continue;
-      }
-
-      const effectiveThreshold = adaptiveThreshold.resolvedThreshold;
-      if (score < effectiveThreshold) {
-        rejectedCandidates.push({
-          symbol: cand.signal.symbol,
-          reason: `REJECTED: SCORE_BELOW_REGIME_THRESHOLD. Quality score (${score}/100) below regime-adaptive threshold (${effectiveThreshold}) for regime '${adaptiveThreshold.normalizedRegime}' & strategy '${cand.signal.strategy}' (margin: ${adaptiveThreshold.marginAboveThreshold >= 0 ? '+' : ''}${adaptiveThreshold.marginAboveThreshold}).`,
+          reason: tradeability.rejectionReason || `REJECTED: SCORE_BELOW_FINAL_THRESHOLD. Score ${score} < ${tradeability.finalRequiredScore}.`,
         });
         continue;
       }
       
-      // Determine Rank Tier based on rubric
-      let rankTier: RankTier = 'SUGGESTION';
-      if (score >= 90) rankTier = 'BEST_TRADE'; // A+
-      else if (score >= 82) rankTier = 'SECOND_BEST'; // A
-      else rankTier = 'SUGGESTION'; // B (effectiveThreshold - 81)
-
-      validCandidates.push({ ...cand, compositeScore: score, rankTier });
+      validCandidates.push({ ...cand, compositeScore: score, rankTier: 'SUGGESTION' });
     }
 
-    // Sort by composite score (highest first)
+    // Sort by composite score descending (highest first)
     validCandidates.sort((a, b) => b.compositeScore - a.compositeScore);
     
+    // Assign rank tiers based on rank order (Rank 1: BEST_TRADE, Rank 2: SECOND_BEST, Rank 3+: SUGGESTION)
+    validCandidates.forEach((cand, idx) => {
+      if (idx === 0) {
+        cand.rankTier = 'BEST_TRADE';
+        cand.signal.rankTier = 'BEST_TRADE';
+        cand.signal.isBestTrade = true;
+        cand.signal.isSecondBest = false;
+        cand.signal.isTopTrade = true;
+      } else if (idx === 1) {
+        cand.rankTier = 'SECOND_BEST';
+        cand.signal.rankTier = 'SECOND_BEST';
+        cand.signal.isBestTrade = false;
+        cand.signal.isSecondBest = true;
+        cand.signal.isTopTrade = true;
+      } else {
+        cand.rankTier = 'SUGGESTION';
+        cand.signal.rankTier = 'SUGGESTION';
+        cand.signal.isBestTrade = false;
+        cand.signal.isSecondBest = false;
+        cand.signal.isTopTrade = false;
+      }
+    });
+
     // 3. Organization Logic (assigning top trades/suggestions)
     return this.organizeRankedCandidates(validCandidates, rejectedCandidates);
   }
 
   private static organizeRankedCandidates(
-      validCandidates: Array<ValidatedCandidate & { compositeScore: number; rankTier: RankTier }>,
-      rejectedCandidates: Array<{ symbol: string; reason: string }>
+    validCandidates: Array<ValidatedCandidate & { compositeScore: number; rankTier: RankTier }>,
+    rejectedCandidates: Array<{ symbol: string; reason: string }>
   ): RankingResult {
-      // ... (Re-use the logic for assigning best trade/second best/suggestions from before, ensuring they respect the rankTier)
-      // For brevity here, I'm assuming standard organizing logic that respects the passed rankTier
-      
-      // Placeholder for full logic
-      const topTrades = validCandidates.slice(0, 2).map(c => c.signal);
-      const suggestions = validCandidates.slice(2, 5).map(c => c.signal);
-      
-      return {
-          bestTrade: topTrades[0],
-          secondBest: topTrades[1],
-          suggestions,
-          topTrades,
-          allRanked: [...topTrades, ...suggestions],
-          rejectedCandidates
-      };
+    const topTrades = validCandidates.slice(0, 2).map((c) => c.signal);
+    const suggestions = validCandidates.slice(2, 5).map((c) => c.signal);
+    
+    return {
+      bestTrade: topTrades[0],
+      secondBest: topTrades[1],
+      suggestions,
+      topTrades,
+      allRanked: [...topTrades, ...suggestions],
+      rejectedCandidates,
+    };
   }
 
   private static computeCompositeScore(candidate: ValidatedCandidate): number {
     const { scoring, aiConfidence, signal } = candidate;
     const baseScore = scoring.factors?.totalScore || scoring.score;
-    const aiAdjustment = ((aiConfidence - 70) / 30) * 3;
+    const aiAdjustment = (typeof aiConfidence === 'number' && !isNaN(aiConfidence))
+      ? ((aiConfidence - 70) / 30) * 3
+      : 0;
     const rsScore = signal.relativeStrengthScore ?? 50;
     const rsAdjustment = ((rsScore - 50) / 50) * 2; // Subtle ±2 confidence modifier based on universe leadership
     const corrPenalty = signal.correlationPenalty ?? 0;

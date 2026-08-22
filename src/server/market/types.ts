@@ -45,6 +45,41 @@ export interface ProviderHealth {
   errorMessage?: string;
 }
 
+export interface ProviderHealthDetail {
+  providerConfigured: boolean;
+  providerReachable: boolean;
+  lastSuccessfulQuote: number | null;
+  quoteAge: number | null;
+  dataFreshness: boolean;
+  status: 'CONNECTED' | 'DEGRADED' | 'UNAVAILABLE' | 'UNCONFIGURED';
+  errorMessage?: string;
+}
+
+export interface TruthfulMarketHealth {
+  status: 'OPERATIONAL' | 'DEGRADED' | 'UNAVAILABLE';
+  marketDataConnected: boolean;
+  marketFeedsActive: boolean;
+  providerConfigured: boolean;
+  providerReachable: boolean;
+  lastSuccessfulQuote: number | null;
+  quoteAge: number | null;
+  dataFreshness: boolean;
+  scannerReady: boolean;
+  signalsEnabled: boolean;
+  productionPersistenceReady: boolean;
+  providers: {
+    bitget: ProviderHealthDetail;
+    twelvedata: ProviderHealthDetail;
+    finnhub: ProviderHealthDetail;
+    exchangerate: ProviderHealthDetail;
+  };
+  assetClasses: {
+    crypto: { ready: boolean; provider: string; quoteAge: number | null };
+    forex: { ready: boolean; provider: string; fallbackActive: boolean; quoteAge: number | null };
+    stock: { ready: boolean; provider: string; quoteAge: number | null };
+  };
+}
+
 export interface MarketStatusResponse {
   timestamp: string;
   gate: string;

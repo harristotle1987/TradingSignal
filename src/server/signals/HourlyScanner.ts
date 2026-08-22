@@ -4,9 +4,9 @@
  * Core Principles:
  * 1. Hourly background execution across Crypto, Forex, and Stocks.
  * 2. Strict Scarcity & Quality Hurdle:
- *    - Score >= 75
- *    - Estimated Win Rate > 30%
- *    - Minimum 1:2 (2.0:1) Risk/Reward ratio
+ *    - Score >= signalThreshold (configured)
+ *    - Estimated Win Rate > minimumWinProbability
+ *    - Minimum Risk/Reward ratio
  *    - Positive mathematical expectancy
  *    - Sufficient ATR & price distance
  *    - Valid live provider price (NO stale/synthetic data)
@@ -14,8 +14,9 @@
  *    - Acceptable spread / execution slippage friction
  *    - No major contradictory news
  * 3. Strict Ranking & Notification Tiers:
- *    - 85+ = BEST TRADE
- *    - 75–84 = HIGH QUALITY
+ *    - Rank 1: BEST TRADE (Highest Ranked Opportunity)
+ *    - Rank 2: SECOND BEST
+ *    - Rank 3+: SUGGESTIONS
  * 4. Duplicate & Material Improvement Filter:
  *    - Suppresses duplicate notifications for same symbol & direction unless
  *      the setup materially improves (Score >= +5, RR >= +0.5, or better entry).
@@ -30,6 +31,8 @@
 
 import { signalEngine } from './SignalEngine.js';
 import { TradeRankingEngine } from './TradeRankingEngine.js';
+import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
+import { Gate17CorrelationExposure } from './Gate17CorrelationExposure.js';
 import { SignalLifecycleManager } from './SignalLifecycleManager.js';
 import { SignalLogger } from './SignalLogger.js';
 import { CooldownManager } from './CooldownManager.js';
@@ -48,7 +51,7 @@ import {
 import { PushNotificationService } from '../notifications/PushNotificationService.js';
 import { logger } from '../logger.js';
 import { serverConfig } from '../config.js';
-import { TradingSignal, SignalDirection } from '../../types/index.js';
+import { TradingSignal, SignalDirection, isActionableSignal } from '../../types/index.js';
 
 export interface ScannerSettings {
   enabled: boolean;
@@ -61,7 +64,7 @@ export interface ScannerSettings {
 
 export interface ManualScanResult {
   success: boolean;
-  status: 'COMPLETED' | 'SCAN_ALREADY_RUNNING' | 'SKIPPED_CAP_REACHED' | 'SKIPPED_NOT_DUE' | 'ERROR';
+  status: 'COMPLETED' | 'SCAN_ALREADY_RUNNING' | 'SKIPPED_CAP_REACHED' | 'SKIPPED_NOT_DUE' | 'PERSISTENCE_UNAVAILABLE_DEGRADED' | 'ERROR';
   message: string;
   timestamp: number;
   lastScanTime: number;
@@ -231,6 +234,26 @@ export class HourlyScannerService {
    * Main Intelligent Multi-Asset Scan & Signal Selection Pipeline.
    */
   private async executeIntelligentScan(isExternal = false): Promise<ManualScanResult> {
+    if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
+      logger.error('[Hourly Scanner] AUTOMATED SCANNER DISPATCH DISABLED: Production persistence is unavailable (FIREBASE_SERVICE_ACCOUNT required).');
+      const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
+      return {
+        success: false,
+        status: 'PERSISTENCE_UNAVAILABLE_DEGRADED',
+        message: 'REJECTED: PRODUCTION_PERSISTENCE_UNAVAILABLE. Firebase Service Account required for automated scanner dispatch in production.',
+        timestamp: Date.now(),
+        lastScanTime: capState.lastScanTime,
+        candidatesEvaluated: 0,
+        acceptedSignalsCount: 0,
+        acceptedSignals: [],
+        signalsFound: 0,
+        qualifiedSetups: [],
+        rejectedCount: 0,
+        rejectionReasons: ['REJECTED: PRODUCTION_PERSISTENCE_UNAVAILABLE. FIREBASE_SERVICE_ACCOUNT is required in production mode.'],
+        capState,
+      };
+    }
+
     const instanceId = Math.random().toString(36).substring(2, 9);
     const lockResult = await ScannerPersistence.tryAcquireLock(instanceId);
 
@@ -336,29 +359,98 @@ export class HourlyScannerService {
       // GATE 36: Separate candidate count tracking (candidates do NOT consume signal slots)
       Gate36ConfigurableSignalFrequency.recordCandidateCount(rawCandidates.length);
 
+      const thresholds = serverConfig.getConfig().thresholds;
+
       // Log raw candidates entering funnel
       for (const sig of rawCandidates) {
+        const score = sig.score ?? sig.confidenceScore ?? 0;
+        const grossRR = (sig as any).grossRiskRewardRatio ?? sig.riskRewardRatio ?? 0;
+        const netRR = (sig as any).netRiskRewardRatio ?? sig.estimatedFriction?.netRiskRewardRatio ?? 0;
+        const adverseNetRR = (sig as any).adverseNetRiskRewardRatio ?? (sig.estimatedFriction as any)?.adverseNetRiskRewardRatio ?? 0;
+        const winRate = sig.modelEstimatedWinRate ?? sig.estimatedWinRate ?? 0;
+        const empProb = sig.isEmpiricallyCalibrated === true && typeof sig.empiricalProbability === 'number' ? sig.empiricalProbability : null;
+        const sampleSize = typeof sig.probabilitySampleSize === 'number' ? sig.probabilitySampleSize : 0;
+
         Gate35SignalFunnelAnalytics.recordCandidate({
           symbol: sig.symbol,
           direction: sig.direction,
           stage: 'STAGE_2',
-          score: sig.score ?? sig.confidenceScore ?? 0,
+          score: score,
           regime: (sig as any).marketRegime || 'UNKNOWN',
           strategy: sig.strategy || 'MULTI_STRATEGY',
+          
+          assetClass: SymbolNormalizer.getAssetClassification(sig.symbol),
+          initialScore: score,
+          watchingThreshold: thresholds.watchingThreshold || 70,
+          qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
+          signalThreshold: thresholds.signalThreshold || 80,
+          strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
+          timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
+          grossRR,
+          netRR,
+          adverseNetRR,
+          estimatedWinRate: winRate,
+          empiricalProbability: empProb,
+          probabilitySampleSize: sampleSize,
+          aiMode: 'None',
+          aiResult: 'None',
+          dataFreshness: '0s',
+          entryQuality: 'Qualified Setup',
+          newsStatus: (sig as any).newsStatus || 'NEUTRAL',
+          correlationCluster: Gate17CorrelationExposure.identifyCluster(sig.symbol).name,
+          finalDecision: 'WATCHING',
         });
       }
 
-      const thresholds = serverConfig.getConfig().thresholds;
       // 3. Stage A: Mandatory Condition Hurdle
       const qualifiedByQuality: TradingSignal[] = [];
       for (const sig of rawCandidates) {
         const score = sig.score ?? sig.confidenceScore ?? 0;
-        const winRate = sig.estimatedWinRate ?? 0;
+        const winRate = sig.modelEstimatedWinRate ?? sig.estimatedWinRate ?? 0;
+        const empProb = sig.isEmpiricallyCalibrated === true && typeof sig.empiricalProbability === 'number' ? sig.empiricalProbability : null;
+        const sampleSize = typeof sig.probabilitySampleSize === 'number' ? sig.probabilitySampleSize : 0;
         const rr = sig.riskRewardRatio ?? 0;
+        const grossRR = (sig as any).grossRiskRewardRatio ?? sig.riskRewardRatio ?? 0;
+        const netRR = (sig as any).netRiskRewardRatio ?? sig.estimatedFriction?.netRiskRewardRatio ?? 0;
+        const adverseNetRR = (sig as any).adverseNetRiskRewardRatio ?? (sig.estimatedFriction as any)?.adverseNetRiskRewardRatio ?? 0;
 
-        // Condition 1: Score >= threshold
-        if (score < thresholds.signalThreshold) {
-          const reason = `REJECTED: SCORE_BELOW_THRESHOLD. Score (${score}/100) below mandatory ${thresholds.signalThreshold} hurdle (85+ = BEST TRADE, 75-84 = HIGH QUALITY).`;
+        const sigTelemetry = {
+          assetClass: SymbolNormalizer.getAssetClassification(sig.symbol),
+          initialScore: score,
+          watchingThreshold: thresholds.watchingThreshold || 70,
+          qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
+          signalThreshold: thresholds.signalThreshold || 80,
+          strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
+          timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
+          grossRR,
+          netRR,
+          adverseNetRR,
+          estimatedWinRate: winRate,
+          empiricalProbability: empProb,
+          probabilitySampleSize: sampleSize,
+          aiMode: 'None',
+          aiResult: 'None',
+          dataFreshness: '0s',
+          entryQuality: 'Qualified Setup',
+          newsStatus: (sig as any).newsStatus || 'NEUTRAL',
+          correlationCluster: Gate17CorrelationExposure.identifyCluster(sig.symbol).name,
+          finalDecision: 'REJECTED' as const,
+        };
+
+        // GATE 65: Condition 1 - Centralized Final Tradeability Resolution
+        // finalRequiredScore = Math.max(thresholds.signalThreshold, regimeAdaptiveThreshold)
+        // Gate 27 can make the system MORE selective, but NEVER less selective than signalThreshold.
+        const tradeabilityCheck = TradeRankingEngine.calculateFinalRequiredScore({
+          symbol: sig.symbol,
+          actualScore: score,
+          regime: (sig as any).marketRegime,
+          strategy: sig.strategy,
+          assetClass: SymbolNormalizer.getAssetClassification(sig.symbol),
+          signalThreshold: thresholds.signalThreshold,
+        });
+
+        if (!tradeabilityCheck.isExecutable || !tradeabilityCheck.passed) {
+          const reason = tradeabilityCheck.rejectionReason || `REJECTED: SCORE_BELOW_FINAL_THRESHOLD. Score (${score}/100) below final required score (${tradeabilityCheck.finalRequiredScore}).`;
           rejectedDuringScan.push({
             symbol: sig.symbol,
             direction: sig.direction,
@@ -372,6 +464,8 @@ export class HourlyScannerService {
             score,
             strategy: sig.strategy,
             rejectionReason: reason,
+            ...sigTelemetry,
+            rejectionStage: 'GATE_4',
           });
           continue;
         }
@@ -392,13 +486,15 @@ export class HourlyScannerService {
             score,
             strategy: sig.strategy,
             rejectionReason: reason,
+            ...sigTelemetry,
+            rejectionStage: 'GATE_4',
           });
           continue;
         }
 
-        // Condition 3: Minimum Risk/Reward ratio
-        if (rr < thresholds.minimumNetRR) {
-          const reason = `REJECTED: NET_RR_BELOW_THRESHOLD. Risk/Reward ratio (${rr}:1) below mandatory ${thresholds.minimumNetRR}:1 minimum.`;
+        // GATE 45 Condition 3: Minimum acceptable GROSS Risk/Reward ratio
+        if (grossRR < thresholds.minimumRR) {
+          const reason = `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${grossRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${thresholds.minimumRR}:1).`;
           rejectedDuringScan.push({
             symbol: sig.symbol,
             direction: sig.direction,
@@ -412,13 +508,15 @@ export class HourlyScannerService {
             score,
             strategy: sig.strategy,
             rejectionReason: reason,
+            ...sigTelemetry,
+            rejectionStage: 'GATE_9',
           });
           continue;
         }
 
-        // Condition 4: Valid live provider price & status
-        if (sig.status !== 'ACTIVE' || sig.validationReason === 'MARKET_DATA_UNAVAILABLE' || sig.validationReason === 'STALE_DATA') {
-          const reason = `REJECTED: DATA_STALE. Market data state is ${sig.status} (${sig.validationReason || 'Provider unverified'}). Stale or synthetic data rejected.`;
+        // Condition 4: Valid live provider price & status (Gate 46: actionable emitted signal state)
+        if (!isActionableSignal(sig) || sig.validationReason === 'MARKET_DATA_UNAVAILABLE' || sig.validationReason === 'STALE_DATA') {
+          const reason = `REJECTED: DATA_STALE. Signal state is not actionable (${sig.status}, ${sig.validationReason || 'Provider unverified'}). Stale or synthetic data rejected.`;
           rejectedDuringScan.push({
             symbol: sig.symbol,
             direction: sig.direction,
@@ -432,6 +530,8 @@ export class HourlyScannerService {
             score,
             strategy: sig.strategy,
             rejectionReason: reason,
+            ...sigTelemetry,
+            rejectionStage: 'GATE_0',
           });
           continue;
         }
@@ -452,13 +552,15 @@ export class HourlyScannerService {
             score,
             strategy: sig.strategy,
             rejectionReason: reason,
+            ...sigTelemetry,
+            rejectionStage: 'GATE_8',
           });
           continue;
         }
 
-        // Condition 6: Execution friction buffer check
-        if (sig.estimatedFriction && sig.estimatedFriction.netRiskRewardRatio < thresholds.minimumRR) {
-          const reason = `REJECTED: NET_RR_BELOW_THRESHOLD. Net R:R after spread/slippage friction (${sig.estimatedFriction.netRiskRewardRatio.toFixed(2)}:1) is degraded below ${thresholds.minimumRR}:1.`;
+        // GATE 45 Condition 6: Minimum acceptable NET Risk/Reward ratio after spread/slippage friction
+        if (netRR !== undefined && netRR < thresholds.minimumNetRR) {
+          const reason = `REJECTED: NET_RR_BELOW_THRESHOLD. Normal Net R:R after spread/slippage friction (${netRR.toFixed(2)}:1) is below minimum acceptable NET R:R (${thresholds.minimumNetRR}:1) (Gross R:R: ${grossRR.toFixed(2)}:1).`;
           rejectedDuringScan.push({
             symbol: sig.symbol,
             direction: sig.direction,
@@ -472,6 +574,30 @@ export class HourlyScannerService {
             score,
             strategy: sig.strategy,
             rejectionReason: reason,
+            ...sigTelemetry,
+            rejectionStage: 'GATE_9',
+          });
+          continue;
+        }
+
+        // GATE 45 Optional Adverse Net R:R Hard Gate
+        if (thresholds.enforceAdverseNetRRHardGate && adverseNetRR !== undefined && adverseNetRR < (thresholds.minimumAdverseNetRR ?? 1.0)) {
+          const reason = `REJECTED: ADVERSE_NET_RR_BELOW_THRESHOLD. Adverse Net R:R (${adverseNetRR.toFixed(2)}:1) is below required stress floor (${(thresholds.minimumAdverseNetRR ?? 1.0)}:1).`;
+          rejectedDuringScan.push({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            score,
+            reason,
+          });
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            stage: 'GATE_9',
+            score,
+            strategy: sig.strategy,
+            rejectionReason: reason,
+            ...sigTelemetry,
+            rejectionStage: 'GATE_9',
           });
           continue;
         }
@@ -487,7 +613,7 @@ export class HourlyScannerService {
 
       for (const sig of qualifiedByQuality) {
         const existingSameSetup = sentSignalsToday.find(
-          (s) => s.symbol === sig.symbol && s.direction === sig.direction && s.status === 'ACTIVE'
+          (s) => s.symbol === sig.symbol && s.direction === sig.direction && isActionableSignal(s)
         );
 
         if (existingSameSetup) {
@@ -522,120 +648,197 @@ export class HourlyScannerService {
         }
       }
 
-      // 5. Stage C: Cross-Asset Correlation Risk Filter
+      // 5. Stage C: Cross-Asset Correlation Risk Filter (Gate 54 — Correlation Allocation Policy)
       // Prevent multiple correlated trades in the same cluster/direction from taking multiple slots
       const qualifiedUncorrelated: TradingSignal[] = [];
       const occupiedClustersThisScan = new Set<string>();
 
-      // Also check actively held cluster exposures from sent signals today
-      const activeClusterExposures = new Map<string, PersistedSentSignal>();
-      for (const sent of sentSignalsToday.filter((s) => s.status === 'ACTIVE')) {
-        const cluster = TradeRankingEngine.getAssetCluster(sent.symbol);
-        if (cluster) {
-          const key = `${cluster}_${sent.direction}`;
-          activeClusterExposures.set(key, sent);
+      // Check actively held cluster exposures from sent signals today
+      const activeClusterExposures = new Map<string, PersistedSentSignal[]>();
+      for (const sent of sentSignalsToday.filter((s) => isActionableSignal(s))) {
+        const cluster = TradeRankingEngine.getAssetCluster(sent.symbol) || 'UNCLUSTERED';
+        const key = `${cluster}_${sent.direction}`;
+        if (!activeClusterExposures.has(key)) {
+          activeClusterExposures.set(key, []);
         }
+        activeClusterExposures.get(key)!.push(sent);
       }
 
       // Sort candidate setups descending by score first so the highest quality in a cluster wins
       qualifiedNonDuplicate.sort((a, b) => (b.score ?? b.confidenceScore ?? 0) - (a.score ?? a.confidenceScore ?? 0));
 
       for (const sig of qualifiedNonDuplicate) {
-        const cluster = TradeRankingEngine.getAssetCluster(sig.symbol);
+        const cluster = TradeRankingEngine.getAssetCluster(sig.symbol) || 'UNCLUSTERED';
         const score = sig.score ?? sig.confidenceScore ?? 0;
+        const clusterKey = `${cluster}_${sig.direction}`;
 
-        // GATE 36: Check correlation cluster allocation limit
-        const clusterCheck = await Gate36ConfigurableSignalFrequency.evaluateClusterAllocation(sig.symbol);
-        if (!clusterCheck.allowed) {
-          const reason = clusterCheck.reason || `REJECTED: CORRELATION_CLUSTER_ALLOCATION_FULL. Cluster [${clusterCheck.cluster}] reached daily cluster allocation limit.`;
+        // Get currently active signals in this cluster
+        const activeInCluster = activeClusterExposures.get(clusterKey) || [];
+
+        // GATE 54: Check correlation allocation policy
+        const allocationCheck = Gate36ConfigurableSignalFrequency.evaluateCorrelationAllocation({
+          symbol: sig.symbol,
+          score,
+          direction: sig.direction,
+          activeSignalsInCluster: activeInCluster.map(s => ({
+            id: s.id,
+            symbol: s.symbol,
+            score: s.score ?? 0
+          }))
+        });
+
+        if (!allocationCheck.allowed) {
           rejectedDuringScan.push({
             symbol: sig.symbol,
             direction: sig.direction,
             score,
-            reason,
+            reason: allocationCheck.reason,
           });
+          const grossRR = (sig as any).grossRiskRewardRatio ?? sig.riskRewardRatio ?? 0;
+          const netRR = (sig as any).netRiskRewardRatio ?? sig.estimatedFriction?.netRiskRewardRatio ?? 0;
+          const adverseNetRR = (sig as any).adverseNetRiskRewardRatio ?? (sig.estimatedFriction as any)?.adverseNetRiskRewardRatio ?? 0;
+          const winRate = sig.estimatedWinRate ?? 0;
+
           Gate35SignalFunnelAnalytics.recordCandidate({
             symbol: sig.symbol,
             direction: sig.direction,
             stage: 'RANKING',
             score,
             strategy: sig.strategy,
-            rejectionReason: reason,
+            rejectionReason: allocationCheck.reason,
+            assetClass: SymbolNormalizer.getAssetClassification(sig.symbol),
+            initialScore: score,
+            watchingThreshold: thresholds.watchingThreshold || 70,
+            qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
+            signalThreshold: thresholds.signalThreshold || 80,
+            strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
+            timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
+            grossRR,
+            netRR,
+            adverseNetRR,
+            estimatedWinRate: sig.modelEstimatedWinRate ?? sig.estimatedWinRate ?? 0,
+            empiricalProbability: sig.isEmpiricallyCalibrated === true && typeof sig.empiricalProbability === 'number' ? sig.empiricalProbability : null,
+            probabilitySampleSize: typeof sig.probabilitySampleSize === 'number' ? sig.probabilitySampleSize : 0,
+            aiMode: 'None',
+            aiResult: 'None',
+            dataFreshness: '0s',
+            entryQuality: 'Qualified Setup',
+            newsStatus: (sig as any).newsStatus || 'NEUTRAL',
+            correlationCluster: Gate17CorrelationExposure.identifyCluster(sig.symbol).name,
+            finalDecision: 'REJECTED',
+            rejectionStage: 'RANKING',
           });
           continue;
         }
 
-        if (cluster) {
-          const clusterKey = `${cluster}_${sig.direction}`;
+        // Check if intra-scan cluster collision
+        if (cluster !== 'UNCLUSTERED' && occupiedClustersThisScan.has(clusterKey)) {
+          const reason = `REJECTED: CORRELATION_EXPOSURE. Correlated exposure: Risk cluster [${cluster}] (${sig.direction}) already occupied by higher-scoring setup in this scan cycle.`;
+          rejectedDuringScan.push({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            score,
+            reason,
+          });
+          continue;
+        }
 
-          // Check if intra-scan cluster collision
-          if (occupiedClustersThisScan.has(clusterKey)) {
-            rejectedDuringScan.push({
-              symbol: sig.symbol,
-              direction: sig.direction,
-              score,
-              reason: `REJECTED: CORRELATION_EXPOSURE. Correlated exposure: Risk cluster [${cluster}] (${sig.direction}) already occupied by higher-scoring setup in this scan cycle.`,
-            });
-            continue;
-          }
+        // Handle swapping/superseding if evaluateCorrelationAllocation returned a signal to supersede
+        if (allocationCheck.signalToSupersede) {
+          logger.info(`[Gate 54] ${allocationCheck.reason}`);
+          await ScannerPersistence.updateSignalStatus(allocationCheck.signalToSupersede, 'SUPERSEDED');
+          
+          // Update local activeClusterExposures map to reflect the superseded signal being replaced
+          const filteredActive = activeInCluster.filter(s => s.id !== allocationCheck.signalToSupersede);
+          activeClusterExposures.set(clusterKey, filteredActive);
+        }
 
-          // Check if active prior setup in same cluster exists today
-          const priorActive = activeClusterExposures.get(clusterKey);
-          if (priorActive && priorActive.symbol !== sig.symbol) {
-            if (score >= priorActive.score + 5) {
-              logger.info(`[Hourly Scanner] Upgrading cluster [${cluster}] exposure from ${priorActive.symbol} (${priorActive.score}) to stronger candidate ${sig.symbol} (${score}).`);
-              await ScannerPersistence.updateSignalStatus(priorActive.id, 'SUPERSEDED');
-            } else {
-              rejectedDuringScan.push({
-                symbol: sig.symbol,
-                direction: sig.direction,
-                score,
-                reason: `REJECTED: CORRELATION_EXPOSURE. Correlated exposure: Active setup for ${priorActive.symbol} (${priorActive.score}/100) already covers cluster [${cluster}]. Preserving daily cap for diversified opportunities.`,
-              });
-              continue;
-            }
-          }
-
+        if (cluster !== 'UNCLUSTERED') {
           occupiedClustersThisScan.add(clusterKey);
+          
+          // Also append this newly admitted signal to the activeClusterExposures map so subsequent iterations in this scan cycle see it
+          const updatedActive = activeClusterExposures.get(clusterKey) || [];
+          updatedActive.push({
+            id: `temp_${sig.symbol}_${Date.now()}`,
+            symbol: sig.symbol,
+            direction: sig.direction,
+            score,
+          } as any);
+          activeClusterExposures.set(clusterKey, updatedActive);
         }
 
         qualifiedUncorrelated.push(sig);
       }
 
       // 6. Stage D: Final Ranking & Daily Cap Selection
-      // Tiering: 85+ = BEST TRADE; 75-84 = HIGH QUALITY
       qualifiedUncorrelated.sort((a, b) => (b.score ?? b.confidenceScore ?? 0) - (a.score ?? a.confidenceScore ?? 0));
 
       const selectedSetups: TradingSignal[] = [];
       for (const sig of qualifiedUncorrelated) {
         if (selectedSetups.length >= remainingAllowance) {
-          const reason = `REJECTED: DAILY_CAP_REACHED. Daily automated notification cap (5/day) reached. Remaining slots full.`;
+          const reason = `REJECTED: DAILY_CAP_REACHED. Daily automated notification cap (${dailyCap}/day) reached. Remaining slots full.`;
           rejectedDuringScan.push({
             symbol: sig.symbol,
             direction: sig.direction,
             score: sig.score ?? sig.confidenceScore,
             reason,
           });
+          const scoreVal = sig.score ?? sig.confidenceScore ?? 0;
+          const grossRR = (sig as any).grossRiskRewardRatio ?? sig.riskRewardRatio ?? 0;
+          const netRR = (sig as any).netRiskRewardRatio ?? sig.estimatedFriction?.netRiskRewardRatio ?? 0;
+          const adverseNetRR = (sig as any).adverseNetRiskRewardRatio ?? (sig.estimatedFriction as any)?.adverseNetRiskRewardRatio ?? 0;
+          const winRate = sig.modelEstimatedWinRate ?? sig.estimatedWinRate ?? 0;
+          const empProb = sig.isEmpiricallyCalibrated === true && typeof sig.empiricalProbability === 'number' ? sig.empiricalProbability : null;
+          const sampleSize = typeof sig.probabilitySampleSize === 'number' ? sig.probabilitySampleSize : 0;
+
           Gate35SignalFunnelAnalytics.recordCandidate({
             symbol: sig.symbol,
             direction: sig.direction,
             stage: 'RANKING',
-            score: sig.score ?? sig.confidenceScore,
+            score: scoreVal,
             strategy: sig.strategy,
             rejectionReason: reason,
+            assetClass: SymbolNormalizer.getAssetClassification(sig.symbol),
+            initialScore: scoreVal,
+            watchingThreshold: thresholds.watchingThreshold || 70,
+            qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
+            signalThreshold: thresholds.signalThreshold || 80,
+            strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
+            timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
+            grossRR,
+            netRR,
+            adverseNetRR,
+            estimatedWinRate: winRate,
+            empiricalProbability: empProb,
+            probabilitySampleSize: sampleSize,
+            aiMode: 'None',
+            aiResult: 'None',
+            dataFreshness: '0s',
+            entryQuality: 'Qualified Setup',
+            newsStatus: (sig as any).newsStatus || 'NEUTRAL',
+            correlationCluster: Gate17CorrelationExposure.identifyCluster(sig.symbol).name,
+            finalDecision: 'REJECTED',
+            rejectionStage: 'RANKING',
           });
           continue;
         }
 
-        // Tier classification
-        const finalScore = sig.score ?? sig.confidenceScore ?? 80;
-        if (finalScore >= 85) {
+        // Rank tier classification based on ranking order
+        const rankIndex = selectedSetups.length;
+        if (rankIndex === 0) {
           sig.rankTier = 'BEST_TRADE';
           sig.isBestTrade = true;
+          sig.isSecondBest = false;
+          sig.isTopTrade = true;
+        } else if (rankIndex === 1) {
+          sig.rankTier = 'SECOND_BEST';
+          sig.isBestTrade = false;
+          sig.isSecondBest = true;
           sig.isTopTrade = true;
         } else {
-          sig.rankTier = 'SECOND_BEST';
-          sig.isSecondBest = true;
+          sig.rankTier = 'SUGGESTION';
+          sig.isBestTrade = false;
+          sig.isSecondBest = false;
           sig.isTopTrade = false;
         }
 
@@ -645,6 +848,23 @@ export class HourlyScannerService {
       // 7. Dispatch & Persistence
       let dispatchedCount = 0;
       for (const sig of selectedSetups) {
+        const score = sig.score ?? sig.confidenceScore ?? 0;
+
+        // GATE 65: Double check centralized final tradeability contract before dispatch
+        const tradeabilityCheck = TradeRankingEngine.calculateFinalRequiredScore({
+          symbol: sig.symbol,
+          actualScore: score,
+          regime: (sig as any).marketRegime,
+          strategy: sig.strategy,
+          assetClass: SymbolNormalizer.getAssetClassification(sig.symbol),
+          signalThreshold: thresholds.signalThreshold,
+        });
+
+        if (!tradeabilityCheck.isExecutable || !tradeabilityCheck.passed) {
+          logger.warn(`[Hourly Scanner] Setup ${sig.symbol} failed final tradeability contract (score ${score} < ${tradeabilityCheck.finalRequiredScore}). Skipping.`);
+          continue;
+        }
+
         // Atomically increment cap
         const inc = await ScannerPersistence.tryIncrementCap(dailyCap);
         if (!inc.allowed) {
@@ -653,22 +873,65 @@ export class HourlyScannerService {
         }
 
         // Attach tag for automated signal
-        sig.strategy = `[Automated ${sig.rankTier === 'BEST_TRADE' ? 'BEST TRADE' : 'HIGH QUALITY'}] ${sig.strategy}`;
+        sig.strategy = `[Automated ${sig.rankTier === 'BEST_TRADE' ? 'BEST TRADE' : 'ACTIONABLE SIGNAL'}] ${sig.strategy}`;
 
-        // Record sent signal
-        await ScannerPersistence.recordSentSignal(sig);
-        await SignalLogger.logSignal(sig, 'TREND');
+        // MARK TRADEABLE BEFORE PERSISTENCE
+        sig.isTradeableSignal = true;
+        sig.signalClassification = 'TRADEABLE';
+
+        // PERSIST & CONFIRM PERSISTENCE
+        const persRes = await ScannerPersistence.recordSentSignal(sig);
+        const logRes = await SignalLogger.logSignal(sig, 'TREND');
+
+        if (!persRes.success || !logRes.success || logRes.status !== 'TRADEABLE_RECORD_PERSISTED') {
+          logger.error(`[Hourly Scanner] Persistence failed for ${sig.symbol}. Rolling back cap and aborting dispatch.`, { persError: persRes.error, logError: logRes.error });
+          await ScannerPersistence.releaseCap(inc.reservationId);
+          sig.isTradeableSignal = false;
+          sig.signalClassification = 'DIAGNOSTIC';
+          continue;
+        }
+
+        // COMMIT CAP RESERVATION!
+        await ScannerPersistence.commitCap(inc.reservationId);
 
         // GATE 36: Record notification count
         Gate36ConfigurableSignalFrequency.recordNotificationCount(1);
 
         // Record Funnel Analytics Final Signal
+        const finalScore = sig.score ?? sig.confidenceScore ?? 80;
+        const grossRR = (sig as any).grossRiskRewardRatio ?? sig.riskRewardRatio ?? 0;
+        const netRR = (sig as any).netRiskRewardRatio ?? sig.estimatedFriction?.netRiskRewardRatio ?? 0;
+        const adverseNetRR = (sig as any).adverseNetRiskRewardRatio ?? (sig.estimatedFriction as any)?.adverseNetRiskRewardRatio ?? 0;
+        const winRate = sig.modelEstimatedWinRate ?? sig.estimatedWinRate ?? 0;
+        const empProb = sig.isEmpiricallyCalibrated === true && typeof sig.empiricalProbability === 'number' ? sig.empiricalProbability : null;
+        const sampleSize = typeof sig.probabilitySampleSize === 'number' ? sig.probabilitySampleSize : 0;
+
         Gate35SignalFunnelAnalytics.recordCandidate({
           symbol: sig.symbol,
           direction: sig.direction,
           stage: 'FINAL_SIGNAL',
-          score: sig.score ?? sig.confidenceScore ?? 80,
+          score: finalScore,
           strategy: sig.strategy,
+          assetClass: SymbolNormalizer.getAssetClassification(sig.symbol),
+          initialScore: finalScore,
+          watchingThreshold: thresholds.watchingThreshold || 70,
+          qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
+          signalThreshold: thresholds.signalThreshold || 80,
+          strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
+          timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
+          grossRR,
+          netRR,
+          adverseNetRR,
+          estimatedWinRate: winRate,
+          empiricalProbability: empProb,
+          probabilitySampleSize: sampleSize,
+          aiMode: 'None',
+          aiResult: 'None',
+          dataFreshness: '0s',
+          entryQuality: 'Qualified Setup',
+          newsStatus: (sig as any).newsStatus || 'NEUTRAL',
+          correlationCluster: Gate17CorrelationExposure.identifyCluster(sig.symbol).name,
+          finalDecision: 'SIGNALS',
         });
 
         // Record Fingerprint, Cooldown, and Accepted Audit Explanation
@@ -689,7 +952,7 @@ export class HourlyScannerService {
           primaryStrategy: sig.strategy,
           passedStrategies: [sig.strategy],
           failedStrategies: [],
-          marketRegime: 'TRENDING',
+          marketRegime: sig.marketRegime || 'UNKNOWN',
           atr: 0,
           dataFreshnessSeconds: 0,
           providerAgreement: true,
@@ -701,14 +964,17 @@ export class HourlyScannerService {
         });
 
         // Record notification history item
-        const score = sig.score ?? sig.confidenceScore ?? 80;
-        const tierLabel = score >= 85 ? 'BEST TRADE (85+)' : 'HIGH QUALITY (75-84)';
+        const tierLabel = sig.rankTier === 'BEST_TRADE'
+          ? 'BEST TRADE (Rank #1)'
+          : sig.rankTier === 'SECOND_BEST'
+            ? 'SECOND BEST (Rank #2)'
+            : `ACTIONABLE SIGNAL (${thresholds.signalThreshold}+)`;
         const title = `🚨 [${tierLabel}] ${sig.symbol} [${sig.direction}]`;
         const precision = sig.entryPrice < 10 ? 5 : 2;
         const message = `Live Entry: ${sig.entryPrice.toFixed(precision)} | TP: ${sig.takeProfit.toFixed(precision)} | SL: ${sig.stopLoss.toFixed(precision)} (R:R ${sig.riskRewardRatio.toFixed(1)}:1, Score: ${score}/100)`;
 
         await ScannerPersistence.recordNotification({
-          type: score >= 85 ? 'BEST_TRADE' : 'HIGH_QUALITY',
+          type: sig.rankTier === 'BEST_TRADE' ? 'BEST_TRADE' : 'HIGH_QUALITY',
           symbol: sig.symbol,
           title,
           message,
@@ -729,7 +995,7 @@ export class HourlyScannerService {
 
       // 8. If NO setups qualified
       if (dispatchedCount === 0) {
-        logger.info(`[Hourly Scanner] No setups met the strict 75+ quality and diversification criteria. Dispatched 0 signals (0-5 is completely valid).`);
+        logger.info(`[Hourly Scanner] No setups met the strict ${thresholds.signalThreshold}+ quality and diversification criteria. Dispatched 0 signals (0-${dailyCap} is completely valid).`);
         if (settings.notifyOnNoTrade && !isExternal) {
           await ScannerPersistence.recordNotification({
             type: 'NO_TRADE',
@@ -790,7 +1056,7 @@ export class HourlyScannerService {
         message:
           dispatchedCount > 0
             ? `Scan complete: Dispatched ${dispatchedCount} qualified automated setup(s). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`
-            : `Scan complete: 0 setups met strict 75+ criteria (0-5 is valid; no trades forced). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`,
+            : `Scan complete: 0 setups met strict ${finalCapState.dailySignalCap > 0 ? `${thresholds.signalThreshold}+` : ''} criteria (0-${finalCapState.dailySignalCap} is valid; no trades forced). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`,
         timestamp: Date.now(),
         lastScanTime: finalCapState.lastScanTime,
         candidatesEvaluated: rawCandidates.length,
@@ -915,9 +1181,23 @@ export class HourlyScannerService {
     const sentSignalsToday = await ScannerPersistence.getSentSignalsToday();
     const rejectedToday = await ScannerPersistence.getRejectedCandidatesToday(30);
 
+    // GATE 60/63/64: Filter out any non-tradeable signals from user-facing history
+    // Only explicit isTradeableSignal === true && signalClassification === 'TRADEABLE' qualifies
+    // Undefined legacy records are NOT preserved in user-facing tradeable history
+    const tradeableSignals = sentSignalsToday.filter(s => {
+      return s.isTradeableSignal === true && s.signalClassification === 'TRADEABLE';
+    });
+
+    const tradeableNotifications = notifications.filter(n => {
+      // GATE 64: NO_TRADE is a system status message, not a tradeable trade alert.
+      // Filter out NO_TRADE from user-facing Tradeable History & Alert Log.
+      // NO_TRADE events remain in ScannerPersistence/telemetry/diagnostics.
+      return n.type === 'BEST_TRADE' || n.type === 'HIGH_QUALITY' || n.type === 'SETUP_UPDATE' || n.type === 'TRADE_UPDATE';
+    });
+
     return {
-      notifications,
-      sentSignalsToday,
+      notifications: tradeableNotifications,
+      sentSignalsToday: tradeableSignals,
       rejectedToday,
       capState,
     };

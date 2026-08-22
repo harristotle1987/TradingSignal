@@ -10,6 +10,7 @@ import { useState } from 'react';
 import { TradingSignal } from '../types/index.js';
 import { CheckCircle2, Clock, Check, ShieldAlert, Award } from 'lucide-react';
 import { SignalRefreshButton } from './SignalRefreshButton.js';
+import { formatStatus } from '../utils/formatters.js';
 
 interface TargetTrackerProps {
   signal: TradingSignal;
@@ -87,7 +88,7 @@ export function TargetTracker({ signal, precision, onSignalRefreshed }: TargetTr
             </span>
           ) : (
             <span className="px-2 py-0.5 rounded bg-slate-900 text-sky-400 border border-slate-800 text-[10px] font-bold">
-              {currentSignal?.status || 'ACTIVE'}
+              {formatStatus(currentSignal?.status || 'WAITING_ENTRY')}
             </span>
           )}
         </div>

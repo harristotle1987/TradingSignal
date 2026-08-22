@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "lastUpdated": 1787242425231,
+  "lastUpdated": 1787407749731,
   "disclaimer": "DISCLAIMER: Historical performance, backtest simulation results, walk-forward evaluations, and confidence calibration metrics are statistical tools for backend algorithmic risk management only. Past performance does not guarantee or claim future profitability. Live trading involves substantial market risk.",
   "overall": {
     "totalTrades": 18,
@@ -15,7 +15,13 @@
     "expectancyR": 0.245,
     "maxDrawdownR": 0,
     "maxLosingStreak": 11,
-    "currentStreak": -11
+    "currentStreak": -11,
+    "totalSignals": 18,
+    "expiredSignals": 0,
+    "lossRatePct": 61.1,
+    "signalConversionRatePct": 100,
+    "entryOpportunityRatePct": 100,
+    "expirationRatePct": 0
   },
   "byStrategy": {
     "strat_1": {
@@ -24,6 +30,7 @@
       "losses": 3,
       "breakevens": 0,
       "winRatePct": 70,
+      "lossRatePct": 30,
       "rollingWinRatePct": 70,
       "profitFactor": 5.13,
       "totalRealizedR": 12.4,
@@ -31,7 +38,12 @@
       "expectancyR": 1.24,
       "maxDrawdownR": 0,
       "maxLosingStreak": 3,
-      "currentStreak": -3
+      "currentStreak": -3,
+      "totalSignals": 10,
+      "signalConversionRatePct": 100,
+      "entryOpportunityRatePct": 100,
+      "expirationRatePct": 0,
+      "expiredSignals": 0
     },
     "strat_4": {
       "totalTrades": 8,
@@ -39,6 +51,7 @@
       "losses": 8,
       "breakevens": 0,
       "winRatePct": 0,
+      "lossRatePct": 100,
       "rollingWinRatePct": 0,
       "profitFactor": 0,
       "totalRealizedR": -8,
@@ -46,7 +59,12 @@
       "expectancyR": -1,
       "maxDrawdownR": 0,
       "maxLosingStreak": 8,
-      "currentStreak": -8
+      "currentStreak": -8,
+      "totalSignals": 8,
+      "signalConversionRatePct": 100,
+      "entryOpportunityRatePct": 100,
+      "expirationRatePct": 0,
+      "expiredSignals": 0
     }
   },
   "byAsset": {
@@ -56,6 +74,7 @@
       "losses": 3,
       "breakevens": 0,
       "winRatePct": 70,
+      "lossRatePct": 30,
       "rollingWinRatePct": 70,
       "profitFactor": 5.13,
       "totalRealizedR": 12.4,
@@ -63,7 +82,12 @@
       "expectancyR": 1.24,
       "maxDrawdownR": 0,
       "maxLosingStreak": 3,
-      "currentStreak": -3
+      "currentStreak": -3,
+      "totalSignals": 10,
+      "signalConversionRatePct": 100,
+      "entryOpportunityRatePct": 100,
+      "expirationRatePct": 0,
+      "expiredSignals": 0
     },
     "EURUSD": {
       "totalTrades": 8,
@@ -71,6 +95,7 @@
       "losses": 8,
       "breakevens": 0,
       "winRatePct": 0,
+      "lossRatePct": 100,
       "rollingWinRatePct": 0,
       "profitFactor": 0,
       "totalRealizedR": -8,
@@ -78,7 +103,12 @@
       "expectancyR": -1,
       "maxDrawdownR": 0,
       "maxLosingStreak": 8,
-      "currentStreak": -8
+      "currentStreak": -8,
+      "totalSignals": 8,
+      "signalConversionRatePct": 100,
+      "entryOpportunityRatePct": 100,
+      "expirationRatePct": 0,
+      "expiredSignals": 0
     }
   },
   "byAssetClass": {
@@ -88,6 +118,7 @@
       "losses": 3,
       "breakevens": 0,
       "winRatePct": 70,
+      "lossRatePct": 30,
       "rollingWinRatePct": 70,
       "profitFactor": 5.13,
       "totalRealizedR": 12.4,
@@ -95,7 +126,12 @@
       "expectancyR": 1.24,
       "maxDrawdownR": 0,
       "maxLosingStreak": 3,
-      "currentStreak": -3
+      "currentStreak": -3,
+      "totalSignals": 10,
+      "signalConversionRatePct": 100,
+      "entryOpportunityRatePct": 100,
+      "expirationRatePct": 0,
+      "expiredSignals": 0
     },
     "FOREX": {
       "totalTrades": 8,
@@ -103,6 +139,7 @@
       "losses": 8,
       "breakevens": 0,
       "winRatePct": 0,
+      "lossRatePct": 100,
       "rollingWinRatePct": 0,
       "profitFactor": 0,
       "totalRealizedR": -8,
@@ -110,7 +147,12 @@
       "expectancyR": -1,
       "maxDrawdownR": 0,
       "maxLosingStreak": 8,
-      "currentStreak": -8
+      "currentStreak": -8,
+      "totalSignals": 8,
+      "signalConversionRatePct": 100,
+      "entryOpportunityRatePct": 100,
+      "expirationRatePct": 0,
+      "expiredSignals": 0
     }
   },
   "byTimeframe": {
@@ -120,6 +162,7 @@
       "losses": 3,
       "breakevens": 0,
       "winRatePct": 70,
+      "lossRatePct": 30,
       "rollingWinRatePct": 70,
       "profitFactor": 5.13,
       "totalRealizedR": 12.4,
@@ -127,7 +170,12 @@
       "expectancyR": 1.24,
       "maxDrawdownR": 0,
       "maxLosingStreak": 3,
-      "currentStreak": -3
+      "currentStreak": -3,
+      "totalSignals": 10,
+      "signalConversionRatePct": 100,
+      "entryOpportunityRatePct": 100,
+      "expirationRatePct": 0,
+      "expiredSignals": 0
     },
     "15m": {
       "totalTrades": 8,
@@ -135,6 +183,7 @@
       "losses": 8,
       "breakevens": 0,
       "winRatePct": 0,
+      "lossRatePct": 100,
       "rollingWinRatePct": 0,
       "profitFactor": 0,
       "totalRealizedR": -8,
@@ -142,7 +191,12 @@
       "expectancyR": -1,
       "maxDrawdownR": 0,
       "maxLosingStreak": 8,
-      "currentStreak": -8
+      "currentStreak": -8,
+      "totalSignals": 8,
+      "signalConversionRatePct": 100,
+      "entryOpportunityRatePct": 100,
+      "expirationRatePct": 0,
+      "expiredSignals": 0
     }
   },
   "byRegime": {
@@ -152,6 +206,7 @@
       "losses": 3,
       "breakevens": 0,
       "winRatePct": 70,
+      "lossRatePct": 30,
       "rollingWinRatePct": 70,
       "profitFactor": 5.13,
       "totalRealizedR": 12.4,
@@ -159,7 +214,12 @@
       "expectancyR": 1.24,
       "maxDrawdownR": 0,
       "maxLosingStreak": 3,
-      "currentStreak": -3
+      "currentStreak": -3,
+      "totalSignals": 10,
+      "signalConversionRatePct": 100,
+      "entryOpportunityRatePct": 100,
+      "expirationRatePct": 0,
+      "expiredSignals": 0
     },
     "RANGING": {
       "totalTrades": 8,
@@ -167,6 +227,7 @@
       "losses": 8,
       "breakevens": 0,
       "winRatePct": 0,
+      "lossRatePct": 100,
       "rollingWinRatePct": 0,
       "profitFactor": 0,
       "totalRealizedR": -8,
@@ -174,7 +235,12 @@
       "expectancyR": -1,
       "maxDrawdownR": 0,
       "maxLosingStreak": 8,
-      "currentStreak": -8
+      "currentStreak": -8,
+      "totalSignals": 8,
+      "signalConversionRatePct": 100,
+      "entryOpportunityRatePct": 100,
+      "expirationRatePct": 0,
+      "expiredSignals": 0
     }
   },
   "byConfidenceRange": {
@@ -184,6 +250,7 @@
       "losses": 3,
       "breakevens": 0,
       "winRatePct": 70,
+      "lossRatePct": 30,
       "rollingWinRatePct": 70,
       "profitFactor": 5.13,
       "totalRealizedR": 12.4,
@@ -191,7 +258,12 @@
       "expectancyR": 1.24,
       "maxDrawdownR": 0,
       "maxLosingStreak": 3,
-      "currentStreak": -3
+      "currentStreak": -3,
+      "totalSignals": 10,
+      "signalConversionRatePct": 100,
+      "entryOpportunityRatePct": 100,
+      "expirationRatePct": 0,
+      "expiredSignals": 0
     },
     "70-79": {
       "totalTrades": 8,
@@ -199,6 +271,7 @@
       "losses": 8,
       "breakevens": 0,
       "winRatePct": 0,
+      "lossRatePct": 100,
       "rollingWinRatePct": 0,
       "profitFactor": 0,
       "totalRealizedR": -8,
@@ -206,7 +279,12 @@
       "expectancyR": -1,
       "maxDrawdownR": 0,
       "maxLosingStreak": 8,
-      "currentStreak": -8
+      "currentStreak": -8,
+      "totalSignals": 8,
+      "signalConversionRatePct": 100,
+      "entryOpportunityRatePct": 100,
+      "expirationRatePct": 0,
+      "expiredSignals": 0
     }
   },
   "recentTrades": [
@@ -228,8 +306,10 @@
       "outcomeStatus": "TP_HIT",
       "realizedRR": 2.2,
       "isWin": true,
-      "timestamp": 1787206425148,
-      "resolvedAt": 1787210025148,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787371749657,
+      "resolvedAt": 1787375349657,
       "durationMs": 3600000
     },
     {
@@ -250,8 +330,10 @@
       "outcomeStatus": "TP_HIT",
       "realizedRR": 2.2,
       "isWin": true,
-      "timestamp": 1787210025168,
-      "resolvedAt": 1787213625168,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787375349675,
+      "resolvedAt": 1787378949675,
       "durationMs": 3600000
     },
     {
@@ -272,8 +354,10 @@
       "outcomeStatus": "TP_HIT",
       "realizedRR": 2.2,
       "isWin": true,
-      "timestamp": 1787213625169,
-      "resolvedAt": 1787217225169,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787378949678,
+      "resolvedAt": 1787382549678,
       "durationMs": 3600000
     },
     {
@@ -294,8 +378,10 @@
       "outcomeStatus": "TP_HIT",
       "realizedRR": 2.2,
       "isWin": true,
-      "timestamp": 1787217225172,
-      "resolvedAt": 1787220825172,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787382549680,
+      "resolvedAt": 1787386149680,
       "durationMs": 3600000
     },
     {
@@ -316,8 +402,10 @@
       "outcomeStatus": "TP_HIT",
       "realizedRR": 2.2,
       "isWin": true,
-      "timestamp": 1787220825173,
-      "resolvedAt": 1787224425173,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787386149683,
+      "resolvedAt": 1787389749683,
       "durationMs": 3600000
     },
     {
@@ -338,8 +426,10 @@
       "outcomeStatus": "TP_HIT",
       "realizedRR": 2.2,
       "isWin": true,
-      "timestamp": 1787224425176,
-      "resolvedAt": 1787228025176,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787389749686,
+      "resolvedAt": 1787393349686,
       "durationMs": 3600000
     },
     {
@@ -360,8 +450,10 @@
       "outcomeStatus": "TP_HIT",
       "realizedRR": 2.2,
       "isWin": true,
-      "timestamp": 1787228025178,
-      "resolvedAt": 1787231625178,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787393349688,
+      "resolvedAt": 1787396949688,
       "durationMs": 3600000
     },
     {
@@ -382,8 +474,10 @@
       "outcomeStatus": "SL_HIT",
       "realizedRR": -1,
       "isWin": false,
-      "timestamp": 1787231625181,
-      "resolvedAt": 1787235225181,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787396949692,
+      "resolvedAt": 1787400549692,
       "durationMs": 3600000
     },
     {
@@ -404,8 +498,10 @@
       "outcomeStatus": "SL_HIT",
       "realizedRR": -1,
       "isWin": false,
-      "timestamp": 1787235225183,
-      "resolvedAt": 1787238825183,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787400549694,
+      "resolvedAt": 1787404149694,
       "durationMs": 3600000
     },
     {
@@ -426,8 +522,10 @@
       "outcomeStatus": "SL_HIT",
       "realizedRR": -1,
       "isWin": false,
-      "timestamp": 1787238825186,
-      "resolvedAt": 1787242425186,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787404149698,
+      "resolvedAt": 1787407749698,
       "durationMs": 3600000
     },
     {
@@ -448,8 +546,10 @@
       "outcomeStatus": "SL_HIT",
       "realizedRR": -1,
       "isWin": false,
-      "timestamp": 1787213625188,
-      "resolvedAt": 1787217225188,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787378949708,
+      "resolvedAt": 1787382549709,
       "durationMs": 3600000
     },
     {
@@ -470,8 +570,10 @@
       "outcomeStatus": "SL_HIT",
       "realizedRR": -1,
       "isWin": false,
-      "timestamp": 1787217225189,
-      "resolvedAt": 1787220825189,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787382549718,
+      "resolvedAt": 1787386149718,
       "durationMs": 3600000
     },
     {
@@ -492,8 +594,10 @@
       "outcomeStatus": "SL_HIT",
       "realizedRR": -1,
       "isWin": false,
-      "timestamp": 1787220825191,
-      "resolvedAt": 1787224425191,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787386149720,
+      "resolvedAt": 1787389749720,
       "durationMs": 3600000
     },
     {
@@ -514,8 +618,10 @@
       "outcomeStatus": "SL_HIT",
       "realizedRR": -1,
       "isWin": false,
-      "timestamp": 1787224425206,
-      "resolvedAt": 1787228025206,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787389749722,
+      "resolvedAt": 1787393349722,
       "durationMs": 3600000
     },
     {
@@ -536,8 +642,10 @@
       "outcomeStatus": "SL_HIT",
       "realizedRR": -1,
       "isWin": false,
-      "timestamp": 1787228025210,
-      "resolvedAt": 1787231625210,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787393349725,
+      "resolvedAt": 1787396949725,
       "durationMs": 3600000
     },
     {
@@ -558,8 +666,10 @@
       "outcomeStatus": "SL_HIT",
       "realizedRR": -1,
       "isWin": false,
-      "timestamp": 1787231625226,
-      "resolvedAt": 1787235225226,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787396949727,
+      "resolvedAt": 1787400549727,
       "durationMs": 3600000
     },
     {
@@ -580,8 +690,10 @@
       "outcomeStatus": "SL_HIT",
       "realizedRR": -1,
       "isWin": false,
-      "timestamp": 1787235225229,
-      "resolvedAt": 1787238825229,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787400549729,
+      "resolvedAt": 1787404149729,
       "durationMs": 3600000
     },
     {
@@ -602,8 +714,10 @@
       "outcomeStatus": "SL_HIT",
       "realizedRR": -1,
       "isWin": false,
-      "timestamp": 1787238825231,
-      "resolvedAt": 1787242425231,
+      "tradeEntered": true,
+      "TRADE_ENTERED": true,
+      "timestamp": 1787404149731,
+      "resolvedAt": 1787407749731,
       "durationMs": 3600000
     }
   ]
