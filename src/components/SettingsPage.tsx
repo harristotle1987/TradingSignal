@@ -132,27 +132,6 @@ export function SettingsPage({}: SettingsPageProps) {
     }
   }, []);
 
-  const handleSubscribePush = async () => {
-    setPushStatusLoading(true);
-    setPushActionMessage(null);
-    try {
-      const result = await NotificationService.subscribeToPushNotifications();
-      setNotificationPermission(result.status);
-      if (result.success) {
-        setIsPushSubscribed(true);
-        setPushActionMessage({ type: 'success', text: result.message || 'Push notifications subscribed!' });
-        await checkPushSubscription();
-      } else {
-        setPushActionMessage({ type: 'error', text: result.message || 'Subscription failed.' });
-      }
-    } catch (err: any) {
-      setPushActionMessage({ type: 'error', text: err?.message || 'Push subscription error' });
-    } finally {
-      setPushStatusLoading(false);
-      setTimeout(() => setPushActionMessage(null), 5000);
-    }
-  };
-
   const handleUnsubscribePush = async () => {
     setPushStatusLoading(true);
     setPushActionMessage(null);
@@ -391,7 +370,7 @@ export function SettingsPage({}: SettingsPageProps) {
                 Test Push
               </button>
 
-              {isPushSubscribed ? (
+              {isPushSubscribed && (
                 <button
                   type="button"
                   disabled={pushStatusLoading}
@@ -399,16 +378,6 @@ export function SettingsPage({}: SettingsPageProps) {
                   className="px-3.5 py-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/50 border border-red-800/50 text-red-300 text-xs font-medium transition-colors disabled:opacity-50"
                 >
                   {pushStatusLoading ? 'Updating...' : 'Disable Push'}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  disabled={pushStatusLoading}
-                  onClick={handleSubscribePush}
-                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1.5"
-                >
-                  <Bell className="w-3.5 h-3.5" />
-                  <span>{pushStatusLoading ? 'Connecting...' : 'Enable PWA Push Alerts'}</span>
                 </button>
               )}
             </div>
