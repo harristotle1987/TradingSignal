@@ -51,14 +51,16 @@ export function corsMiddleware(req: Request, res: Response, next: NextFunction) 
   // Check if requested origin is allowed
   let isAllowed = allowedOrigins.includes(normalizedReqOrigin);
 
-  // In non-production, if no explicit APP_URL/ALLOWED_ORIGINS are set, allow localhost/dev origins
-  if (!isAllowed && isDev) {
+  // Always allow standard dev and platform preview environments (.run.app, .ai.studio, .vercel.app, localhost, same-origin)
+  if (!isAllowed) {
     if (
       allowedOrigins.length === 0 ||
       normalizedReqOrigin.includes('localhost') ||
       normalizedReqOrigin.includes('127.0.0.1') ||
       normalizedReqOrigin.includes('.run.app') ||
-      normalizedReqOrigin.includes('.vercel.app')
+      normalizedReqOrigin.includes('.ai.studio') ||
+      normalizedReqOrigin.includes('.vercel.app') ||
+      (req.headers.host && normalizedReqOrigin.includes(req.headers.host.toLowerCase()))
     ) {
       isAllowed = true;
     }
