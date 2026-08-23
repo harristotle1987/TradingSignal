@@ -14,17 +14,15 @@ import { MarketDiagnostics } from './MarketDiagnostics.js';
 import { NotificationService, NotificationPermissionStatus } from '../utils/notification.js';
 import {
   ShieldCheck,
-  RefreshCw,
-  Activity,
-  Bell,
   BellRing,
   Volume2,
   VolumeX,
   Clock,
+  RefreshCw,
 } from 'lucide-react';
 
 interface SettingsPageProps {
-  // No props needed from configStatus anymore
+  // No props needed
 }
 
 export function SettingsPage({}: SettingsPageProps) {
@@ -33,18 +31,8 @@ export function SettingsPage({}: SettingsPageProps) {
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermissionStatus>(
     NotificationService.getPermission()
   );
-  const [isPushSubscribed, setIsPushSubscribed] = useState<boolean>(false);
-  const [pushStatusLoading, setPushStatusLoading] = useState<boolean>(false);
   const [pushActionMessage, setPushActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [subscriberCount, setSubscriberCount] = useState<number>(0);
   const [soundAlerts, setSoundAlerts] = useState<boolean>(true);
-  const [highPriorityPushEnabled, setHighPriorityPushEnabled] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('high_priority_push_enabled') !== 'false';
-    } catch {
-      return true;
-    }
-  });
   const [scannerSettings, setScannerSettings] = useState<{
     enabled: boolean;
     notificationsEnabled: boolean;
@@ -117,54 +105,20 @@ export function SettingsPage({}: SettingsPageProps) {
     }
   };
 
-  const checkPushSubscription = useCallback(async () => {
-    try {
-      const sub = await NotificationService.getExistingPushSubscription();
-      setIsPushSubscribed(Boolean(sub));
-      setNotificationPermission(NotificationService.getPermission());
-
-      const status = await api.getPushStatus();
-      if (status.success) {
-        setSubscriberCount(status.subscriberCount);
-      }
-    } catch (e) {
-      console.warn('Could not check push status:', e);
-    }
-  }, []);
-
-  const handleUnsubscribePush = async () => {
-    setPushStatusLoading(true);
+  const handleTestAlert = async () => {
     setPushActionMessage(null);
     try {
-      const result = await NotificationService.unsubscribeFromPushNotifications();
+      const result = await NotificationService.sendTestAlert();
+      setNotificationPermission(NotificationService.getPermission());
       if (result.success) {
-        setIsPushSubscribed(false);
-        setPushActionMessage({ type: 'success', text: 'Push notifications disabled on this device.' });
-        await checkPushSubscription();
+        setPushActionMessage({ type: 'success', text: result.message });
       } else {
         setPushActionMessage({ type: 'error', text: result.message });
       }
     } catch (err: any) {
-      setPushActionMessage({ type: 'error', text: err?.message || 'Unsubscribe error' });
-    } finally {
-      setPushStatusLoading(false);
-      setTimeout(() => setPushActionMessage(null), 5000);
-    }
-  };
-
-  const handleTestAlert = async () => {
-    setPushActionMessage(null);
-    try {
-      const success = await NotificationService.sendTestAlert();
-      if (success) {
-        setPushActionMessage({ type: 'success', text: 'Test alert triggered successfully!' });
-      } else {
-        setPushActionMessage({ type: 'error', text: 'Failed to send test alert. Please check permissions.' });
-      }
-    } catch (err: any) {
       setPushActionMessage({ type: 'error', text: err?.message || 'Test alert failed' });
     }
-    setTimeout(() => setPushActionMessage(null), 4000);
+    setTimeout(() => setPushActionMessage(null), 5000);
   };
 
   const fetchMarketStatus = useCallback(async () => {
@@ -182,8 +136,8 @@ export function SettingsPage({}: SettingsPageProps) {
   useEffect(() => {
     fetchMarketStatus();
     fetchScannerSettings();
-    checkPushSubscription();
-  }, [fetchMarketStatus, fetchScannerSettings, checkPushSubscription]);
+    setNotificationPermission(NotificationService.getPermission());
+  }, [fetchMarketStatus, fetchScannerSettings]);
 
   const activeMarketProviders = marketStatus?.providers;
 
@@ -208,64 +162,61 @@ export function SettingsPage({}: SettingsPageProps) {
           </div>
           <div className="space-y-1">
             <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-              Server-Side Credential Isolation Standard
+              Gate 1 &bull; Secure Environment Architecture
             </h2>
             <p className="text-xs text-slate-400 leading-relaxed">
-              All credentials (including the <strong>NVIDIA API Key</strong> and market provider keys) are managed strictly on the backend through environment variables. Credentials are <strong>never stored in localStorage or exposed in frontend code</strong>.
+              All live financial data feeds (Twelve Data, Finnhub, Binance, CoinGecko) are securely proxied through verified server routes.
             </p>
           </div>
         </div>
       </div>
 
-      {/* Provider Connectivity & Live Health Tests */}
+      {/* Market Data Provider Status Card */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-800">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 pb-4 border-b border-slate-800">
           <div>
             <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-              <Activity className="w-4 h-4 text-emerald-400" />
-              Real Market Provider Connectivity Status
+              Market Data Feeds & API Integration Status
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Verified via actual server-side API requests to external market providers (Gate 2)
+              Live connection verification across primary and fallback liquidity providers
             </p>
           </div>
 
           <button
-            id="settings-refresh-market-status-btn"
+            type="button"
             onClick={fetchMarketStatus}
             disabled={loadingMarketStatus}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors disabled:opacity-50 self-start sm:self-auto"
+            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono transition-colors flex items-center gap-1.5 disabled:opacity-50 self-start sm:self-auto"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loadingMarketStatus ? 'animate-spin' : ''}`} />
-            <span>Ping Provider APIs</span>
+            <span>{loadingMarketStatus ? 'Checking...' : 'Check Feeds'}</span>
           </button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Bitget */}
           <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-white">Bitget Market Feed</span>
-              {getProviderConnectionBadge('bitget')}
+              <span className="text-xs font-semibold text-white">Binance (Crypto Spot & Futures)</span>
+              {getProviderConnectionBadge('binance')}
             </div>
             <p className="text-[11px] text-slate-400 font-mono">
-              Type: Spot Crypto &bull; Endpoint: api.bitget.com
+              Type: Primary Crypto &bull; Key: Not required for public market data
             </p>
-            {activeMarketProviders?.bitget?.latencyMs !== undefined && (
-              <p className="text-[10px] text-emerald-400 font-mono">
-                Latency: {activeMarketProviders.bitget.latencyMs}ms
+            {activeMarketProviders?.binance?.errorMessage && (
+              <p className="text-[10px] text-amber-400 font-mono">
+                {activeMarketProviders.binance.errorMessage}
               </p>
             )}
           </div>
 
-          {/* Finnhub */}
           <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-white">Finnhub Market Feed</span>
+              <span className="text-xs font-semibold text-white">Finnhub (Multi-Asset Feed)</span>
               {getProviderConnectionBadge('finnhub')}
             </div>
             <p className="text-[11px] text-slate-400 font-mono">
-              Type: Stocks & Forex &bull; Key: FINNHUB_API_KEY
+              Type: Multi-Asset &bull; Key: FINNHUB_API_KEY
             </p>
             {activeMarketProviders?.finnhub?.errorMessage && (
               <p className="text-[10px] text-amber-400 font-mono">
@@ -274,7 +225,21 @@ export function SettingsPage({}: SettingsPageProps) {
             )}
           </div>
 
-          {/* Twelve Data (Forex) */}
+          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-white">CoinGecko (Crypto Alternative Feed)</span>
+              {getProviderConnectionBadge('coingecko')}
+            </div>
+            <p className="text-[11px] text-slate-400 font-mono">
+              Type: Crypto Fallback &bull; Key: Public API
+            </p>
+            {activeMarketProviders?.coingecko?.errorMessage && (
+              <p className="text-[10px] text-amber-400 font-mono">
+                {activeMarketProviders.coingecko.errorMessage}
+              </p>
+            )}
+          </div>
+
           <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-white">Twelve Data (Forex)</span>
@@ -295,23 +260,21 @@ export function SettingsPage({}: SettingsPageProps) {
       {/* Live Market Diagnostics Component */}
       <MarketDiagnostics />
 
-      {/* Real-Time Browser & Web Push PWA Notifications */}
+      {/* Browser Notifications & Audio Alerts */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 pb-4 border-b border-slate-800">
           <div>
             <h3 className="text-sm font-semibold text-white flex items-center gap-2">
               <BellRing className="w-4 h-4 text-emerald-400" />
-              PWA Push Notifications & Audio Alerts
+              Browser Notifications & Audio Alerts
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Instant background push notifications for verified Gate 9 TOP TRADEs (even when the app is closed)
+              Instant desktop notifications and synthetic audio chimes for verified Gate 9 TOP TRADEs
             </p>
           </div>
 
           <div className="flex items-center gap-2">
-            {isPushSubscribed ? (
-              <StatusBadge status="ok" label="PUSH SUBSCRIBED" />
-            ) : notificationPermission === 'granted' ? (
+            {notificationPermission === 'granted' ? (
               <StatusBadge status="configured" label="PERMISSION GRANTED" />
             ) : notificationPermission === 'denied' ? (
               <StatusBadge status="error" label="BLOCKED IN BROWSER" />
@@ -335,16 +298,9 @@ export function SettingsPage({}: SettingsPageProps) {
         <div className="space-y-4">
           <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-white block">Service Worker Web Push Subscription</span>
-                {subscriberCount > 0 && (
-                  <span className="px-2 py-0.5 text-[10px] font-mono bg-slate-900 border border-slate-700 text-slate-300 rounded">
-                    {subscriberCount} active device{subscriberCount > 1 ? 's' : ''}
-                  </span>
-                )}
-              </div>
+              <span className="text-xs font-semibold text-white block">Desktop & Audio Alert System</span>
               <p className="text-[11px] text-slate-400 leading-relaxed max-w-2xl">
-                Uses W3C standard Push API with cryptographically signed VAPID envelopes. Only genuinely qualifying actionable signals (passed all hard gates and minimum R:R) are notified.
+                Click Test Alert to verify browser notification permissions and audio chime playback.
               </p>
             </div>
 
@@ -365,21 +321,10 @@ export function SettingsPage({}: SettingsPageProps) {
               <button
                 type="button"
                 onClick={handleTestAlert}
-                className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-mono transition-colors"
+                className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors shadow-sm"
               >
-                Test Push
+                Test Alert
               </button>
-
-              {isPushSubscribed && (
-                <button
-                  type="button"
-                  disabled={pushStatusLoading}
-                  onClick={handleUnsubscribePush}
-                  className="px-3.5 py-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/50 border border-red-800/50 text-red-300 text-xs font-medium transition-colors disabled:opacity-50"
-                >
-                  {pushStatusLoading ? 'Updating...' : 'Disable Push'}
-                </button>
-              )}
             </div>
           </div>
         </div>
@@ -461,44 +406,6 @@ export function SettingsPage({}: SettingsPageProps) {
                 {scannerSettings?.notificationsEnabled ? 'NOTIFY ON' : 'NOTIFY OFF'}
               </button>
             </div>
-
-            {/* High-Priority Real-Time Push Notifications Toggle */}
-            <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 flex items-center justify-between gap-4 md:col-span-2">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-white block">High-Priority Trading Signals Push Alerts</span>
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 bg-emerald-950 text-emerald-300 border border-emerald-500/40 rounded font-bold">
-                    PRIORITY PUSH
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-400">
-                  Enables instant real-time push notifications delivered via Web Push service specifically for high-priority trading signals (Top Trades / Actionable Signals).
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  const nextVal = !highPriorityPushEnabled;
-                  setHighPriorityPushEnabled(nextVal);
-                  try {
-                    localStorage.setItem('high_priority_push_enabled', String(nextVal));
-                  } catch {}
-                  setScannerMessage({
-                    type: 'success',
-                    text: nextVal ? 'High-priority push alerts enabled.' : 'High-priority push alerts muted.',
-                  });
-                  setTimeout(() => setScannerMessage(null), 3000);
-                }}
-                className={`px-3 py-1.5 rounded-lg border text-xs font-mono transition-colors min-w-[100px] shrink-0 ${
-                  highPriorityPushEnabled
-                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                    : 'bg-slate-900 border-slate-800 text-slate-500'
-                }`}
-              >
-                {highPriorityPushEnabled ? 'PUSH ACTIVE' : 'PUSH MUTED'}
-              </button>
-            </div>
           </div>
 
           {/* Automated Signal Interval Selection */}
@@ -538,61 +445,22 @@ export function SettingsPage({}: SettingsPageProps) {
           {/* Statistics and Controls */}
           <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-white">Daily Automated Signal Cap</span>
-                  <span className="text-[11px] font-mono text-slate-400">
-                    ({scannerSettings?.signalsSentTimestamps?.length ?? 0} / {scannerSettings?.limit ?? 5} today)
-                  </span>
-                </div>
-                
-                {/* Custom Progress Bar */}
-                <div className="w-48 h-1.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
-                  <div
-                    className="h-full bg-emerald-400 transition-all duration-500"
-                    style={{
-                      width: `${Math.min(100, (((scannerSettings?.signalsSentTimestamps?.length ?? 0) / (scannerSettings?.limit ?? 5)) * 100))}%`
-                    }}
-                  />
-                </div>
-                <p className="text-[10px] text-slate-400 leading-relaxed">
-                  Strict safety ceiling limit to prevent over-trading. Maximum automated signals per UTC day.
+              <div className="space-y-1">
+                <span className="text-xs font-semibold text-white block">Autonomous Scan Diagnostics</span>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Last Scan: {scannerSettings?.lastScanTime ? new Date(scannerSettings.lastScanTime).toLocaleString() : 'Never'} &bull; Dispatched Today: {scannerSettings?.signalsSentTimestamps?.length || 0} / {scannerSettings?.limit || 5}
                 </p>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleManualScanTrigger}
-                  disabled={triggeringScan || loadingScanner}
-                  className="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-mono transition-colors flex items-center gap-2 disabled:opacity-50"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${triggeringScan ? 'animate-spin' : ''}`} />
-                  <span>{triggeringScan ? 'RUNNING SWEEP...' : 'TRIGGER MANUAL SWEEP'}</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="pt-3 border-t border-slate-800/60 flex flex-wrap gap-4 text-[10px] text-slate-400 font-mono">
-              <div>
-                <span>Last Scan: </span>
-                <span className="text-slate-200">
-                  {scannerSettings?.lastScanTime && scannerSettings.lastScanTime > 0
-                    ? new Date(scannerSettings.lastScanTime).toLocaleString()
-                    : 'Never'}
-                </span>
-              </div>
-              <div className="hidden sm:block text-slate-600">|</div>
-              <div>
-                <span>Next Automated Run: </span>
-                <span className="text-emerald-400">
-                  {scannerSettings?.lastScanTime && scannerSettings.lastScanTime > 0
-                    ? new Date(
-                        scannerSettings.lastScanTime + (scannerSettings.intervalMinutes ?? 30) * 60 * 1000
-                      ).toLocaleString()
-                    : 'Pending'}
-                </span>
-              </div>
+              <button
+                type="button"
+                onClick={handleManualScanTrigger}
+                disabled={triggeringScan}
+                className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1.5 shrink-0"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${triggeringScan ? 'animate-spin' : ''}`} />
+                <span>{triggeringScan ? 'Running Scan...' : 'Trigger Now'}</span>
+              </button>
             </div>
           </div>
         </div>
@@ -600,4 +468,3 @@ export function SettingsPage({}: SettingsPageProps) {
     </div>
   );
 }
-

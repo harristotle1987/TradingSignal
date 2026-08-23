@@ -1,10 +1,9 @@
 /**
- * Web Browser, Audio & Web Push Notification Service
+ * Web Browser, Audio & Notification Service
  *
  * Provides:
- * 1. Native Service-Worker Push Notification subscriptions (PWA background alerts).
- * 2. Instant in-app audio chime synthesis using Web Audio API.
- * 3. In-tab fallback notifications for active users.
+ * 1. Instant in-app audio chime synthesis using Web Audio API.
+ * 2. Native browser desktop notifications for active users.
  *
  * CRITICAL RULE:
  * Notification permission is NEVER requested on page load.
@@ -12,25 +11,9 @@
  */
 
 import { TradingSignal } from '../types/index.js';
-import { api } from '../api/client.js';
-import { formatRankTier, formatLabel } from './formatters.js';
+import { formatRankTier } from './formatters.js';
 
 export type NotificationPermissionStatus = 'granted' | 'denied' | 'default' | 'unsupported';
-
-/**
- * Converts a Base64-encoded VAPID public key into a Uint8Array
- * required by navigator.serviceWorker registration.pushManager.subscribe().
- */
-function urlBase64ToUint8Array(base64String: string): Uint8Array {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
-}
 
 export class NotificationService {
   private static notifiedIds = new Set<string>();
@@ -40,18 +23,6 @@ export class NotificationService {
    */
   static isSupported(): boolean {
     return typeof window !== 'undefined' && 'Notification' in window;
-  }
-
-  /**
-   * Check if Web Push (PushManager + ServiceWorker) is supported.
-   */
-  static isPushSupported(): boolean {
-    return (
-      typeof window !== 'undefined' &&
-      'serviceWorker' in navigator &&
-      'PushManager' in window &&
-      'Notification' in window
-    );
   }
 
   /**
@@ -74,114 +45,6 @@ export class NotificationService {
     } catch (err) {
       console.warn('Failed to request notification permission:', err);
       return Notification.permission as NotificationPermissionStatus;
-    }
-  }
-
-  /**
-   * Subscribes the current PWA / browser to backend Web Push alerts.
-   * NEVER runs automatically on page load.
-   */
-  static async subscribeToPushNotifications(): Promise<{
-    success: boolean;
-    status: NotificationPermissionStatus;
-    message?: string;
-    subscription?: PushSubscription | null;
-  }> {
-    if (!this.isPushSupported()) {
-      return {
-        success: false,
-        status: 'unsupported',
-        message: 'Push notifications are not supported on this browser or platform.',
-      };
-    }
-
-    try {
-      // 1. Explicitly request permission
-      const permission = await this.requestPermission();
-      if (permission !== 'granted') {
-        return {
-          success: false,
-          status: permission,
-          message: permission === 'denied' 
-            ? 'Notifications are blocked in your browser settings. Please enable them to receive trading alerts.' 
-            : 'Notification permission was not granted.',
-        };
-      }
-
-      // 2. Fetch VAPID public key from backend
-      const { publicKey } = await api.getVapidPublicKey();
-      if (!publicKey) {
-        throw new Error('Server VAPID public key could not be retrieved.');
-      }
-
-      // 3. Ensure Service Worker is ready
-      const registration = await navigator.serviceWorker.ready;
-
-      // 4. Subscribe to PushManager
-      const convertedVapidKey = urlBase64ToUint8Array(publicKey);
-      const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: convertedVapidKey,
-      });
-
-      // 5. Send subscription to server
-      const subJson = subscription.toJSON();
-      await api.subscribePush(subJson);
-
-      // Play audio confirmation chime
-      this.playAlertChime();
-
-      return {
-        success: true,
-        status: 'granted',
-        message: 'Push notifications successfully connected! You will receive instant alerts for qualified setups.',
-        subscription,
-      };
-    } catch (err: any) {
-      console.error('Failed to subscribe to push notifications:', err);
-      return {
-        success: false,
-        status: this.getPermission(),
-        message: err?.message || 'Failed to register push subscription.',
-      };
-    }
-  }
-
-  /**
-   * Unsubscribes the current client from Push Notifications.
-   */
-  static async unsubscribeFromPushNotifications(): Promise<{ success: boolean; message: string }> {
-    if (!this.isPushSupported()) {
-      return { success: false, message: 'Push notifications not supported.' };
-    }
-
-    try {
-      const registration = await navigator.serviceWorker.ready;
-      const subscription = await registration.pushManager.getSubscription();
-
-      if (subscription) {
-        const endpoint = subscription.endpoint;
-        await subscription.unsubscribe();
-        await api.unsubscribePush(endpoint);
-      }
-
-      return { success: true, message: 'Push notifications disabled successfully.' };
-    } catch (err: any) {
-      console.error('Error during push unsubscription:', err);
-      return { success: false, message: err?.message || 'Failed to unsubscribe.' };
-    }
-  }
-
-  /**
-   * Gets the existing push subscription if already active.
-   */
-  static async getExistingPushSubscription(): Promise<PushSubscription | null> {
-    if (!this.isPushSupported()) return null;
-    try {
-      const registration = await navigator.serviceWorker.ready;
-      return await registration.pushManager.getSubscription();
-    } catch {
-      return null;
     }
   }
 
@@ -321,28 +184,28 @@ export class NotificationService {
   }
 
   /**
-   * Sends a test alert via backend push service or browser fallback.
+   * Sends a test alert with permission check and audio chime.
    */
-  static async sendTestAlert(): Promise<boolean> {
+  static async sendTestAlert(): Promise<{ success: boolean; message: string }> {
     this.playAlertChime();
 
-    try {
-      const existingSub = await this.getExistingPushSubscription();
-      if (existingSub) {
-        await api.sendTestPushNotification(existingSub.toJSON());
-        return true;
-      }
-    } catch (err) {
-      console.warn('Push test failed, falling back to local Notification API:', err);
+    let perm = this.getPermission();
+    if (perm !== 'granted') {
+      perm = await this.requestPermission();
     }
 
-    if (this.getPermission() !== 'granted') {
-      return false;
+    if (perm !== 'granted') {
+      return {
+        success: false,
+        message: perm === 'denied'
+          ? 'Notifications are blocked in your browser settings. Please enable notifications for this site.'
+          : 'Notification permission was not granted.',
+      };
     }
 
     try {
       const notification = new Notification('🔔 Trading Signal AI Alert Active', {
-        body: 'Push notifications are configured! You will receive instant alerts whenever a new verified trade is qualified.',
+        body: 'Browser notifications are configured! You will receive instant alerts whenever a new verified trade is qualified.',
         icon: '/icon-192.png',
         tag: `test_alert_${Date.now()}`,
       });
@@ -352,10 +215,10 @@ export class NotificationService {
         notification.close();
       };
 
-      return true;
-    } catch (err) {
+      return { success: true, message: 'Test alert triggered successfully! Check your notifications.' };
+    } catch (err: any) {
       console.warn('Test notification error:', err);
-      return false;
+      return { success: false, message: err?.message || 'Failed to send test alert.' };
     }
   }
 }
