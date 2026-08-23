@@ -50,11 +50,9 @@ import { SignalLogger } from './SignalLogger.js';
 import { SignalFingerprint } from './SignalFingerprint.js';
 import { CooldownManager } from './CooldownManager.js';
 import { MarketStructureDetector } from './MarketStructureDetector.js';
-import { CorrelationFilter } from './CorrelationFilter.js';
 import { SignalAuditStore } from './SignalAuditStore.js';
 import { ScannerPersistence } from './ScannerPersistence.js';
 import { OpportunityFunnelStore, OpportunityFunnelEngine } from './Gate26OpportunityFunnel.js';
-import { Gate27RegimeThresholds } from './Gate27RegimeThresholds.js';
 import { Gate35SignalFunnelAnalytics } from './Gate35SignalFunnelAnalytics.js';
 import { logger } from '../logger.js';
 
@@ -222,7 +220,7 @@ export class SignalEngine {
    * Stage 3: Deep multi-timeframe analysis on top candidates only (strictly conserves API calls).
    * Stage 4: Ranking qualified setups (at most 5 returned, top 2 marked as BEST TRADE, rest as suggestions).
    */
-  async generateSignal(symbol = 'EURUSD', category?: string): Promise<SignalGenerationResponse> {
+  async generateSignal(symbol = 'EURUSD', category?: string, persistAndActivate: boolean = true): Promise<SignalGenerationResponse> {
     const cleanSymbol = symbol.trim().toUpperCase();
     const now = Date.now();
 
@@ -477,6 +475,12 @@ export class SignalEngine {
         if (scoring.isValid && scoring.direction) {
           const setupCandles = candlesMap['15m'] || candlesMap['1h'] || candlesMap['5m'] || [];
 
+          // Additive Confluence Gates evaluated early for Gate 91 optimized pathways
+          const gate12 = setupCandles.length >= 25 ? Gate12Divergence.analyze(setupCandles, scoring.direction) : { confirmed: false, score: 50, direction: 'NONE' as const, type: 'NONE' as const, strength: 'NONE' as const, summary: 'No divergence analysis due to insufficient data length', reasons: [] as string[] };
+          const gate13 = setupCandles.length >= 25 ? Gate13BreakoutQuality.analyze(setupCandles, scoring.direction) : { breakoutQuality: 'UNCONFIRMED_BREAKOUT', breakoutScore: 0, breakoutType: 'NONE', retestStatus: 'NONE', volumeConfirmation: 'NONE', reasons: [] as string[] };
+          const gate14 = setupCandles.length >= 25 ? Gate14PullbackQuality.analyze(setupCandles, scoring.direction) : { pullbackQuality: 'NONE', pullbackScore: 0, pullbackDepth: 0, structurePreserved: false, reversalRisk: 'NONE', reasons: [] as string[] };
+          const gate15 = setupCandles.length >= 25 ? Gate15LiquiditySweep.analyze(setupCandles, scoring.direction) : { confirmationStatus: 'UNCONFIRMED', sweepDirection: 'NONE', sweepLevel: 0, sweepStrength: 0, sweepScore: 0, reasons: [] as string[] };
+
           // Gate 2: Multi-Timeframe Confluence (Trend)
           const gate2 = Gate2MTFConfluence.evaluateConfluence(scoring.direction, candlesMap);
           logger.info(`[Gate 2 MTF Confluence] ${asset}: HTF=${gate2.htfDirection}, MTF=${gate2.mtfDirection}, LTF=${gate2.ltfDirection}, SCORE=${gate2.alignmentScore}, STATUS=${gate2.confluenceStatus}`);
@@ -509,8 +513,20 @@ export class SignalEngine {
           const gate9 = Gate9RiskManagement.calculate(baselinePrice, scoring.direction, setupCandles);
           logger.info(`[Gate 9 Risk] ${asset}: RR=${gate9.rrRatio.toFixed(2)}, EV=${gate9.expectedValue.toFixed(2)}, SCORE=${gate9.riskScore}`);
 
+          // Log early gates
+          logger.info(`[Gate 12 Divergence] ${asset}: DIR=${gate12.direction}, TYPE=${gate12.type}, STR=${gate12.strength}, CONFIRMED=${gate12.confirmed}, SCORE=${gate12.score}`);
+          logger.info(`[Gate 13 Breakout Quality] ${asset}: QUALITY=${gate13.breakoutQuality}, SCORE=${gate13.breakoutScore}, TYPE=${gate13.breakoutType}, RETEST=${gate13.retestStatus}, VOL=${gate13.volumeConfirmation}`);
+          logger.info(`[Gate 14 Pullback Quality] ${asset}: QUALITY=${gate14.pullbackQuality}, SCORE=${gate14.pullbackScore}, DEPTH=${gate14.pullbackDepth}%, PRESERVED=${gate14.structurePreserved}, RISK=${gate14.reversalRisk}`);
+          logger.info(`[Gate 15 Liquidity Sweep] ${asset}: STATUS=${gate15.confirmationStatus}, DIR=${gate15.sweepDirection}, LEVEL=${gate15.sweepLevel}, STR=${gate15.sweepStrength}, SCORE=${gate15.sweepScore}`);
+
+          // Add reasons to scoring
+          if (gate12.direction !== 'NONE' && gate12.reasons && gate12.reasons.length > 0) scoring.confluenceReasons.push(...gate12.reasons);
+          if (gate13.breakoutQuality !== 'UNCONFIRMED_BREAKOUT' && gate13.reasons && gate13.reasons.length > 0) scoring.confluenceReasons.push(...gate13.reasons);
+          if (gate14.reasons && gate14.reasons.length > 0) scoring.confluenceReasons.push(...gate14.reasons);
+          if (gate15.confirmationStatus !== 'UNCONFIRMED' && gate15.reasons && gate15.reasons.length > 0) scoring.confluenceReasons.push(...gate15.reasons);
+
           // -----------------------------------------------------------------
-          // DIRECTIONAL CONFIRMATION MODEL (2 OF 3 REQUIRED: Trend, Structure, Momentum)
+          // DIRECTIONAL CONFIRMATION & OPTIMIZED PATHWAYS MODEL (GATE 91)
           // -----------------------------------------------------------------
           const isDirBullish = scoring.direction === 'BUY';
           const isDirBearish = scoring.direction === 'SELL';
@@ -519,11 +535,38 @@ export class SignalEngine {
           const structurePass = gate3.score >= 40 || (isDirBullish && gate3.direction === 'BULLISH') || (isDirBearish && gate3.direction === 'BEARISH');
           const momentumPass = gate4.score >= 40 || (isDirBullish && gate4.momentumDirection === 'BULLISH') || (isDirBearish && gate4.momentumDirection === 'BEARISH');
 
-          const directionalPasses = (trendPass ? 1 : 0) + (structurePass ? 1 : 0) + (momentumPass ? 1 : 0);
+          // Gate 91: 4 High-Quality Optimized Pathways
+          // 1. Strong trend + valid entry + good R:R
+          const hasStrongTrend = gate2.alignmentScore >= 50 && gate2.confluenceStatus !== 'CONTRADICTION';
+          const hasValidEntry = gate8.entryScore >= 40 || (gate8.entryQuality !== 'OVEREXTENDED' && gate8.entryQuality !== 'WAIT_FOR_PULLBACK' && gate8.chaseRisk !== 'EXTREME');
+          const hasGoodRR = gate9.rrRatio >= thresholds.minimumRR;
+          const isStrongTrendPath = hasStrongTrend && hasValidEntry && hasGoodRR;
 
-          if (directionalPasses < 2) {
+          // 2. Good breakout + valid structure + good R:R
+          const hasGoodBreakout = gate13.breakoutScore >= 45 || gate13.breakoutQuality === 'STRONG_BREAKOUT' || gate13.breakoutQuality === 'RETESTED_BREAKOUT' || (scoring.marketRegime as string) === 'BREAKOUT';
+          const hasValidStructure = structurePass;
+          const isGoodBreakoutPath = hasGoodBreakout && hasValidStructure && hasGoodRR;
+
+          // 3. Good reversal + valid structure + acceptable risk
+          const hasGoodReversal = gate12.confirmed === true || gate12.score >= 40 || gate15.confirmationStatus === 'CONFIRMED_SWEEP' || gate15.sweepScore >= 40 || (scoring.marketRegime as string) === 'RANGE_REVERSAL' || (scoring.marketRegime as string) === 'RANGE';
+          const hasAcceptableRisk = gate9.riskScore >= 40;
+          const isGoodReversalPath = hasGoodReversal && hasValidStructure && hasAcceptableRisk;
+
+          // 4. Good momentum setup + valid entry + acceptable risk
+          const hasGoodMomentum = gate4.score >= 45 || momentumPass;
+          const isGoodMomentumPath = hasGoodMomentum && hasValidEntry && hasAcceptableRisk;
+
+          const anyOptimizedPathPassed = isStrongTrendPath || isGoodBreakoutPath || isGoodReversalPath || isGoodMomentumPath;
+
+          const directionalPasses = (trendPass ? 1 : 0) + (structurePass ? 1 : 0) + (momentumPass ? 1 : 0);
+          const hasDirectionalConfirmation = anyOptimizedPathPassed || (directionalPasses >= 2);
+
+          // Save the value in scoring so we can reference it later
+          (scoring as any).anyOptimizedPathPassed = anyOptimizedPathPassed;
+
+          if (!hasDirectionalConfirmation) {
             scoring.isValid = false;
-            scoring.rejectionReason = `REJECTED: DIRECTIONAL_CONFIRMATION_FAILED. Directional Confirmation Failed: Required 2 of 3 (Trend, Structure, Momentum) to pass, but only ${directionalPasses} passed (Trend:${trendPass}, Structure:${structurePass}, Momentum:${momentumPass})`;
+            scoring.rejectionReason = `REJECTED: DIRECTIONAL_CONFIRMATION_FAILED. Directional Confirmation Failed: Required 2 of 3 (Trend, Structure, Momentum) or one of the 4 optimized pathways, but none passed. (Trend:${trendPass}, Structure:${structurePass}, Momentum:${momentumPass})`;
           } else if (gate7.tradingAllowed === 'NO') {
             scoring.isValid = false;
             scoring.rejectionReason = `REJECTED: MARKET_CONTEXT_BLOCKED. Gate 7 Market Context Blocked: ${gate7.reasons.join('; ')}`;
@@ -564,43 +607,6 @@ export class SignalEngine {
               scoring.tp3 = gate9.tp3;
               scoring.riskRewardRatio = gate9.rrRatio;
             }
-          }
-        }
-
-        // Gate 12: Divergence Analysis (Additive Confluence Module)
-        const divergenceCandles = candlesMap['15m'] || candlesMap['1h'] || candlesMap['5m'] || [];
-        if (scoring.isValid && divergenceCandles.length >= 25) {
-          const gate12 = Gate12Divergence.analyze(divergenceCandles, scoring.direction);
-          logger.info(`[Gate 12 Divergence] ${asset}: DIR=${gate12.direction}, TYPE=${gate12.type}, STR=${gate12.strength}, CONFIRMED=${gate12.confirmed}, SCORE=${gate12.score}`);
-          if (gate12.direction !== 'NONE' && gate12.reasons.length > 0) {
-            scoring.confluenceReasons.push(...gate12.reasons);
-          }
-        }
-
-        // Gate 13: Breakout Quality Engine (Additive Confluence Module)
-        if (scoring.isValid && divergenceCandles.length >= 25) {
-          const gate13 = Gate13BreakoutQuality.analyze(divergenceCandles, scoring.direction);
-          logger.info(`[Gate 13 Breakout Quality] ${asset}: QUALITY=${gate13.breakoutQuality}, SCORE=${gate13.breakoutScore}, TYPE=${gate13.breakoutType}, RETEST=${gate13.retestStatus}, VOL=${gate13.volumeConfirmation}`);
-          if (gate13.breakoutQuality !== 'UNCONFIRMED_BREAKOUT' && gate13.reasons.length > 0) {
-            scoring.confluenceReasons.push(...gate13.reasons);
-          }
-        }
-
-        // Gate 14: Pullback Quality Engine (Additive Confluence Module)
-        if (scoring.isValid && divergenceCandles.length >= 25) {
-          const gate14 = Gate14PullbackQuality.analyze(divergenceCandles, scoring.direction);
-          logger.info(`[Gate 14 Pullback Quality] ${asset}: QUALITY=${gate14.pullbackQuality}, SCORE=${gate14.pullbackScore}, DEPTH=${gate14.pullbackDepth}%, PRESERVED=${gate14.structurePreserved}, RISK=${gate14.reversalRisk}`);
-          if (gate14.reasons.length > 0) {
-            scoring.confluenceReasons.push(...gate14.reasons);
-          }
-        }
-
-        // Gate 15: False Breakout & Liquidity Sweep Engine (Additive Confluence Module)
-        if (scoring.isValid && divergenceCandles.length >= 25) {
-          const gate15 = Gate15LiquiditySweep.analyze(divergenceCandles, scoring.direction);
-          logger.info(`[Gate 15 Liquidity Sweep] ${asset}: STATUS=${gate15.confirmationStatus}, DIR=${gate15.sweepDirection}, LEVEL=${gate15.sweepLevel}, STR=${gate15.sweepStrength}, SCORE=${gate15.sweepScore}`);
-          if (gate15.confirmationStatus !== 'UNCONFIRMED' && gate15.reasons.length > 0) {
-            scoring.confluenceReasons.push(...gate15.reasons);
           }
         }
 
@@ -922,8 +928,11 @@ export class SignalEngine {
           finalTP = tpBeforeAI;
           scoring.score = scoreBeforeAI;
         }
-        if (winRate <= thresholds.minimumWinProbability) {
-          const reason = `REJECTED: WIN_RATE_BELOW_THRESHOLD. Estimated win rate (${winRate}% <= ${thresholds.minimumWinProbability}% threshold)`;
+        const anyOptimizedPathPassed = !!(scoring as any).anyOptimizedPathPassed;
+        const effectiveMinWinProb = anyOptimizedPathPassed ? 35 : thresholds.minimumWinProbability;
+
+        if (winRate <= effectiveMinWinProb) {
+          const reason = `REJECTED: WIN_RATE_BELOW_THRESHOLD. Estimated win rate (${winRate}% <= ${effectiveMinWinProb}% threshold)`;
           logger.info(`[Stage 3 AI] Rejected ${asset} due to ${reason}`);
           SignalAuditStore.logAudit({
             symbol: asset,
@@ -1105,31 +1114,33 @@ export class SignalEngine {
         }
 
         if (aiRejected) {
-          logger.info(`[Stage 3 AI] Rejected ${asset} due to ${aiRejectionReason}`);
-          SignalAuditStore.logAudit({
-            symbol: asset,
-            direction: scoring.direction,
-            timeframe: 'Multi-TF Realism Setup',
-            primaryStrategy: primaryStrategyName,
-            strategy: primaryStrategyName,
-            passedStrategies: scoring.passedStrategies || [],
-            failedStrategies: scoring.failedStrategies || [],
-            marketRegime: scoring.marketRegime,
-            regime: scoring.marketRegime,
-            threshold: effectiveFinalScoreHurdle,
-            actualScore: scoring.score,
-            marginAboveThreshold,
-            atr: scoring.technicalMetrics?.atr || 0,
-            dataFreshnessSeconds,
-            providerAgreement: crossCheck.agreementPct >= 99.5,
-            providerAgreementPct: crossCheck.agreementPct,
-            expectedRR: finalRR,
-            score: scoring.score,
-            status: 'REJECTED',
-            rejectionReason: aiRejectionReason,
-            fingerprint: fp,
-          });
-          continue;
+          if (thresholds.AIConfirmationMode === 'REQUIRED') {
+            // Explicit HARD safety rule required by user configuration (AIConfirmationMode = REQUIRED)
+            logger.info(`[Stage 3 AI] Hard safety rule enforced: Rejected ${asset} due to ${aiRejectionReason}`);
+            SignalAuditStore.logAudit({
+              symbol: asset,
+              direction: scoring.direction,
+              timeframe: 'Multi-TF Realism Setup',
+              primaryStrategy: primaryStrategyName,
+              passedStrategies: scoring.passedStrategies || [],
+              failedStrategies: scoring.failedStrategies || [],
+              marketRegime: scoring.marketRegime,
+              atr: scoring.technicalMetrics?.atr || 0,
+              dataFreshnessSeconds,
+              providerAgreement: crossCheck.agreementPct >= 99.5,
+              providerAgreementPct: crossCheck.agreementPct,
+              expectedRR: finalRR,
+              score: scoring.score,
+              status: 'REJECTED',
+              rejectionReason: aiRejectionReason,
+              fingerprint: fp,
+            });
+            continue;
+          } else {
+            // Gate 86 Policy: Secondary AI qualitative assessment in OPTIONAL mode must NOT independently veto a core-valid trade
+            logger.info(`[Stage 3 AI] AI evaluation was negative (${aiRejectionReason}), but Gate 86 policy prevents secondary AI analytics from independently rejecting a core-valid signal in ${thresholds.AIConfirmationMode} mode.`);
+            aiRejectionReason = undefined; // Clear rejection reason so candidate passes to ranking
+          }
         }
         const providerName = classification === 'CRYPTO'
           ? 'Bitget Live Feed'
@@ -1228,6 +1239,7 @@ export class SignalEngine {
           validationReason: 'VALID',
           aiAssessment: aiResult.aiAssessment,
           score: scoring.score,
+          coreScore: scoring.coreScore ?? scoring.score,
           entryHitTimestamp: null,
           tp1Status: 'PENDING',
           tp2Status: 'PENDING',
@@ -1245,54 +1257,10 @@ export class SignalEngine {
         });
       }
 
-      // 4. Correlation Filter Across Candidates
-      const correlationInput = candidates.map((c) => ({
-        candidate: c,
-        symbol: c.signal.symbol,
-        direction: c.signal.direction,
-        score: c.signal.score,
-      }));
-      const activeSignalsArray = Array.from(this.activeSignals.values())
-        .filter(isActionableSignal)
-        .map((s) => ({
-          symbol: s.symbol,
-          direction: s.direction,
-          score: s.score,
-        }));
-
-      const correlationResult = CorrelationFilter.filterCorrelatedCandidates(correlationInput, activeSignalsArray);
-
-      // Log audit for candidates rejected by correlation filter
-      for (const rej of correlationResult.rejected) {
-        const c = rej.candidate.candidate;
-        const fp = SignalFingerprint.generateFingerprint({
-          symbol: c.signal.symbol,
-          direction: c.signal.direction,
-          entryPrice: c.signal.entryPrice,
-          timeframe: c.signal.timeframe,
-          primaryStrategy: c.signal.strategy,
-          atr: c.scoring.technicalMetrics?.atr,
-        });
-        SignalAuditStore.logAudit({
-          symbol: c.signal.symbol,
-          direction: c.signal.direction,
-          timeframe: c.signal.timeframe,
-          primaryStrategy: c.signal.strategy,
-          passedStrategies: c.scoring.passedStrategies || [],
-          failedStrategies: c.scoring.failedStrategies || [],
-          marketRegime: c.scoring.marketRegime,
-          atr: c.scoring.technicalMetrics?.atr || 0,
-          dataFreshnessSeconds: 0,
-          providerAgreement: true,
-          expectedRR: c.signal.riskRewardRatio,
-          score: c.signal.score,
-          status: 'REJECTED',
-          rejectionReason: rej.reason,
-          fingerprint: fp,
-        });
-      }
-
-      const filteredCandidates = correlationResult.accepted.map((a) => a.candidate);
+      // 4. Gate 17 / GATE 81: Candidate Pipeline Flow (Secondary Ranking & Exposure Management)
+      // Correlated setups are analyzed, clustered, and ranked via Gate 17 and TradeRankingEngine
+      // rather than hard-rejecting core-valid candidates at this stage.
+      const filteredCandidates = [...candidates];
 
       // Stage 3.5: Gate 16 Relative Strength Ranking across Comparable Universes
       const rsInputs = filteredCandidates.map((c) => ({
@@ -1407,15 +1375,10 @@ export class SignalEngine {
             cand.signal.empiricalCalibratedProbability = null;
             cand.signal.empiricalProbability = null;
             cand.signal.isEmpiricallyCalibrated = false;
+            // Fallback to model estimated win rate without pretending it is statistically calibrated empirical probability
+            cand.signal.estimatedWinRate = cand.signal.modelEstimatedWinRate || cand.signal.estimatedWinRate;
             if (probThresholds.requireEmpiricalCalibration) {
-              const rejectReason = `REJECTED: INSUFFICIENT_EMPIRICAL_SAMPLE. Empirical calibration unavailable (N=${calibration.sampleSize} < 30) and requireEmpiricalCalibration is active.`;
-              cand.signal.status = 'REJECTED';
-              cand.signal.rejectionReason = rejectReason;
-              logger.info(`[Gate 41 Safety] ${cand.signal.symbol}: ${rejectReason}`);
-              continue;
-            } else {
-              // Fallback to model estimated win rate without pretending it is statistically calibrated empirical probability
-              cand.signal.estimatedWinRate = cand.signal.modelEstimatedWinRate || cand.signal.estimatedWinRate;
+              logger.info(`[Gate 41/80 Policy] ${cand.signal.symbol}: Empirical calibration sample small (N=${calibration.sampleSize} < 30). Falling back to model probability; secondary analytics cannot reject core-valid signal.`);
             }
           }
         } else if (probThresholds.probabilitySource === 'MODEL') {
@@ -1438,37 +1401,45 @@ export class SignalEngine {
       filteredCandidates.length = 0;
       filteredCandidates.push(...validCandidates);
 
-      // Stage 3.9: Gate 21 Walk-Forward Validation
+      // Stage 3.9: Gate 21 Walk-Forward Validation (Gate 85: Informational & Ranking Context Only)
       for (const cand of filteredCandidates) {
-        const wfResult = Gate21WalkForwardValidation.validateStrategy(
-          cand.signal.selectedStrategy || cand.signal.strategy
-        );
+        try {
+          const wfResult = Gate21WalkForwardValidation.validateStrategy(
+            cand.signal.selectedStrategy || cand.signal.strategy
+          );
 
-        cand.signal.walkForwardEfficiency = wfResult.walkForwardEfficiency;
-        cand.signal.walkForwardStatus = wfResult.status;
-        cand.signal.overfitRiskDetected = wfResult.overfitRiskDetected;
+          cand.signal.walkForwardEfficiency = wfResult.walkForwardEfficiency;
+          cand.signal.walkForwardStatus = wfResult.status;
+          cand.signal.overfitRiskDetected = wfResult.overfitRiskDetected;
 
-        if (wfResult.reasons && wfResult.reasons.length > 0) {
-          cand.signal.confluenceReasons.push(...wfResult.reasons);
+          if (wfResult.reasons && wfResult.reasons.length > 0) {
+            cand.signal.confluenceReasons.push(...wfResult.reasons);
+          }
+          logger.info(`[Gate 21 Walk-Forward] ${cand.signal.symbol}: STRATEGY=${wfResult.strategy}, WFE=${wfResult.walkForwardEfficiency !== null ? wfResult.walkForwardEfficiency + '%' : 'N/A'}, STATUS=${wfResult.status}, OVERFIT_RISK=${wfResult.overfitRiskDetected}`);
+        } catch (err: any) {
+          logger.warn(`[Gate 21 Walk-Forward] ${cand.signal.symbol}: Validation unavailable (${err?.message || err}). Candidate preserved without veto.`);
         }
-        logger.info(`[Gate 21 Walk-Forward] ${cand.signal.symbol}: STRATEGY=${wfResult.strategy}, WFE=${wfResult.walkForwardEfficiency !== null ? wfResult.walkForwardEfficiency + '%' : 'N/A'}, STATUS=${wfResult.status}, OVERFIT_RISK=${wfResult.overfitRiskDetected}`);
       }
 
-      // Stage 3.10: Gate 22 Monte Carlo Trade-Sequence Analysis
+      // Stage 3.10: Gate 22 Monte Carlo Trade-Sequence Analysis (Gate 85: Informational & Risk Context Only)
       for (const cand of filteredCandidates) {
-        const mcResult = Gate22MonteCarloSimulation.runSimulation(
-          cand.signal.selectedStrategy || cand.signal.strategy
-        );
+        try {
+          const mcResult = Gate22MonteCarloSimulation.runSimulation(
+            cand.signal.selectedStrategy || cand.signal.strategy
+          );
 
-        cand.signal.monteCarloMedianMaxDrawdownR = mcResult.medianMaxDrawdownR;
-        cand.signal.monteCarlo95PctDrawdownR = mcResult.percentile95MaxDrawdownR;
-        cand.signal.monteCarloRiskOfRuinPct = mcResult.riskOfRuinPct;
-        cand.signal.monteCarloSimulationStatus = mcResult.simulationStatus;
+          cand.signal.monteCarloMedianMaxDrawdownR = mcResult.medianMaxDrawdownR;
+          cand.signal.monteCarlo95PctDrawdownR = mcResult.percentile95MaxDrawdownR;
+          cand.signal.monteCarloRiskOfRuinPct = mcResult.riskOfRuinPct;
+          cand.signal.monteCarloSimulationStatus = mcResult.simulationStatus;
 
-        if (mcResult.reasons && mcResult.reasons.length > 0) {
-          cand.signal.confluenceReasons.push(...mcResult.reasons);
+          if (mcResult.reasons && mcResult.reasons.length > 0) {
+            cand.signal.confluenceReasons.push(...mcResult.reasons);
+          }
+          logger.info(`[Gate 22 Monte Carlo] ${cand.signal.symbol}: MED_DD=${mcResult.medianMaxDrawdownR !== null ? mcResult.medianMaxDrawdownR + 'R' : 'N/A'}, 95th_DD=${mcResult.percentile95MaxDrawdownR !== null ? mcResult.percentile95MaxDrawdownR + 'R' : 'N/A'}, RUIN_PROB=${mcResult.riskOfRuinPct !== null ? mcResult.riskOfRuinPct + '%' : 'N/A'}, STATUS=${mcResult.simulationStatus}`);
+        } catch (err: any) {
+          logger.warn(`[Gate 22 Monte Carlo] ${cand.signal.symbol}: Simulation unavailable (${err?.message || err}). Candidate preserved without veto.`);
         }
-        logger.info(`[Gate 22 Monte Carlo] ${cand.signal.symbol}: MED_DD=${mcResult.medianMaxDrawdownR !== null ? mcResult.medianMaxDrawdownR + 'R' : 'N/A'}, 95th_DD=${mcResult.percentile95MaxDrawdownR !== null ? mcResult.percentile95MaxDrawdownR + 'R' : 'N/A'}, RUIN_PROB=${mcResult.riskOfRuinPct !== null ? mcResult.riskOfRuinPct + '%' : 'N/A'}, STATUS=${mcResult.simulationStatus}`);
       }
 
       // Stage 4: Final Trade Selection & Opportunity Ranking
@@ -1478,20 +1449,7 @@ export class SignalEngine {
 
       if (validatedSignals.length > 0) {
         for (const sig of validatedSignals) {
-          // GATE 65: Double check centralized final tradeability contract
-          const tradeability = TradeRankingEngine.calculateFinalRequiredScore({
-            symbol: sig.symbol,
-            actualScore: sig.score,
-            regime: sig.marketRegime,
-            strategy: sig.strategy,
-            assetClass: sig.assetClass,
-            signalThreshold: thresholds.signalThreshold,
-          });
 
-          if (!tradeability.isExecutable || !tradeability.passed) {
-            logger.warn(`[SignalEngine] Final candidate ${sig.symbol} failed tradeability check: score ${sig.score} < ${tradeability.finalRequiredScore}. Skipped.`);
-            continue;
-          }
 
           if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
             logger.warn(`[SignalEngine] Final candidate ${sig.symbol} cannot be marked tradeable: production persistence (Firebase Admin) unavailable.`);
@@ -1500,37 +1458,7 @@ export class SignalEngine {
             continue;
           }
 
-          // Atomically increment cap
-          const inc = await ScannerPersistence.tryIncrementCap(thresholds.dailySignalCap || 10);
-          if (!inc.allowed) {
-            logger.warn(`[SignalEngine] Daily cap reached during atomic increment. Stopping further dispatches.`);
-            break;
-          }
-
-          // GATE 60 & GATE 65: Mark as officially tradeable before persistence
-          sig.isTradeableSignal = true;
-          sig.signalClassification = 'TRADEABLE';
-
-          // PERSIST & CONFIRM PERSISTENCE
-          const persRes = await ScannerPersistence.recordSentSignal(sig);
-          const logRes = await SignalLogger.logSignal(sig, sig.marketRegime || 'TREND');
-
-          if (!persRes.success || !logRes.success || logRes.status !== 'TRADEABLE_RECORD_PERSISTED') {
-            logger.error(`[SignalEngine] Persistence failed for ${sig.symbol}. Rolling back cap and aborting dispatch.`, { persError: persRes.error, logError: logRes.error });
-            await ScannerPersistence.releaseCap(inc.reservationId);
-            sig.isTradeableSignal = false;
-            sig.signalClassification = 'DIAGNOSTIC';
-            continue;
-          }
-
-          // COMMIT CAP RESERVATION!
-          await ScannerPersistence.commitCap(inc.reservationId);
-
-          // ONLY AFTER BOTH SUCCEED: activate signal
-          this.activeSignals.set(sig.symbol, sig);
-
-          // Record Fingerprint, Cooldown, and Accepted Audit Explanation
-          const fp = SignalFingerprint.recordFingerprint({
+          const signalFp = SignalFingerprint.generateFingerprint({
             symbol: sig.symbol,
             direction: sig.direction,
             entryPrice: sig.entryPrice,
@@ -1538,7 +1466,47 @@ export class SignalEngine {
             primaryStrategy: sig.strategy,
           });
 
-          CooldownManager.recordSignalEmit(sig.symbol, sig.strategy, sig.timestamp);
+          if (persistAndActivate) {
+            // Atomically increment cap
+            const inc = await ScannerPersistence.tryIncrementCap(thresholds.dailySignalCap || 10);
+            if (!inc.allowed) {
+              logger.warn(`[SignalEngine] Daily cap reached during atomic increment. Stopping further dispatches.`);
+              break;
+            }
+
+            // GATE 60 & GATE 65: Mark as officially tradeable before persistence
+            sig.isTradeableSignal = true;
+            sig.signalClassification = 'TRADEABLE';
+
+            // PERSIST & CONFIRM PERSISTENCE
+            const persRes = await ScannerPersistence.recordSentSignal(sig);
+            const logRes = await SignalLogger.logSignal(sig, sig.marketRegime || 'TREND');
+
+            if (!persRes.success || !logRes.success || logRes.status !== 'TRADEABLE_RECORD_PERSISTED') {
+              logger.error(`[SignalEngine] Persistence failed for ${sig.symbol}. Rolling back cap and aborting dispatch.`, { persError: persRes.error, logError: logRes.error });
+              await ScannerPersistence.releaseCap(inc.reservationId);
+              sig.isTradeableSignal = false;
+              sig.signalClassification = 'DIAGNOSTIC';
+              continue;
+            }
+
+            // COMMIT CAP RESERVATION!
+            await ScannerPersistence.commitCap(inc.reservationId);
+
+            // ONLY AFTER BOTH SUCCEED: activate signal
+            this.activeSignals.set(sig.symbol, sig);
+
+            // Record Fingerprint, Cooldown, and Accepted Audit Explanation
+            SignalFingerprint.recordFingerprint({
+              symbol: sig.symbol,
+              direction: sig.direction,
+              entryPrice: sig.entryPrice,
+              timeframe: sig.timeframe,
+              primaryStrategy: sig.strategy,
+            });
+
+            CooldownManager.recordSignalEmit(sig.symbol, sig.strategy, sig.timestamp);
+          }
 
           const regime = sig.marketRegime || 'UNKNOWN';
 
@@ -1552,9 +1520,9 @@ export class SignalEngine {
             failedStrategies: [],
             marketRegime: regime,
             regime,
-            threshold: tradeability.finalRequiredScore,
+            threshold: (sig as any).coreScore || sig.score,
             actualScore: sig.score,
-            marginAboveThreshold: tradeability.marginAboveFinalThreshold,
+            marginAboveThreshold: 0,
             atr: 0,
             dataFreshnessSeconds: 0,
             providerAgreement: true,
@@ -1562,7 +1530,7 @@ export class SignalEngine {
             score: sig.score,
             status: 'ACCEPTED',
             rejectionReason: null,
-            fingerprint: fp,
+            fingerprint: signalFp,
           });
         }
 
@@ -1875,6 +1843,22 @@ export class SignalEngine {
     }
 
     return { isValid: true, agreementPct: 100 };
+  }
+
+  /**
+   * Centralized promotion method to ensure only SignalEngine sets these properties.
+   */
+  public promoteToTradeable(sig: any): void {
+    sig.isTradeableSignal = true;
+    sig.signalClassification = 'TRADEABLE';
+  }
+
+  /**
+   * Centralized demotion method to ensure only SignalEngine sets these properties.
+   */
+  public demoteToDiagnostic(sig: any): void {
+    sig.isTradeableSignal = false;
+    sig.signalClassification = 'DIAGNOSTIC';
   }
 }
 

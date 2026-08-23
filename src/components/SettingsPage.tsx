@@ -7,39 +7,27 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { ConfigStatusResponse, MarketStatusResponse } from '../types/index.js';
+import { MarketStatusResponse } from '../types/index.js';
 import { api } from '../api/client.js';
 import { StatusBadge } from './StatusBadge.js';
 import { MarketDiagnostics } from './MarketDiagnostics.js';
 import { NotificationService, NotificationPermissionStatus } from '../utils/notification.js';
 import {
   ShieldCheck,
-  Cpu,
-  Database,
   RefreshCw,
-  KeyRound,
-  Server,
-  AlertTriangle,
   Activity,
   Bell,
   BellRing,
   Volume2,
   VolumeX,
-  CheckCircle2,
   Clock,
 } from 'lucide-react';
 
 interface SettingsPageProps {
-  configStatus: ConfigStatusResponse | null;
-  loadingConfig: boolean;
-  onRefreshConfig: () => void;
+  // No props needed from configStatus anymore
 }
 
-export function SettingsPage({
-  configStatus,
-  loadingConfig,
-  onRefreshConfig,
-}: SettingsPageProps) {
+export function SettingsPage({}: SettingsPageProps) {
   const [marketStatus, setMarketStatus] = useState<MarketStatusResponse | null>(null);
   const [loadingMarketStatus, setLoadingMarketStatus] = useState<boolean>(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermissionStatus>(
@@ -68,49 +56,6 @@ export function SettingsPage({
   const [loadingScanner, setLoadingScanner] = useState<boolean>(false);
   const [triggeringScan, setTriggeringScan] = useState<boolean>(false);
   const [scannerMessage, setScannerMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-
-  const [frequencyConfig, setFrequencyConfig] = useState<{
-    dailySignalCap: number;
-    preset: '5' | '10' | '15' | 'CUSTOM';
-  } | null>(null);
-  const [customCapInput, setCustomCapInput] = useState<number>(5);
-
-  const fetchFrequencyConfig = useCallback(async () => {
-    try {
-      const res = await api.getFrequencyConfig();
-      if (res.success && res.data) {
-        setFrequencyConfig({
-          dailySignalCap: res.data.dailySignalCap,
-          preset: res.data.preset,
-        });
-        setCustomCapInput(res.data.dailySignalCap);
-      }
-    } catch (err) {
-      console.error('Failed to fetch frequency config:', err);
-    }
-  }, []);
-
-  const handleUpdateFrequency = async (preset: '5' | '10' | '15' | 'CUSTOM', customCap?: number) => {
-    try {
-      const res = await api.updateFrequencyConfig({
-        preset,
-        customCap,
-      });
-      if (res.success && res.data) {
-        setFrequencyConfig({
-          dailySignalCap: res.data.dailySignalCap,
-          preset: res.data.preset,
-        });
-        await fetchScannerSettings();
-        setScannerMessage({ type: 'success', text: res.message });
-        setTimeout(() => setScannerMessage(null), 4000);
-      }
-    } catch (err) {
-      console.error('Failed to update frequency config:', err);
-      setScannerMessage({ type: 'error', text: 'Failed to update daily cap.' });
-      setTimeout(() => setScannerMessage(null), 4000);
-    }
-  };
 
   const fetchScannerSettings = useCallback(async () => {
     setLoadingScanner(true);
@@ -259,10 +204,8 @@ export function SettingsPage({
     fetchMarketStatus();
     fetchScannerSettings();
     checkPushSubscription();
-    fetchFrequencyConfig();
-  }, [fetchMarketStatus, fetchScannerSettings, checkPushSubscription, fetchFrequencyConfig]);
+  }, [fetchMarketStatus, fetchScannerSettings, checkPushSubscription]);
 
-  const envProviders = configStatus?.providers;
   const activeMarketProviders = marketStatus?.providers;
 
   const getProviderConnectionBadge = (providerId: string) => {
@@ -372,128 +315,6 @@ export function SettingsPage({
 
       {/* Live Market Diagnostics Component */}
       <MarketDiagnostics />
-
-      {/* Main Provider Configuration Status Section */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-800">
-          <div>
-            <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-              <KeyRound className="w-4 h-4 text-emerald-400" />
-              Server Environment Variables
-            </h3>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Backend environment variable presence verification
-            </p>
-          </div>
-
-          <button
-            id="settings-refresh-config-btn"
-            onClick={onRefreshConfig}
-            disabled={loadingConfig}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors disabled:opacity-50 self-start sm:self-auto"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loadingConfig ? 'animate-spin' : ''}`} />
-            <span>Refresh Env Check</span>
-          </button>
-        </div>
-
-        <div className="space-y-4">
-          {/* AI Provider: NVIDIA API */}
-          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-slate-900 border border-slate-800 rounded-lg text-emerald-400">
-                  <Cpu className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-semibold text-white">NVIDIA AI API Provider</h4>
-                  <p className="text-[11px] text-slate-400 font-mono">Environment Variable: NVIDIA_API_KEY</p>
-                </div>
-              </div>
-
-              {envProviders?.nvidia?.configured ? (
-                <StatusBadge status="configured" label="Configured" />
-              ) : (
-                <StatusBadge status="unconfigured" label="Key Missing" />
-              )}
-            </div>
-
-            <div className="mt-3 pt-3 border-t border-slate-800/60 flex items-center justify-between text-[11px] text-slate-400">
-              <span>Security Policy: Server-Side Proxied Execution</span>
-              {!envProviders?.nvidia?.configured && (
-                <span className="text-amber-400 flex items-center gap-1 font-mono">
-                  <AlertTriangle className="w-3 h-3" /> Set NVIDIA_API_KEY in server environment
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Bitget Env */}
-          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-300">
-                  <Database className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-semibold text-white">Bitget Market Provider</h4>
-                  <p className="text-[11px] text-slate-400 font-mono">
-                    BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE
-                  </p>
-                </div>
-              </div>
-
-              {envProviders?.bitget?.configured ? (
-                <StatusBadge status="configured" label="Configured" />
-              ) : (
-                <StatusBadge status="unconfigured" label="Not Set" />
-              )}
-            </div>
-          </div>
-
-          {/* Finnhub Env */}
-          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-300">
-                  <Database className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-semibold text-white">Finnhub Market Data</h4>
-                  <p className="text-[11px] text-slate-400 font-mono">Environment Variable: FINNHUB_API_KEY</p>
-                </div>
-              </div>
-
-              {envProviders?.finnhub?.configured ? (
-                <StatusBadge status="configured" label="Configured" />
-              ) : (
-                <StatusBadge status="unconfigured" label="Not Set" />
-              )}
-            </div>
-          </div>
-
-          {/* Twelve Data Env */}
-          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-300">
-                  <Database className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-semibold text-white">Twelve Data (Forex)</h4>
-                  <p className="text-[11px] text-slate-400 font-mono">Environment Variable: TWELVE_DATA_API_KEY</p>
-                </div>
-              </div>
-
-              {envProviders?.twelvedata?.configured ? (
-                <StatusBadge status="configured" label="Configured" />
-              ) : (
-                <StatusBadge status="unconfigured" label="Not Set" />
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
 
       {/* Real-Time Browser & Web Push PWA Notifications */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">
@@ -745,61 +566,6 @@ export function SettingsPage({
             </div>
           </div>
 
-          {/* Daily Automated Signal Cap Configuration (Gate 36 / 53) */}
-          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <span className="text-xs font-semibold text-white block">
-                Daily Signal Cap Preset
-              </span>
-              <p className="text-[11px] text-slate-400">
-                Choose the maximum allowed automated trading signals generated per UTC day. Default is 5.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3 shrink-0">
-              <div className="min-w-[120px]">
-                <select
-                  id="daily-signal-cap-preset-select"
-                  value={frequencyConfig?.preset || '5'}
-                  onChange={(e) => {
-                    const preset = e.target.value as '5' | '10' | '15' | 'CUSTOM';
-                    if (preset !== 'CUSTOM') {
-                      handleUpdateFrequency(preset);
-                    } else {
-                      handleUpdateFrequency('CUSTOM', customCapInput);
-                    }
-                  }}
-                  className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-emerald-500 cursor-pointer"
-                >
-                  <option value="5">5 Signals (Default)</option>
-                  <option value="10">10 Signals</option>
-                  <option value="15">15 Signals</option>
-                  <option value="CUSTOM">Custom Cap</option>
-                </select>
-              </div>
-
-              {frequencyConfig?.preset === 'CUSTOM' && (
-                <div className="flex items-center gap-1.5 max-w-[150px]">
-                  <input
-                    type="number"
-                    min={1}
-                    max={100}
-                    value={customCapInput}
-                    onChange={(e) => setCustomCapInput(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                    className="w-16 bg-slate-900 border border-slate-700/80 rounded-lg px-2 py-1.5 text-xs font-mono text-white text-center focus:outline-none focus:border-emerald-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => handleUpdateFrequency('CUSTOM', customCapInput)}
-                    className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
-                  >
-                    Set
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-
           {/* Statistics and Controls */}
           <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -859,31 +625,6 @@ export function SettingsPage({
                 </span>
               </div>
             </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Backend Diagnostics Overview */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">
-        <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-          <Server className="w-4 h-4 text-emerald-400" />
-          Server System Overview
-        </h3>
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs font-mono">
-          <div className="bg-slate-950 border border-slate-800 rounded-lg p-3">
-            <span className="text-slate-400 text-[10px] block">ENVIRONMENT</span>
-            <span className="text-slate-200 uppercase font-semibold">{configStatus?.environment || 'Development'}</span>
-          </div>
-
-          <div className="bg-slate-950 border border-slate-800 rounded-lg p-3">
-            <span className="text-slate-400 text-[10px] block">PORT BINDING</span>
-            <span className="text-slate-200 font-semibold">0.0.0.0:3000</span>
-          </div>
-
-          <div className="bg-slate-950 border border-slate-800 rounded-lg p-3">
-            <span className="text-slate-400 text-[10px] block">MARKET ROUTER</span>
-            <span className="text-emerald-400 font-semibold">GET /api/market/*</span>
           </div>
         </div>
       </div>

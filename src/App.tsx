@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { NavigationTab, HealthResponse, ConfigStatusResponse } from './types/index.js';
+import { NavigationTab, HealthResponse } from './types/index.js';
 import { api } from './api/client.js';
 import { Header } from './components/Header.js';
 import { Footer } from './components/Footer.js';
@@ -16,10 +16,8 @@ import { AlertTriangle, RefreshCw } from 'lucide-react';
 export default function App() {
   const [activeTab, setActiveTab] = useState<NavigationTab>('SIGNALS');
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [configStatus, setConfigStatus] = useState<ConfigStatusResponse | null>(null);
 
   const [loadingHealth, setLoadingHealth] = useState<boolean>(true);
-  const [loadingConfig, setLoadingConfig] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
   const fetchHealth = useCallback(async () => {
@@ -36,22 +34,9 @@ export default function App() {
     }
   }, []);
 
-  const fetchConfigStatus = useCallback(async () => {
-    setLoadingConfig(true);
-    try {
-      const data = await api.getConfigStatus();
-      setConfigStatus(data);
-    } catch (err) {
-      console.warn('[App] Backend config check retry pending:', err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoadingConfig(false);
-    }
-  }, []);
-
   useEffect(() => {
     fetchHealth();
-    fetchConfigStatus();
-  }, [fetchHealth, fetchConfigStatus]);
+  }, [fetchHealth]);
 
   return (
     <div className="min-h-screen min-h-[100dvh] w-full max-w-[100vw] overflow-x-hidden bg-slate-950 text-slate-100 font-sans flex flex-col selection:bg-emerald-500/20 selection:text-emerald-200 pt-14 sm:pt-16">
@@ -91,11 +76,7 @@ export default function App() {
         {activeTab === 'SIGNALS' ? (
           <SignalsPage health={health} />
         ) : (
-          <SettingsPage
-            configStatus={configStatus}
-            loadingConfig={loadingConfig}
-            onRefreshConfig={fetchConfigStatus}
-          />
+          <SettingsPage />
         )}
       </main>
 

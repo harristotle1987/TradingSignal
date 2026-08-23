@@ -178,6 +178,8 @@ export interface TradingSignal {
   rejectionReason?: string;
   validationReason?: SignalValidationReason;
   score?: number;
+  coreScore?: number;
+  rankingScore?: number;
   isPrimary?: boolean;
   isTopTrade?: boolean;
   isBestTrade?: boolean;

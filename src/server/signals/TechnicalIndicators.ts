@@ -499,7 +499,11 @@ export class TechnicalIndicators {
     }
 
     const currentAtr = this.calculateATR(candles, atrPeriod);
-    const baselineAtr = this.calculateATR(candles, Math.min(candles.length - 1, 40));
+    const baselineSlice = candles.slice(0, -atrPeriod);
+    const baselineAtr =
+      baselineSlice.length >= 14
+        ? this.calculateATR(baselineSlice, Math.min(baselineSlice.length - 1, 28))
+        : this.calculateATR(candles, Math.min(candles.length - 1, 40));
 
     const atrRatio = baselineAtr > 0 ? currentAtr / baselineAtr : 1.0;
     const isSqueeze = atrRatio < 0.65; // ATR compressed below 65% of baseline

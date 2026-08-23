@@ -635,13 +635,15 @@ export class SignalLogger {
 
     const firestore = getFirestoreAdmin();
     if (firestore) {
-      firestore
-        .collection(FIRESTORE_COLLECTION)
-        .doc(targetKey)
-        .delete()
-        .catch((err) => {
-          logger.debug(`[SignalLogger] Firestore delete deferred for ${targetKey}:`, { error: String(err) });
-        });
+      try {
+        await firestore
+          .collection(FIRESTORE_COLLECTION)
+          .doc(targetKey)
+          .delete();
+      } catch (err) {
+        logger.error(`[SignalLogger] Firestore delete failed for ${targetKey}:`, { error: String(err) });
+        throw err;
+      }
     }
 
     logger.info(`[SignalLogger] DELETED INDIVIDUAL SIGNAL LOG RECORD: ${targetKey}`);

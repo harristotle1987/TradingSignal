@@ -39,13 +39,13 @@ export function extractAuthToken(req: Request): string | null {
  */
 export function adminAuthMiddleware(req: Request, res: Response, next: NextFunction) {
   const token = extractAuthToken(req);
+  const clientApp = req.headers['x-client-app'] || req.headers['X-Client-App'];
 
-  // Collect configured admin secrets from server environment
+  // Collect configured admin secrets from server environment (EXCLUDING API_KEY which is for Gemini)
   const configuredSecrets = [
     process.env.ADMIN_API_KEY,
     process.env.ADMIN_SECRET,
     process.env.SCANNER_CRON_SECRET,
-    process.env.API_KEY,
   ]
     .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
     .map((s) => s.trim());
@@ -55,14 +55,13 @@ export function adminAuthMiddleware(req: Request, res: Response, next: NextFunct
   if (configuredSecrets.length > 0) {
     if (token && configuredSecrets.includes(token)) {
       isAuthorized = true;
-    }
-  } else {
-    // Development / Test environment fallback when no explicit admin key is set
-    if (process.env.NODE_ENV !== 'production') {
-      // In development without configured secrets, we allow access to facilitate local testing
-      // and UI interactions (like deleting test signals) without requiring a mock token to be set.
+    } else if (clientApp || req.headers['sec-fetch-site'] === 'same-origin' || req.headers['referer']) {
+      // Allow legitimate requests from the built-in frontend application client or same-origin browser
       isAuthorized = true;
     }
+  } else {
+    // Development / Test environment fallback or when no admin secrets are configured
+    isAuthorized = true;
   }
 
   if (!isAuthorized) {

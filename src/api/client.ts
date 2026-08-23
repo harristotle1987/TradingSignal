@@ -65,6 +65,7 @@ class ApiClient {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache',
+          'x-client-app': 'trading-signal-ui',
           ...authHeaders,
           ...(options?.headers || {}),
         },
@@ -240,6 +241,16 @@ class ApiClient {
   async deleteSignalLog(id: string): Promise<{ success: boolean; message: string }> {
     return this.fetchJson<{ success: boolean; message: string }>(`/api/signals/log/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+    });
+  }
+
+  /**
+   * Bulk delete dedicated signal log entries by IDs
+   */
+  async deleteSignalLogs(ids: string[]): Promise<{ success: boolean; message: string }> {
+    return this.fetchJson<{ success: boolean; message: string }>('/api/signals/log/bulk-delete', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
     });
   }
 

@@ -114,28 +114,50 @@ export class TradeRankingEngine {
   }
 
   /**
-   * Evaluates, ranks, and filters validated candidates based on the centralized scoring policy.
+   * Evaluates, ranks, and filters validated candidates.
+   * GATE 83: TradeRankingEngine does NOT decide basic tradeability or rescue failed setups.
+   * It receives already-valid core candidates and ranks them across multi-dimensional criteria.
    */
   static rankOpportunities(candidates: ValidatedCandidate[]): RankingResult {
     const rejectedCandidates: Array<{ symbol: string; reason: string }> = [];
     const thresholds = serverConfig.getConfig().thresholds;
 
-    // 1. Calculate Composite Score
-    const scoredCandidates = candidates.map((cand) => ({
-      ...cand,
-      compositeScore: this.computeCompositeScore(cand),
-    }));
+    // 1. Calculate Core and Ranking Score (GATE 82 / GATE 83)
+    const scoredCandidates = candidates.map((cand) => {
+      const coreScore = cand.scoring.coreScore ?? cand.scoring.score;
+      return {
+        ...cand,
+        coreScore,
+        rankingScore: this.computeRankingScore(cand, coreScore),
+      };
+    });
 
-    // 2. Classify and Filter
-    const validCandidates: Array<ValidatedCandidate & { compositeScore: number; rankTier: RankTier }> = [];
-    
+    // 2. Classify and Filter based strictly on core tradeability
+    // Ranking may NEVER convert an invalid or below-threshold core candidate into TRADEABLE.
+    const validCandidates: Array<ValidatedCandidate & { coreScore: number; rankingScore: number; rankTier: RankTier }> = [];
+        
     for (const cand of scoredCandidates) {
-      const score = Math.round(cand.compositeScore);
-      
-      // GATE 65: Resolve centralized final tradeability evaluation
+      // Validate core validity from upstream scoring and validation
+      if (cand.scoring.isValid === false) {
+        rejectedCandidates.push({
+          symbol: cand.signal.symbol,
+          reason: cand.signal.rejectionReason || 'REJECTED: SCORING_INVALID. Candidate failed core scoring validity checks.',
+        });
+        continue;
+      }
+
+      if (cand.validation && cand.validation.isValid === false) {
+        rejectedCandidates.push({
+          symbol: cand.signal.symbol,
+          reason: cand.validation.detailedMessage || 'REJECTED: VALIDATION_INVALID. Candidate failed live tick/spread validation.',
+        });
+        continue;
+      }
+
+      // Resolve centralized final tradeability evaluation using strictly the CORE SCORE
       const tradeability = this.calculateFinalRequiredScore({
         symbol: cand.signal.symbol,
-        actualScore: score,
+        actualScore: cand.coreScore,
         regime: cand.signal.marketRegime || cand.scoring.marketRegime,
         strategy: cand.signal.strategy,
         assetClass: cand.signal.assetClass,
@@ -145,17 +167,22 @@ export class TradeRankingEngine {
       if (!tradeability.isExecutable || !tradeability.passed) {
         rejectedCandidates.push({
           symbol: cand.signal.symbol,
-          reason: tradeability.rejectionReason || `REJECTED: SCORE_BELOW_FINAL_THRESHOLD. Score ${score} < ${tradeability.finalRequiredScore}.`,
+          reason: tradeability.rejectionReason || `REJECTED: SCORE_BELOW_FINAL_THRESHOLD. Core Score ${cand.coreScore} < ${tradeability.finalRequiredScore}.`,
         });
         continue;
       }
       
-      validCandidates.push({ ...cand, compositeScore: score, rankTier: 'SUGGESTION' });
+      // Attach the ranking score and core score to the signal
+      cand.signal.rankingScore = cand.rankingScore;
+      cand.signal.coreScore = cand.coreScore;
+      cand.signal.score = cand.coreScore; // Keep score matching coreScore for deterministic purity
+
+      validCandidates.push({ ...cand, rankTier: 'SUGGESTION' });
     }
 
-    // Sort by composite score descending (highest first)
-    validCandidates.sort((a, b) => b.compositeScore - a.compositeScore);
-    
+    // Sort by rankingScore descending (highest first)
+    validCandidates.sort((a, b) => b.rankingScore - a.rankingScore);
+        
     // Assign rank tiers based on rank order (Rank 1: BEST_TRADE, Rank 2: SECOND_BEST, Rank 3+: SUGGESTION)
     validCandidates.forEach((cand, idx) => {
       if (idx === 0) {
@@ -184,12 +211,12 @@ export class TradeRankingEngine {
   }
 
   private static organizeRankedCandidates(
-    validCandidates: Array<ValidatedCandidate & { compositeScore: number; rankTier: RankTier }>,
+    validCandidates: Array<ValidatedCandidate & { coreScore: number; rankingScore: number; rankTier: RankTier }>,
     rejectedCandidates: Array<{ symbol: string; reason: string }>
   ): RankingResult {
     const topTrades = validCandidates.slice(0, 2).map((c) => c.signal);
     const suggestions = validCandidates.slice(2, 5).map((c) => c.signal);
-    
+        
     return {
       bestTrade: topTrades[0],
       secondBest: topTrades[1],
@@ -200,16 +227,113 @@ export class TradeRankingEngine {
     };
   }
 
-  private static computeCompositeScore(candidate: ValidatedCandidate): number {
-    const { scoring, aiConfidence, signal } = candidate;
-    const baseScore = scoring.factors?.totalScore || scoring.score;
-    const aiAdjustment = (typeof aiConfidence === 'number' && !isNaN(aiConfidence))
-      ? ((aiConfidence - 70) / 30) * 3
-      : 0;
+  /**
+   * GATE 83: Multi-dimensional ranking score calculation
+   * Ranks candidates using:
+   * 1. Relative Strength
+   * 2. Strategy Quality
+   * 3. AI Assessment
+   * 4. Correlation Preference
+   * 5. Liquidity Quality
+   * 6. Divergence
+   * 7. Breakout / Pullback Quality
+   * 8. Historical Probability
+   * 9. Cached Walk-Forward Results
+   * 10. Cached Monte Carlo Results
+   * 11. Execution Quality
+   */
+  private static computeRankingScore(candidate: ValidatedCandidate, coreScore: number): number {
+    const { signal, scoring, validation, aiConfidence } = candidate;
+    let modifier = 0;
+
+    // 1. Relative Strength (universe leadership)
     const rsScore = signal.relativeStrengthScore ?? 50;
-    const rsAdjustment = ((rsScore - 50) / 50) * 2; // Subtle ±2 confidence modifier based on universe leadership
+    modifier += ((rsScore - 50) / 50) * 3; // -3 to +3 modifier
+
+    // 2. Strategy Quality (compatibility, match, agreement)
+    if (signal.regimeStrategyMatch === 'OPTIMAL') modifier += 2;
+    else if (signal.regimeStrategyMatch === 'COMPATIBLE') modifier += 1;
+    else if (signal.regimeStrategyMatch === 'SUBOPTIMAL') modifier -= 2;
+    else if (signal.regimeStrategyMatch === 'INCOMPATIBLE') modifier -= 4;
+
+    const stratCompat = signal.strategyCompatibilityScore;
+    if (typeof stratCompat === 'number') {
+      modifier += ((stratCompat - 75) / 25) * 1.5;
+    }
+
+    const agreeRatio = (scoring.agreeingStrategiesCount && scoring.totalStrategiesCount)
+      ? scoring.agreeingStrategiesCount / scoring.totalStrategiesCount
+      : undefined;
+    if (agreeRatio !== undefined && agreeRatio >= 0.6) {
+      modifier += (agreeRatio - 0.5) * 2;
+    }
+
+    // 3. AI Assessment & Confidence
+    if (typeof aiConfidence === 'number' && !isNaN(aiConfidence)) {
+      modifier += ((aiConfidence - 70) / 30) * 3; // -3 to +3 modifier
+    }
+
+    // 4. Correlation Preference (portfolio clustering penalty)
     const corrPenalty = signal.correlationPenalty ?? 0;
-    return Math.min(100, Math.max(0, baseScore + aiAdjustment + rsAdjustment - corrPenalty));
+    modifier -= corrPenalty;
+
+    // 5. Liquidity Quality (volume order flow & support/resistance clarity)
+    const volScore = scoring.factors?.volumeOrderFlowScore ?? 10;
+    const srScore = scoring.factors?.supportResistanceScore ?? 10;
+    modifier += ((volScore + srScore - 20) / 20) * 2;
+
+    // 6. Divergence (momentum divergence confirmation)
+    const hasConfirmedDivergence = signal.confluenceReasons?.some(r => r.toLowerCase().includes('divergence')) ||
+      (scoring.factors && 'divergenceScore' in scoring.factors && ((scoring.factors as any).divergenceScore ?? 0) > 0);
+    if (hasConfirmedDivergence) {
+      modifier += 1.5;
+    }
+
+    // 7. Breakout / Pullback Quality (retest confirmation & clean entry trigger)
+    const entryScore = scoring.factors?.entryQualityScore ?? 10;
+    const hasQualityRetest = signal.confluenceReasons?.some(r => r.toLowerCase().includes('retest') || r.toLowerCase().includes('pullback'));
+    modifier += ((entryScore - 10) / 10) * 2;
+    if (hasQualityRetest) modifier += 1;
+
+    // 8. Historical Probability & Calibration (Gate 86)
+    if (signal.isEmpiricallyCalibrated && typeof signal.empiricalProbability === 'number') {
+      modifier += ((signal.empiricalProbability - 60) / 20) * 2;
+    } else if (typeof signal.modelEstimatedWinRate === 'number') {
+      modifier += ((signal.modelEstimatedWinRate - 60) / 20) * 1;
+    } else if (typeof scoring.estimatedWinRate === 'number') {
+      modifier += ((scoring.estimatedWinRate - 60) / 20) * 1;
+    }
+
+    // 9. Cached Walk-Forward Results
+    if (signal.walkForwardEfficiency !== null && signal.walkForwardEfficiency !== undefined) {
+      if (signal.walkForwardEfficiency >= 70 && !signal.overfitRiskDetected) {
+        modifier += 2;
+      } else if (signal.overfitRiskDetected || signal.walkForwardStatus === 'HIGH_OVERFIT_RISK') {
+        modifier -= 3;
+      }
+    }
+
+    // 10. Cached Monte Carlo Results
+    if (signal.monteCarloSimulationStatus === 'ROBUST_STABLE') {
+      modifier += 1.5;
+    } else if (signal.monteCarloSimulationStatus === 'HIGH_RUIN_RISK' || signal.monteCarloSimulationStatus === 'ELEVATED_DRAWDOWN_RISK') {
+      modifier -= 3;
+    }
+
+    // 11. Execution Quality (friction, spread, net R:R)
+    const netRR = scoring.estimatedFriction?.netRiskRewardRatio ?? signal.netRiskRewardRatio ?? signal.riskRewardRatio;
+    if (typeof netRR === 'number') {
+      if (netRR >= 2.5) modifier += 2;
+      else if (netRR >= 2.0) modifier += 1;
+      else if (netRR < 1.5) modifier -= 1;
+    }
+    const spreadPoints = scoring.estimatedFriction?.spreadPipsOrPoints;
+    if (typeof spreadPoints === 'number' && spreadPoints > 3.0) {
+      modifier -= 1;
+    }
+
+    // Composite ranking score
+    return Math.min(100, Math.max(0, Math.round((coreScore + modifier) * 10) / 10));
   }
 
   public static getAssetCluster(symbol: string): string | null {

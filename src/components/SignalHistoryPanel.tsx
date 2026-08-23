@@ -44,6 +44,7 @@ interface SignalHistoryPanelProps {
   history: SignalHistoryItem[];
   onClearHistory: () => void;
   onDeleteHistoryItem?: (id: string, symbol: string) => void;
+  onDeleteMultipleHistoryItems?: (ids: string[]) => Promise<void>;
   deletingIds?: string[];
   preferredTimeZone: DisplayTimeZone;
   onSelectSymbol?: (symbol: string) => void;
@@ -55,6 +56,7 @@ export function SignalHistoryPanel({
   history,
   onClearHistory,
   onDeleteHistoryItem,
+  onDeleteMultipleHistoryItems,
   deletingIds = [],
   preferredTimeZone,
   onSelectSymbol,
@@ -68,6 +70,8 @@ export function SignalHistoryPanel({
   // State for confirmation modals and toast notifications
   const [itemToDelete, setItemToDelete] = useState<{ id: string; symbol: string } | null>(null);
   const [confirmClearAll, setConfirmClearAll] = useState<boolean>(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState<boolean>(false);
   const [toast, setToast] = useState<{ title: string; message: string } | null>(null);
 
   // Auto-dismiss toast after 3.5s
@@ -99,26 +103,62 @@ export function SignalHistoryPanel({
     setExpandedId((prev) => (prev === id ? null : id));
   };
 
-  const handleConfirmDeleteSingle = () => {
+  const handleConfirmDeleteSingle = async () => {
     if (itemToDelete) {
-      if (onDeleteHistoryItem) {
-        onDeleteHistoryItem(itemToDelete.id, itemToDelete.symbol);
-      }
-      setToast({
-        title: 'Entry Deleted',
-        message: `Signal history entry for ${itemToDelete.symbol} was deleted successfully.`,
-      });
+      const target = itemToDelete;
       setItemToDelete(null);
+      if (onDeleteHistoryItem) {
+        try {
+          await onDeleteHistoryItem(target.id, target.symbol);
+          setToast({
+            title: 'Entry Deleted',
+            message: `Signal history entry for ${target.symbol} was deleted successfully.`,
+          });
+        } catch (err: any) {
+          setToast({
+            title: 'Deletion Failed',
+            message: err.message || `Could not delete entry for ${target.symbol} due to a network or server error.`,
+          });
+        }
+      }
     }
   };
 
-  const handleConfirmClearAll = () => {
-    onClearHistory();
-    setToast({
-      title: 'History Cleared',
-      message: 'All signal history and audit log entries have been cleared.',
-    });
+  const handleConfirmClearAll = async () => {
     setConfirmClearAll(false);
+    try {
+      await onClearHistory();
+      setToast({
+        title: 'History Cleared',
+        message: 'All signal history and audit log entries have been cleared successfully.',
+      });
+    } catch (err: any) {
+      setToast({
+        title: 'Clear History Failed',
+        message: err.message || 'Could not clear history due to a server error.',
+      });
+    }
+  };
+
+  const handleConfirmBulkDelete = async () => {
+    if (selectedIds.length > 0) {
+      if (onDeleteMultipleHistoryItems) {
+        setConfirmBulkDelete(false);
+        try {
+          await onDeleteMultipleHistoryItems(selectedIds);
+          setToast({
+            title: 'Multiple Entries Deleted',
+            message: `Successfully deleted ${selectedIds.length} signal history entries.`,
+          });
+          setSelectedIds([]);
+        } catch (err: any) {
+          setToast({
+            title: 'Bulk Deletion Failed',
+            message: err.message || 'Firestore or network error occurred during deletion.',
+          });
+        }
+      }
+    }
   };
 
   return (
@@ -284,6 +324,47 @@ export function SignalHistoryPanel({
         <SignalPerformanceChart />
       ) : filteredHistory.length > 0 ? (
         <div className="space-y-3">
+          {/* Bulk Action Controls */}
+          {onDeleteMultipleHistoryItems && (
+            <div className="flex items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-xs shadow-inner">
+              <label className="flex items-center gap-2 cursor-pointer text-slate-300 hover:text-white transition select-none">
+                <input
+                  type="checkbox"
+                  checked={filteredHistory.length > 0 && selectedIds.length === filteredHistory.length}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setSelectedIds(filteredHistory.map((item) => item.id));
+                    } else {
+                      setSelectedIds([]);
+                    }
+                  }}
+                  className="rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900 cursor-pointer h-4 w-4"
+                />
+                <span className="font-mono text-[11px] font-bold tracking-wider">SELECT ALL ({filteredHistory.length})</span>
+              </label>
+
+              {selectedIds.length > 0 && (
+                <button
+                  type="button"
+                  disabled={deletingIds.length > 0}
+                  onClick={() => setConfirmBulkDelete(true)}
+                  className={`px-2.5 py-1 rounded font-semibold font-mono text-[10px] tracking-wide transition shadow-sm flex items-center gap-1 shrink-0 ${
+                    deletingIds.length > 0
+                      ? 'bg-rose-900/50 text-slate-400 cursor-not-allowed'
+                      : 'bg-rose-600 hover:bg-rose-500 text-white cursor-pointer'
+                  }`}
+                >
+                  {deletingIds.length > 0 ? (
+                    <RefreshCw className="w-3 h-3 animate-spin text-rose-300" />
+                  ) : (
+                    <Trash2 className="w-3 h-3" />
+                  )}
+                  {deletingIds.length > 0 ? 'DELETING...' : `DELETE SELECTED (${selectedIds.length})`}
+                </button>
+              )}
+            </div>
+          )}
+
           {filteredHistory.map((item, idx) => {
             const isExpanded = expandedId === item.id;
             const precision = item.entryPrice && item.entryPrice < 10 ? 5 : 2;
@@ -326,6 +407,20 @@ export function SignalHistoryPanel({
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
                   {/* Left: Direction Badge, Symbol Name, Category & Status Tags */}
                   <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                    {onDeleteMultipleHistoryItems && (
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(item.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedIds((prev) => [...prev, item.id]);
+                          } else {
+                            setSelectedIds((prev) => prev.filter((id) => id !== item.id));
+                          }
+                        }}
+                        className="rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900 cursor-pointer h-4 w-4 shrink-0 mr-1.5"
+                      />
+                    )}
                     {item.direction === 'BUY' ? (
                       <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 text-[10px] sm:text-xs font-mono font-bold flex items-center gap-1 shadow-sm">
                         <TrendingUp className="w-3.5 h-3.5" /> BUY
@@ -780,6 +875,41 @@ export function SignalHistoryPanel({
                 className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium shadow-sm transition cursor-pointer"
               >
                 Yes, Clear All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal for Bulk Delete */}
+      {confirmBulkDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-rose-400">
+              <div className="p-2 bg-rose-950/60 border border-rose-800/80 rounded-lg shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-semibold text-white">Delete Selected Signals?</h4>
+                <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">
+                  Are you sure you want to delete the <strong className="text-white font-mono">{selectedIds.length}</strong> selected signal history entries? This action is permanent and persistent.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setConfirmBulkDelete(false)}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkDelete}
+                className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium shadow-sm transition cursor-pointer"
+              >
+                Yes, Delete All {selectedIds.length}
               </button>
             </div>
           </div>

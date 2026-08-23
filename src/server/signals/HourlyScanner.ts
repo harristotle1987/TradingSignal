@@ -336,7 +336,7 @@ export class HourlyScannerService {
       for (const category of categories) {
         try {
           logger.info(`[Hourly Scanner] Scanning universe: [${category}]...`);
-          const result = await signalEngine.generateSignal(category, category);
+          const result = await signalEngine.generateSignal(category, category, false);
 
           if (result.success && Array.isArray(result.signals)) {
             rawCandidates.push(...result.signals);
@@ -402,10 +402,11 @@ export class HourlyScannerService {
         });
       }
 
-      // 3. Stage A: Mandatory Condition Hurdle
+      // 3. Stage A: Mandatory Condition Hurdle (GATE 82: coreScore tradeability check)
       const qualifiedByQuality: TradingSignal[] = [];
       for (const sig of rawCandidates) {
-        const score = sig.score ?? sig.confidenceScore ?? 0;
+        const coreScore = sig.coreScore ?? sig.score ?? sig.confidenceScore ?? 0;
+        const score = coreScore;
         const winRate = sig.modelEstimatedWinRate ?? sig.estimatedWinRate ?? 0;
         const empProb = sig.isEmpiricallyCalibrated === true && typeof sig.empiricalProbability === 'number' ? sig.empiricalProbability : null;
         const sampleSize = typeof sig.probabilitySampleSize === 'number' ? sig.probabilitySampleSize : 0;
@@ -416,7 +417,7 @@ export class HourlyScannerService {
 
         const sigTelemetry = {
           assetClass: SymbolNormalizer.getAssetClassification(sig.symbol),
-          initialScore: score,
+          initialScore: coreScore,
           watchingThreshold: thresholds.watchingThreshold || 70,
           qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
           signalThreshold: thresholds.signalThreshold || 80,
@@ -437,12 +438,12 @@ export class HourlyScannerService {
           finalDecision: 'REJECTED' as const,
         };
 
-        // GATE 65: Condition 1 - Centralized Final Tradeability Resolution
+        // GATE 65 / GATE 82: Condition 1 - Centralized Final Tradeability Resolution on coreScore
         // finalRequiredScore = Math.max(thresholds.signalThreshold, regimeAdaptiveThreshold)
         // Gate 27 can make the system MORE selective, but NEVER less selective than signalThreshold.
         const tradeabilityCheck = TradeRankingEngine.calculateFinalRequiredScore({
           symbol: sig.symbol,
-          actualScore: score,
+          actualScore: coreScore,
           regime: (sig as any).marketRegime,
           strategy: sig.strategy,
           assetClass: SymbolNormalizer.getAssetClassification(sig.symbol),
@@ -450,18 +451,18 @@ export class HourlyScannerService {
         });
 
         if (!tradeabilityCheck.isExecutable || !tradeabilityCheck.passed) {
-          const reason = tradeabilityCheck.rejectionReason || `REJECTED: SCORE_BELOW_FINAL_THRESHOLD. Score (${score}/100) below final required score (${tradeabilityCheck.finalRequiredScore}).`;
+          const reason = tradeabilityCheck.rejectionReason || `REJECTED: SCORE_BELOW_FINAL_THRESHOLD. Core Score (${coreScore}/100) below final required score (${tradeabilityCheck.finalRequiredScore}).`;
           rejectedDuringScan.push({
             symbol: sig.symbol,
             direction: sig.direction,
-            score,
+            score: coreScore,
             reason,
           });
           Gate35SignalFunnelAnalytics.recordCandidate({
             symbol: sig.symbol,
             direction: sig.direction,
             stage: 'GATE_4',
-            score,
+            score: coreScore,
             strategy: sig.strategy,
             rejectionReason: reason,
             ...sigTelemetry,
@@ -609,9 +610,26 @@ export class HourlyScannerService {
 
       // 4. Stage B: Duplicate Symbol/Direction & Material Improvement Filter
       const sentSignalsToday = await ScannerPersistence.getSentSignalsToday();
+      const deletedSignalsToday = await ScannerPersistence.getDeletedSignals();
       const qualifiedNonDuplicate: TradingSignal[] = [];
 
       for (const sig of qualifiedByQuality) {
+        // If the signal was explicitly deleted today, reject it.
+        const wasDeleted = deletedSignalsToday.some(
+          (d) => d.id === sig.id || d.id === sig.snapshotId || (d.symbol.toUpperCase() === sig.symbol.toUpperCase() && d.direction.toUpperCase() === sig.direction.toUpperCase())
+        );
+
+        if (wasDeleted) {
+          logger.info(`[Hourly Scanner] Blocking re-insertion/recreation of deleted signal: ${sig.symbol} ${sig.direction}`);
+          rejectedDuringScan.push({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            score: sig.score,
+            reason: `REJECTED: SIGNAL_DELETED. Setup was previously generated and explicitly deleted today. Re-insertion blocked.`,
+          });
+          continue;
+        }
+
         const existingSameSetup = sentSignalsToday.find(
           (s) => s.symbol === sig.symbol && s.direction === sig.direction && isActionableSignal(s)
         );
@@ -771,7 +789,7 @@ export class HourlyScannerService {
       }
 
       // 6. Stage D: Final Ranking & Daily Cap Selection
-      qualifiedUncorrelated.sort((a, b) => (b.score ?? b.confidenceScore ?? 0) - (a.score ?? a.confidenceScore ?? 0));
+      qualifiedUncorrelated.sort((a, b) => ((b as any).rankingScore ?? b.score ?? b.confidenceScore ?? 0) - ((a as any).rankingScore ?? a.score ?? a.confidenceScore ?? 0));
 
       const selectedSetups: TradingSignal[] = [];
       for (const sig of qualifiedUncorrelated) {
@@ -850,20 +868,7 @@ export class HourlyScannerService {
       for (const sig of selectedSetups) {
         const score = sig.score ?? sig.confidenceScore ?? 0;
 
-        // GATE 65: Double check centralized final tradeability contract before dispatch
-        const tradeabilityCheck = TradeRankingEngine.calculateFinalRequiredScore({
-          symbol: sig.symbol,
-          actualScore: score,
-          regime: (sig as any).marketRegime,
-          strategy: sig.strategy,
-          assetClass: SymbolNormalizer.getAssetClassification(sig.symbol),
-          signalThreshold: thresholds.signalThreshold,
-        });
 
-        if (!tradeabilityCheck.isExecutable || !tradeabilityCheck.passed) {
-          logger.warn(`[Hourly Scanner] Setup ${sig.symbol} failed final tradeability contract (score ${score} < ${tradeabilityCheck.finalRequiredScore}). Skipping.`);
-          continue;
-        }
 
         // Atomically increment cap
         const inc = await ScannerPersistence.tryIncrementCap(dailyCap);
@@ -875,9 +880,8 @@ export class HourlyScannerService {
         // Attach tag for automated signal
         sig.strategy = `[Automated ${sig.rankTier === 'BEST_TRADE' ? 'BEST TRADE' : 'ACTIONABLE SIGNAL'}] ${sig.strategy}`;
 
-        // MARK TRADEABLE BEFORE PERSISTENCE
-        sig.isTradeableSignal = true;
-        sig.signalClassification = 'TRADEABLE';
+        // MARK TRADEABLE BEFORE PERSISTENCE (Delegated to SignalEngine per Gate 90)
+        signalEngine.promoteToTradeable(sig);
 
         // PERSIST & CONFIRM PERSISTENCE
         const persRes = await ScannerPersistence.recordSentSignal(sig);
@@ -886,8 +890,7 @@ export class HourlyScannerService {
         if (!persRes.success || !logRes.success || logRes.status !== 'TRADEABLE_RECORD_PERSISTED') {
           logger.error(`[Hourly Scanner] Persistence failed for ${sig.symbol}. Rolling back cap and aborting dispatch.`, { persError: persRes.error, logError: logRes.error });
           await ScannerPersistence.releaseCap(inc.reservationId);
-          sig.isTradeableSignal = false;
-          sig.signalClassification = 'DIAGNOSTIC';
+          signalEngine.demoteToDiagnostic(sig);
           continue;
         }
 

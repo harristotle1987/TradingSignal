@@ -9,7 +9,6 @@ import { SignalLogger } from '../signals/SignalLogger.js';
 import { SignalAuditStore } from '../signals/SignalAuditStore.js';
 import { SignalOutcomeLogger } from '../signals/SignalOutcomeLogger.js';
 import { SignalLifecycleManager } from '../signals/SignalLifecycleManager.js';
-import { OutcomeTrackerTester } from '../signals/OutcomeTrackerTester.js';
 import { StrategyPerformanceTracker, PERFORMANCE_LEGAL_DISCLAIMER } from '../signals/StrategyPerformanceTracker.js';
 import { WalkForwardEngine } from '../signals/WalkForwardEngine.js';
 import { OpportunityFunnelStore } from '../signals/Gate26OpportunityFunnel.js';
@@ -706,6 +705,11 @@ router.get('/signals/log', async (_req: Request, res: Response) => {
 router.delete('/signals/log/:id', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
+    
+    // Record that this signal has been deleted first to capture its details
+    await ScannerPersistence.recordDeletedSignal(id);
+
+    // Deletions propagate errors from Firestore if they fail.
     const loggerSuccess = await SignalLogger.deleteLog(id);
     
     // Also remove from active signals cache and persistent sent signals
@@ -733,6 +737,53 @@ router.delete('/signals/log/:id', adminAuthMiddleware, async (req: Request, res:
     res.status(500).json({
       success: false,
       message: 'Failed to delete individual signal log entry',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/log/bulk-delete
+ * Deletes multiple signal log entries by IDs.
+ */
+router.post('/signals/log/bulk-delete', adminAuthMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { ids } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or empty ids array',
+        timestamp: Date.now(),
+      });
+    }
+
+    let deletedCount = 0;
+    for (const id of ids) {
+      // Record that this signal has been deleted first
+      await ScannerPersistence.recordDeletedSignal(id);
+
+      // Deletions propagate errors from Firestore if they fail.
+      const loggerSuccess = await SignalLogger.deleteLog(id);
+      signalEngine.removeActiveSignal(id);
+      const sentSignalSuccess = await ScannerPersistence.deleteSentSignal(id);
+      const notificationSuccess = await ScannerPersistence.deleteNotification(id);
+      
+      if (loggerSuccess || sentSignalSuccess || notificationSuccess) {
+        deletedCount++;
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Successfully deleted ${deletedCount} of ${ids.length} signals`,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to bulk delete signal log entries',
       error: msg,
       timestamp: Date.now(),
     });
@@ -812,6 +863,9 @@ router.post('/signals/generate', adminAuthMiddleware, async (req: Request, res: 
 router.delete('/signals/:id', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
+    // Record that this signal has been deleted first
+    await ScannerPersistence.recordDeletedSignal(id);
+
     // Remove from active signals cache and persistent sent signals
     const removedFromMemory = signalEngine.removeActiveSignal(id);
     const sentSignalSuccess = await ScannerPersistence.deleteSentSignal(id);
@@ -936,31 +990,6 @@ router.post('/signals/walk-forward', async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       message: 'Walk-forward evaluation error',
-      error: msg,
-      timestamp: Date.now(),
-    });
-  }
-});
-
-/**
- * POST /api/signals/test-outcome
- * Executes the complete integration test suite for automated Signal Outcome Tracking.
- */
-router.post('/signals/test-outcome', adminAuthMiddleware, async (_req: Request, res: Response) => {
-  try {
-    const report = await OutcomeTrackerTester.runSuite();
-    const httpCode = report.success ? 200 : 500;
-    res.status(httpCode).json({
-      success: report.success,
-      message: report.success ? 'All outcome tracking tests passed successfully' : 'Some outcome tracking tests failed',
-      report,
-      timestamp: Date.now(),
-    });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to run outcome tracking test suite',
       error: msg,
       timestamp: Date.now(),
     });

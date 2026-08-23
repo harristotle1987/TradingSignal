@@ -128,6 +128,7 @@ export interface ScannerPersistenceData {
   sentSignals: PersistedSentSignal[];
   rejectedCandidates: PersistedRejectedCandidate[];
   notifications: PersistedNotification[];
+  deletedSignals?: string[];
   settings: {
     enabled: boolean;
     notificationsEnabled: boolean;
@@ -144,6 +145,7 @@ const FIRESTORE_LOCK_DOC = 'scanner/lock_state';
 const FIRESTORE_SIGNALS_COL = 'scanner_sent_signals';
 const FIRESTORE_REJECTIONS_COL = 'scanner_rejected_candidates';
 const FIRESTORE_NOTIFICATIONS_COL = 'scanner_notifications';
+const FIRESTORE_DELETED_COL = 'scanner_deleted_signals';
 
 export interface ScanLockState {
   isScanning: boolean;
@@ -349,13 +351,13 @@ export class ScannerPersistence {
         return resetState;
       }
 
-      // Sync local with remote (take max count to prevent duplicate resets)
+      // Sync local with remote (remote Firestore is authoritative source of truth)
       this.localData.capState = {
         date: today,
-        dailySignalCount: Math.max(this.localData.capState.dailySignalCount, remote.dailySignalCount || 0),
+        dailySignalCount: typeof remote.dailySignalCount === 'number' ? remote.dailySignalCount : 0,
         dailySignalCap: remote.dailySignalCap || defaultCap,
         lastScanTime: remoteLastScan,
-        reservations: remote.reservations || this.localData.capState.reservations || [],
+        reservations: remote.reservations || [],
       };
       this.saveLocalData();
       return this.localData.capState;
@@ -785,7 +787,8 @@ export class ScannerPersistence {
           }
         }
       } catch (err) {
-        logger.warn('[ScannerPersistence] Firestore deleteSentSignal failed:', { error: String(err) });
+        logger.error('[ScannerPersistence] Firestore deleteSentSignal failed:', { error: String(err) });
+        throw err;
       }
     } else if (this.isProductionMode()) {
       logger.error('[ScannerPersistence] FAIL CLOSED: Cannot delete sent signal without Firestore in production.');
@@ -793,6 +796,118 @@ export class ScannerPersistence {
     }
 
     return deletedLocally || deletedInFirestore;
+  }
+
+  /**
+   * Records a deleted signal ID and its setup parameters to prevent the scanner from reinserting it.
+   */
+  static async recordDeletedSignal(id: string, symbol?: string, direction?: string): Promise<void> {
+    this.init();
+    const today = new Date().toISOString().split('T')[0];
+
+    let sym = symbol || '';
+    let dir = direction || '';
+
+    // If symbol or direction is not provided, try to find it from Firestore first
+    const firestore = getFirestoreAdmin();
+    if ((!sym || !dir) && firestore) {
+      try {
+        const doc = await firestore.collection(FIRESTORE_SIGNALS_COL).doc(id).get();
+        if (doc.exists) {
+          const data = doc.data();
+          sym = sym || data?.symbol || '';
+          dir = dir || data?.direction || '';
+        }
+      } catch (err) {
+        logger.debug('[ScannerPersistence] Could not fetch signal doc during recordDeletedSignal:', err);
+      }
+    }
+
+    if (!this.localData.deletedSignals) {
+      this.localData.deletedSignals = [];
+    }
+    // Locally store as "id|symbol|direction" to keep it simple and backward compatible
+    const localStr = `${id}|${sym}|${dir}`;
+    if (!this.localData.deletedSignals.includes(localStr)) {
+      this.localData.deletedSignals.push(localStr);
+      this.saveLocalData();
+    }
+
+    if (firestore) {
+      try {
+        await firestore
+          .collection(FIRESTORE_DELETED_COL)
+          .doc(id)
+          .set({
+            id,
+            symbol: sym,
+            direction: dir,
+            deletedAt: Date.now(),
+            date: today,
+          });
+      } catch (err) {
+        logger.error('[ScannerPersistence] Firestore recordDeletedSignal failed:', { error: String(err) });
+        throw err;
+      }
+    }
+  }
+
+  /**
+   * Retrieves all deleted signal records today.
+   */
+  static async getDeletedSignals(): Promise<Array<{ id: string; symbol: string; direction: string }>> {
+    this.init();
+    const today = new Date().toISOString().split('T')[0];
+
+    const records: Array<{ id: string; symbol: string; direction: string }> = [];
+
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      try {
+        const query = await firestore
+          .collection(FIRESTORE_DELETED_COL)
+          .where('date', '==', today)
+          .get();
+
+        query.forEach((doc) => {
+          const data = doc.data();
+          records.push({
+            id: doc.id,
+            symbol: data?.symbol || '',
+            direction: data?.direction || '',
+          });
+        });
+
+        // Merge with local if not production
+        if (!this.isProductionMode() && this.localData.deletedSignals) {
+          for (const localStr of this.localData.deletedSignals) {
+            const [localId, localSym, localDir] = localStr.split('|');
+            if (!records.some((r) => r.id === localId)) {
+              records.push({
+                id: localId,
+                symbol: localSym || '',
+                direction: localDir || '',
+              });
+            }
+          }
+        }
+        return records;
+      } catch (err) {
+        logger.warn('[ScannerPersistence] Firestore getDeletedSignals failed:', { error: String(err) });
+      }
+    }
+
+    if (this.localData.deletedSignals) {
+      for (const localStr of this.localData.deletedSignals) {
+        const [localId, localSym, localDir] = localStr.includes('|') ? localStr.split('|') : [localStr, '', ''];
+        records.push({
+          id: localId,
+          symbol: localSym || '',
+          direction: localDir || '',
+        });
+      }
+    }
+    return records;
   }
 
   /**
@@ -904,17 +1019,27 @@ export class ScannerPersistence {
         const query = await firestore
           .collection(FIRESTORE_REJECTIONS_COL)
           .where('date', '==', today)
-          .orderBy('timestamp', 'desc')
-          .limit(limit)
           .get();
 
         if (!query.empty) {
           const items: PersistedRejectedCandidate[] = [];
           query.forEach((doc) => items.push(doc.data() as PersistedRejectedCandidate));
-          return items;
+
+          const map = new Map<string, PersistedRejectedCandidate>();
+          if (!this.isProductionMode()) {
+            for (const c of this.localData.rejectedCandidates.filter((c) => c.date === today)) {
+              map.set(c.id, c);
+            }
+          }
+          for (const c of items) {
+            map.set(c.id, c);
+          }
+          return Array.from(map.values())
+            .sort((a, b) => b.timestamp - a.timestamp)
+            .slice(0, limit);
         }
       } catch (err) {
-        logger.debug('[ScannerPersistence] Firestore getRejectedCandidatesToday error');
+        logger.debug('[ScannerPersistence] Firestore getRejectedCandidatesToday error:', { error: String(err) });
       }
     }
 
@@ -1015,7 +1140,8 @@ export class ScannerPersistence {
           }
         }
       } catch (err) {
-        logger.debug('[ScannerPersistence] Firestore deleteNotification error', { error: String(err) });
+        logger.error('[ScannerPersistence] Firestore deleteNotification error', { error: String(err) });
+        throw err;
       }
     } else if (this.isProductionMode()) {
       logger.error('[ScannerPersistence] FAIL CLOSED: Cannot delete notification without Firestore in production.');

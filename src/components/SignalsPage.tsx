@@ -276,8 +276,31 @@ export function SignalsPage({ health }: SignalsPageProps) {
       });
     } catch (e) {
       console.warn(`Failed to delete backend signal log entry ${id}:`, e);
+      throw e;
     } finally {
       setDeletingIds((prev) => prev.filter((dId) => dId !== id));
+    }
+  };
+
+  // Bulk history item deletion handler
+  const handleDeleteMultipleHistoryItems = async (ids: string[]) => {
+    setDeletingIds((prev) => [...prev, ...ids]);
+    try {
+      await api.deleteSignalLogs(ids);
+      setSignalHistory((prev) => {
+        const updated = prev.filter((item) => !ids.includes(item.id) && !ids.includes(item.snapshotId));
+        try {
+          localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updated));
+        } catch (e) {
+          console.warn('Failed to update localStorage signal history:', e);
+        }
+        return updated;
+      });
+    } catch (e) {
+      console.error('Failed to bulk delete signal logs:', e);
+      throw e;
+    } finally {
+      setDeletingIds((prev) => prev.filter((dId) => !ids.includes(dId)));
     }
   };
 
@@ -525,126 +548,12 @@ export function SignalsPage({ health }: SignalsPageProps) {
         preferredTimeZone={preferredTimeZone}
       />
 
-      {/* Live Market Feeds & Exchange Session Status */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
-        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-          <span className="text-xs font-semibold text-white uppercase tracking-wider flex items-center gap-1.5">
-            <Database className="w-3.5 h-3.5 text-blue-400" />
-            Active Feed Diagnostics & Exchange Session Status
-          </span>
-          {sessionDetails && (
-            <StatusBadge
-              status={
-                sessionDetails.sessionState === 'MARKET_OPEN'
-                  ? 'configured'
-                  : sessionDetails.sessionState === 'OUTSIDE_TRADING_SESSION'
-                  ? 'standby'
-                  : 'unconfigured'
-              }
-              label={
-                sessionDetails.sessionState === 'MARKET_OPEN'
-                  ? 'MARKET OPEN'
-                  : sessionDetails.sessionState === 'OUTSIDE_TRADING_SESSION'
-                  ? 'OUTSIDE TRADING SESSION'
-                  : 'MARKET CLOSED'
-              }
-            />
-          )}
+      {errorMsg && (
+        <div className="p-3 bg-rose-950/40 border border-rose-800/60 rounded-lg text-xs text-rose-300 flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+          <span>{errorMsg}</span>
         </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {/* Live Ticker Price */}
-          {ticker ? (
-            <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-mono text-slate-400 uppercase">{ticker.rawSymbol || ticker.symbol}</span>
-                  <span className="text-[9px] font-mono bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800 text-slate-400">
-                    Active Feed
-                  </span>
-                </div>
-                <div className="text-2xl font-mono font-bold text-white tracking-tight mt-1">
-                  {ticker.price ? ticker.price.toFixed(ticker.price < 10 ? 5 : 2) : '0.00'}
-                </div>
-              </div>
-              <div className="mt-3 pt-2 border-t border-slate-800/50 flex justify-between text-[11px] font-mono">
-                <div>
-                  <span className="text-slate-400 block text-[9px]">SOURCE</span>
-                  <span className="text-emerald-400 font-semibold uppercase">{ticker.source}</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-slate-400 block text-[9px]">PROVIDER</span>
-                  <span className="text-slate-300 font-semibold">
-                    {ticker.provider === 'twelvedata'
-                      ? 'Twelve Data'
-                      : ticker.provider === 'finnhub'
-                      ? 'Finnhub'
-                      : ticker.provider.toUpperCase()}
-                  </span>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 text-center text-slate-500 text-xs flex items-center justify-center">
-              Fetching live market price...
-            </div>
-          )}
-
-          {/* Exchange Clock details */}
-          {sessionDetails && sessionDetails.newYorkTime ? (
-            <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-mono text-slate-400 uppercase flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-emerald-400" />
-                    Exchange Clock (ET)
-                  </span>
-                  <span className="text-[9px] font-mono bg-emerald-950/60 text-emerald-300 border border-emerald-800/60 px-1.5 py-0.5 rounded">
-                    {sessionDetails.newYorkTime?.timeZoneAbbr || 'EDT'}
-                  </span>
-                </div>
-                <div className="text-sm font-mono font-bold text-white tracking-tight mt-1.5">
-                  {sessionDetails.newYorkTime?.formatted || 'Active'}
-                </div>
-                <div className="text-[10px] font-mono text-slate-400 mt-1 flex items-center gap-2">
-                  <span title="Universal Coordinated Time">UTC: {sessionDetails.utcTime?.formatted || sessionDetails.formattedUTC || 'N/A'}</span>
-                </div>
-              </div>
-              <div className="mt-3 pt-2 border-t border-slate-800/50 flex justify-between text-[11px] font-mono">
-                <div>
-                  <span className="text-slate-400 block text-[9px]">CLASSIFICATION</span>
-                  <span className="text-slate-200 uppercase">{sessionDetails.assetClassification || 'ASSET'}</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-slate-400 block text-[9px]">CALENDAR STATUS</span>
-                  <span
-                    className={`font-semibold ${
-                      sessionDetails.sessionState === 'MARKET_OPEN'
-                        ? 'text-emerald-400'
-                        : sessionDetails.sessionState === 'OUTSIDE_TRADING_SESSION'
-                        ? 'text-amber-400'
-                        : 'text-rose-400'
-                    }`}
-                  >
-                    {sessionDetails.sessionState || 'CLOSED'}
-                  </span>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 text-center text-slate-500 text-xs flex items-center justify-center">
-              Resolving exchange calendar...
-            </div>
-          )}
-        </div>
-
-        {errorMsg && (
-          <div className="p-3 bg-rose-950/40 border border-rose-800/60 rounded-lg text-xs text-rose-300 flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-            <span>{errorMsg}</span>
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Generation Result Banner */}
       {lastGenResult && (
@@ -760,6 +669,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
         history={signalHistory}
         onClearHistory={handleClearHistory}
         onDeleteHistoryItem={handleDeleteHistoryItem}
+        onDeleteMultipleHistoryItems={handleDeleteMultipleHistoryItems}
         deletingIds={deletingIds}
         preferredTimeZone={preferredTimeZone}
         onTimeZoneChange={setPreferredTimeZone}
@@ -796,83 +706,6 @@ export function SignalsPage({ health }: SignalsPageProps) {
           );
         }}
       />
-
-      {/* Signal Processing Pipeline Framework */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">
-        <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-800">
-          <div className="flex items-center gap-2">
-            <Layers className="w-4 h-4 text-emerald-400" />
-            <h3 className="text-sm font-semibold text-white">
-              Signal Engine Architecture (Gate 9 Active)
-            </h3>
-          </div>
-          <span className="text-xs font-mono text-slate-400 bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
-            Opportunity Ranking & Selection
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Module 1 */}
-          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-mono text-slate-400">01. INGESTION</span>
-              <StatusBadge status="configured" label="Twelve Data Live" />
-            </div>
-            <div className="flex items-center gap-2 font-medium text-xs text-white pt-1">
-              <Database className="w-4 h-4 text-emerald-400" />
-              <span>Forex & Crypto Feeds</span>
-            </div>
-            <p className="text-[11px] text-slate-400 leading-snug">
-              Twelve Data (Forex) & Bitget (Crypto) streams active with freshness validation.
-            </p>
-          </div>
-
-          {/* Module 2 */}
-          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-mono text-slate-400">02. AI ENGINE</span>
-              <StatusBadge status={isNvidiaConfigured ? 'configured' : 'standby'} label={isNvidiaConfigured ? 'NVIDIA API Active' : 'NVIDIA Standby'} />
-            </div>
-            <div className="flex items-center gap-2 font-medium text-xs text-white pt-1">
-              <Cpu className="w-4 h-4 text-emerald-400" />
-              <span>NVIDIA Risk AI</span>
-            </div>
-            <p className="text-[11px] text-slate-400 leading-snug">
-              Evaluates calculated technical setup quality and risk factors.
-            </p>
-          </div>
-
-          {/* Module 3 */}
-          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-mono text-slate-400">03. STRATEGY</span>
-              <StatusBadge status="configured" label="Multi-TF Confluence" />
-            </div>
-            <div className="flex items-center gap-2 font-medium text-xs text-white pt-1">
-              <Layers className="w-4 h-4 text-emerald-400" />
-              <span>Confluence Engine</span>
-            </div>
-            <p className="text-[11px] text-slate-400 leading-snug">
-              Multi-timeframe EMA, RSI, MACD, and ATR indicator confluence checks.
-            </p>
-          </div>
-
-          {/* Module 4 */}
-          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-mono text-slate-400">04. HARDENED VALIDATOR</span>
-              <StatusBadge status="configured" label="Gate 8 Active" />
-            </div>
-            <div className="flex items-center gap-2 font-medium text-xs text-white pt-1">
-              <CheckCircle2 className="w-4 h-4 text-blue-400" />
-              <span>Signal Validator</span>
-            </div>
-            <p className="text-[11px] text-slate-400 leading-snug">
-              Enforces freshness, cross-source price check, OHLC candle geometry, and SL/TP sanity.
-            </p>
-          </div>
-        </div>
-      </div>
 
       {/* Signal Bot Identity & Risk Management Disclaimer */}
       <div className="bg-slate-950/80 border border-amber-900/40 rounded-xl p-4 sm:p-5 text-slate-400 text-xs leading-relaxed space-y-2">

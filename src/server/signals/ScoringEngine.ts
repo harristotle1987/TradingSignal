@@ -16,6 +16,7 @@ export interface ScoringFactors {
   volatilityAtrScore: number;     // 0 - 10 (ATR ratio, executable bounds)
   entryQualityScore: number;      // 0 - 10 (5m/15m trigger, dynamic EMA pullback)
   newsSentimentScore: number;     // 0 - 5  (Macro news sentiment alignment)
+  coreScore?: number;             // 0 - 100
   totalScore: number;             // 0 - 100
 
   // Compatibility properties
@@ -32,7 +33,8 @@ export type QualityTier = 'BEST_TRADE' | 'HIGH_QUALITY' | 'VALID' | 'REJECT';
 
 export interface ScoringResult {
   isValid: boolean;
-  score: number; // 0 - 100
+  score: number; // 0 - 100 (Core Score)
+  coreScore?: number; // 0 - 100 (GATE 82 Core Score)
   qualityTier: QualityTier;
   direction: SignalDirection;
   marketRegime: MarketRegime;
@@ -252,20 +254,27 @@ export class ScoringEngine {
     // =========================================================================
     let higherTfTrendScore = 0;
     let timeframesAligned = 0;
-    const totalTfsEvaluated = 6;
+    let totalTfsEvaluated = 0;
 
     // Check 15m
-    if ((direction === 'BUY' && entryPrice >= lastEma21_15m) || (direction === 'SELL' && entryPrice <= lastEma21_15m)) {
-      timeframesAligned++;
+    if (s15m.length >= 10) {
+      totalTfsEvaluated++;
+      if ((direction === 'BUY' && entryPrice >= lastEma21_15m) || (direction === 'SELL' && entryPrice <= lastEma21_15m)) {
+        timeframesAligned++;
+      }
     }
     // Check 1H
-    if ((direction === 'BUY' && entryPrice >= lastEma21_1h) || (direction === 'SELL' && entryPrice <= lastEma21_1h)) {
-      timeframesAligned++;
+    if (s1h.length >= 10) {
+      totalTfsEvaluated++;
+      if ((direction === 'BUY' && entryPrice >= lastEma21_1h) || (direction === 'SELL' && entryPrice <= lastEma21_1h)) {
+        timeframesAligned++;
+      }
     }
 
     // 4H evaluation (Major Direction)
     let is4hAligned = false;
     if (s4h.length >= 10) {
+      totalTfsEvaluated++;
       const ema21_4h = TechnicalIndicators.calculateEMA(s4h, Math.min(s4h.length - 1, 21));
       const ema9_4h = TechnicalIndicators.calculateEMA(s4h, Math.min(s4h.length - 1, 9));
       if (ema21_4h.length > 0 && ema9_4h.length > 0) {
@@ -284,6 +293,7 @@ export class ScoringEngine {
     // 1D evaluation (Macro Direction)
     let is1dAligned = false;
     if (s1d.length >= 10) {
+      totalTfsEvaluated++;
       const ema21_1d = TechnicalIndicators.calculateEMA(s1d, Math.min(s1d.length - 1, 21));
       if (ema21_1d.length > 0) {
         const last1dEma21 = ema21_1d[ema21_1d.length - 1];
@@ -299,6 +309,7 @@ export class ScoringEngine {
 
     // 30m auxiliary check
     if (s30m.length >= 10) {
+      totalTfsEvaluated++;
       const ema21_30m = TechnicalIndicators.calculateEMA(s30m, Math.min(s30m.length - 1, 21));
       if (ema21_30m.length > 0) {
         const last30mEma = ema21_30m[ema21_30m.length - 1];
@@ -310,6 +321,7 @@ export class ScoringEngine {
 
     // 5m entry check
     if (s5m.length >= 10) {
+      totalTfsEvaluated++;
       const ema9_5m = TechnicalIndicators.calculateEMA(s5m, Math.min(s5m.length - 1, 9));
       if (ema9_5m.length > 0) {
         const last5mEma = ema9_5m[ema9_5m.length - 1];
@@ -319,17 +331,21 @@ export class ScoringEngine {
       }
     }
 
+    totalTfsEvaluated = Math.max(1, totalTfsEvaluated);
+    const timeframeAlignmentRatio = totalTfsEvaluated > 0 ? timeframesAligned / totalTfsEvaluated : 0;
+
     if (is4hAligned && is1dAligned) {
       higherTfTrendScore = 20;
     } else if (is4hAligned || is1dAligned) {
-      higherTfTrendScore = 17;
-    } else if (timeframesAligned >= 3) {
-      higherTfTrendScore = 14;
+      higherTfTrendScore = 18;
+    } else if (timeframeAlignmentRatio >= 0.8) {
+      higherTfTrendScore = 16;
+    } else if (timeframesAligned >= 2) {
+      higherTfTrendScore = 12;
     } else {
       higherTfTrendScore = 8;
     }
 
-    const timeframeAlignmentRatio = totalTfsEvaluated > 0 ? timeframesAligned / totalTfsEvaluated : 0;
     if (timeframeAlignmentRatio < thresholds.minimumTimeframeAlignment) {
       return this.createRejection(
         `REJECTED: INSUFFICIENT_TIMEFRAME_ALIGNMENT. Insufficient timeframe confirmation: ${(timeframeAlignmentRatio * 100).toFixed(0)}% aligned (${timeframesAligned}/${totalTfsEvaluated}, minimum ${thresholds.minimumTimeframeAlignment * 100}% required)`,
@@ -513,9 +529,12 @@ export class ScoringEngine {
     else if (direction === 'SELL' && newsSentiment === 'BULLISH') newsSentimentScore = 1;
 
     // =========================================================================
-    // TOTAL 0–100 QUALITY SCORE CALCULATION
+    // TOTAL 0–100 CORE QUALITY SCORE CALCULATION (GATE 82)
+    // Core score strictly represents ONLY deterministic core trade-validity factors.
+    // Secondary analytics (empirical calibration factors, AI bonus, relative strength)
+    // MUST NOT increase or modify coreScore to rescue a failed setup.
     // =========================================================================
-    const rawTotalScore = Math.min(
+    const coreScore = Math.min(
       100,
       higherTfTrendScore +
         marketStructureScore +
@@ -526,19 +545,11 @@ export class ScoringEngine {
         entryQualityScore +
         newsSentimentScore
     );
-
-    // Apply empirical confidence calibration factor (backend performance weighting)
-    const primaryStratId = strategyEval.strategyResults?.find(s => s.passed)?.id;
-    const calibrationFactor = StrategyPerformanceTracker.getConfidenceCalibrationFactor(
-      rawTotalScore,
-      primaryStratId,
-      cleanSymbol
-    );
-    const totalScore = Math.min(100, Math.max(0, Math.round(rawTotalScore * calibrationFactor)));
+    const totalScore = coreScore;
 
     // =========================================================================
-    // GATE 28: Independent Confirmation Diversity Evaluation
-    // Requires confirmations from AT LEAST 3 distinct categories
+    // GATE 28 / GATE 81: Independent Confirmation Diversity Evaluation (Secondary Evidence)
+    // Evaluates confirmation diversity across independent indicator categories
     // =========================================================================
     const diversityResult = Gate28ConfirmationDiversity.evaluate(confluenceReasons, {
       htfEma9: lastEma9_1h,
@@ -551,12 +562,8 @@ export class ScoringEngine {
       atr: atr_15m,
     });
 
-    if (!diversityResult.isValid) {
-      return this.createRejection(
-        diversityResult.rejectionReason || 'REJECTED: INSUFFICIENT_CONFIRMATION_DIVERSITY. Setup fails independent confirmation diversity requirement (minimum 3 categories required)',
-        marketRegime,
-        regimeDetails
-      );
+    if (diversityResult.explanation) {
+      confluenceReasons.push(diversityResult.explanation);
     }
 
     // =========================================================================
@@ -584,10 +591,12 @@ export class ScoringEngine {
       stopLoss = Number(proposedSl.toFixed(precision));
     }
 
+    const calculatedRisk = Math.abs(entryPrice - stopLoss);
+
     const tpSetup = ScoringEngine.calculateThreeTakeProfits(
       direction,
       entryPrice,
-      stopLoss,
+      calculatedRisk,
       atr_15m,
       support15m,
       resistance15m,
@@ -603,7 +612,6 @@ export class ScoringEngine {
     tp3 = tpSetup.tp3;
     takeProfit = tp2;
 
-    const calculatedRisk = Math.abs(entryPrice - stopLoss);
     // Base reward on actual TP structure: average reward of the three distinct targets
     const calculatedReward = (Math.abs(tp1 - entryPrice) + Math.abs(tp2 - entryPrice) + Math.abs(tp3 - entryPrice)) / 3;
     const rawRR = calculatedRisk > 0 ? Number((calculatedReward / calculatedRisk).toFixed(2)) : 0;
@@ -617,11 +625,31 @@ export class ScoringEngine {
       );
     }
 
+    // Gate 91: 4 High-Quality Optimized Pathways
+    const hasStrongTrend = higherTfTrendScore >= 12;
+    const hasValidEntry = entryQualityScore >= 5;
+    const hasGoodRR = rawRR >= thresholds.minimumRR;
+    const isStrongTrendPath = hasStrongTrend && hasValidEntry && hasGoodRR;
+
+    const isBreakout = (marketRegime as string) === 'BREAKOUT' || primaryStrategyName.toUpperCase().includes('BREAKOUT');
+    const hasValidStructure = marketStructureScore >= 9;
+    const isGoodBreakoutPath = isBreakout && hasValidStructure && hasGoodRR;
+
+    const isReversal = (marketRegime as string) === 'RANGE_REVERSAL' || (marketRegime as string) === 'RANGE' || primaryStrategyName.toUpperCase().includes('REVERSAL') || primaryStrategyName.toUpperCase().includes('DIVERGENCE') || primaryStrategyName.toUpperCase().includes('SWEEP');
+    const hasAcceptableRisk = rawRR >= 1.5;
+    const isGoodReversalPath = isReversal && hasValidStructure && hasAcceptableRisk;
+
+    const hasGoodMomentum = momentumScore >= 9;
+    const isGoodMomentumPath = hasGoodMomentum && hasValidEntry && hasAcceptableRisk;
+
+    const isOptimizedPath = isStrongTrendPath || isGoodBreakoutPath || isGoodReversalPath || isGoodMomentumPath;
+    const effectiveMinWinProb = isOptimizedPath ? 35 : thresholds.minimumWinProbability;
+
     // Historical Win Rate & Positive Expectancy Calculation
     const estimatedWinRate = this.estimateWinRate(totalScore, rawRR, strategyEval.agreeingStrategiesCount);
-    if (estimatedWinRate <= thresholds.minimumWinProbability) {
+    if (estimatedWinRate <= effectiveMinWinProb) {
       return this.createRejection(
-        `REJECTED: WIN_RATE_BELOW_THRESHOLD. Estimated win rate (${estimatedWinRate}%) is at or below ${thresholds.minimumWinProbability}% threshold`,
+        `REJECTED: WIN_RATE_BELOW_THRESHOLD. Estimated win rate (${estimatedWinRate}%) is at or below ${effectiveMinWinProb}% threshold`,
         marketRegime,
         regimeDetails
       );
@@ -708,6 +736,7 @@ export class ScoringEngine {
       volatilityAtrScore,
       entryQualityScore,
       newsSentimentScore,
+      coreScore: totalScore,
       totalScore,
       // Legacy compatibility
       trendScore: higherTfTrendScore,
@@ -722,6 +751,7 @@ export class ScoringEngine {
     return {
       isValid: true,
       score: totalScore,
+      coreScore: totalScore,
       qualityTier,
       direction,
       marketRegime,
@@ -972,6 +1002,7 @@ export class ScoringEngine {
     return {
       isValid: false,
       score: 0,
+      coreScore: 0,
       qualityTier: 'REJECT',
       direction: 'BUY',
       marketRegime,

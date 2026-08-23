@@ -195,26 +195,43 @@ export class StrategyEngine {
     const totalStrategiesEvaluated = Math.max(1, strategyResults.length);
     const agreementRatio = agreeingStrategiesCount / totalStrategiesEvaluated;
     const rawWeightedScore = totalWeight > 0 ? weightedScoreSum / totalWeight : 0;
+    const weightedAgreementRatio = totalWeight > 0 ? (weightedScoreSum / totalWeight) / 100 : agreementRatio;
+
+    // GATE 84: Different valid setups qualify through different combinations of core evidence.
+    // A valid trend trade does NOT require breakout, pullback, mean reversion, or order flow simultaneously.
+    // Archetype core combinations:
+    // 1. Trend: Trend Following (s1) or Momentum (s2) + Volatility Filter (s6) + at least 3 agreeing strategies OR weighted agreement >= 45%
+    // 2. Breakout: Breakout (s3) + Volatility Filter (s6) + (Momentum s2 || Order Flow s5 || agreeing >= 2)
+    // 3. Range: Mean Reversion (s4) + Volatility Filter (s6) + agreeing >= 2
+    const isCoreTrendCombo = StrategyEngine.isTrending(regime) && (s1.passed || s2.passed) && s6.passed && (agreeingStrategiesCount >= 3 || weightedAgreementRatio >= 0.45);
+    const isCoreBreakoutCombo = StrategyEngine.isBreakout(regime) && s3.passed && s6.passed && (agreeingStrategiesCount >= 2 || s2.passed || s5.passed);
+    const isCoreRangeCombo = (StrategyEngine.isRanging(regime) || StrategyEngine.isLowVolatility(regime)) && s4.passed && s6.passed && agreeingStrategiesCount >= 2;
+
     const agreementScore = Math.round(
-      agreementRatio * 40 +
+      Math.max(agreementRatio, weightedAgreementRatio) * 40 +
         (tfScores.alignedCount / Math.max(1, tfScores.totalEvaluated)) * 30 +
         (rawWeightedScore / 100) * 30
     );
 
-    // Require configurable minimum strategies agreeing ratio, minimum 50 agreement score, and configurable minimum timeframe alignment ratio
+    // Require configurable minimum strategies agreeing ratio (or qualified core combination), minimum 45 agreement score, and configurable minimum timeframe alignment ratio
     const thresholds = serverConfig.getConfig().thresholds;
     const minimumRequiredAgreement = thresholds.minimumStrategyAgreement;
-    const passed = agreementRatio >= minimumRequiredAgreement;
+    const passed =
+      agreementRatio >= minimumRequiredAgreement ||
+      weightedAgreementRatio >= (minimumRequiredAgreement * 0.8) ||
+      isCoreTrendCombo ||
+      isCoreBreakoutCombo ||
+      isCoreRangeCombo;
     const timeframeAlignmentRatio = tfScores.totalEvaluated > 0 ? tfScores.alignedCount / tfScores.totalEvaluated : 0;
 
     const hasStrongConfluence = 
       passed && 
-      agreementScore >= 50 && 
+      agreementScore >= 45 && 
       timeframeAlignmentRatio >= thresholds.minimumTimeframeAlignment;
 
     if (!hasStrongConfluence) {
       return this.createRejection(
-        `REJECTED: INSUFFICIENT_CONFLUENCE. Strategy agreement ratio ${(agreementRatio * 100).toFixed(1)}% (${agreeingStrategiesCount}/${totalStrategiesEvaluated}, min ${minimumRequiredAgreement * 100}%) with timeframe alignment ratio ${(timeframeAlignmentRatio * 100).toFixed(0)}% (${tfScores.alignedCount}/${tfScores.totalEvaluated}, min ${thresholds.minimumTimeframeAlignment * 100}%). Agreement Score: ${agreementScore}/100 (min 50 required)`,
+        `REJECTED: INSUFFICIENT_CONFLUENCE. Strategy agreement ratio ${(agreementRatio * 100).toFixed(1)}% (${agreeingStrategiesCount}/${totalStrategiesEvaluated}, min ${minimumRequiredAgreement * 100}%) with timeframe alignment ratio ${(timeframeAlignmentRatio * 100).toFixed(0)}% (${tfScores.alignedCount}/${tfScores.totalEvaluated}, min ${thresholds.minimumTimeframeAlignment * 100}%). Agreement Score: ${agreementScore}/100 (min 45 required)`,
         regime,
         regimeDetails
       );

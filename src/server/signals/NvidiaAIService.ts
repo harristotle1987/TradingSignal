@@ -4,10 +4,35 @@
  * Does NOT generate market prices, candles, or entry levels.
  */
 
-import { ConfluenceAnalysisResult } from './ConfluenceEngine.js';
+import { SignalDirection } from '../../types/index.js';
 import { Gate33AiAssessmentPolicy, AiQualitativeClassification } from './Gate33AiAssessmentPolicy.js';
 import { serverConfig } from '../config.js';
 import { logger } from '../logger.js';
+
+export interface ConfluenceAnalysisResult {
+  hasSetup: boolean;
+  symbol: string;
+  entryPrice: number;
+  direction?: SignalDirection;
+  timeframe?: string;
+  strategy?: string;
+  confluenceReasons: string[];
+  confidenceScore: number;
+  stopLoss: number;
+  takeProfit: number;
+  riskRewardRatio: number;
+  technicalMetrics?: {
+    htfEma9: number;
+    htfEma21: number;
+    htfRsi: number;
+    ltfEma9: number;
+    ltfEma21: number;
+    ltfRsi: number;
+    ltfMacdHistogram: number;
+    atr: number;
+  };
+  rejectionReason?: string;
+}
 
 export interface NvidiaEvaluationResult {
   aiAssessment: string;

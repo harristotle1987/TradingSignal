@@ -1,7 +1,7 @@
 [
   {
-    "id": "funnel_1787413088879_BTCUSD_29p0t",
-    "timestamp": 1787413088879,
+    "id": "funnel_1787487179141_BTCUSD_wu9ym",
+    "timestamp": 1787487179141,
     "symbol": "BTCUSD",
     "direction": "BUY",
     "stage": "GATE_3",
@@ -18,8 +18,8 @@
     "rejectionStage": "GATE_3"
   },
   {
-    "id": "test_lk6rkb4",
-    "timestamp": 1787413074710,
+    "id": "test_r5xw7yc",
+    "timestamp": 1787487167619,
     "symbol": "ADAUSDT",
     "direction": "BUY",
     "stage": "GATE_4",
