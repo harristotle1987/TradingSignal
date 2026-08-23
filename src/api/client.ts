@@ -36,7 +36,7 @@ class ApiClient {
   public getAdminToken(): string | null {
     if (this.adminToken) return this.adminToken;
     if (typeof localStorage !== 'undefined') {
-      return localStorage.getItem('admin_token') || localStorage.getItem('ADMIN_API_KEY') || null;
+      return localStorage.getItem('admin_token') || null;
     }
     return null;
   }

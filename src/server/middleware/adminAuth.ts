@@ -39,7 +39,6 @@ export function extractAuthToken(req: Request): string | null {
  */
 export function adminAuthMiddleware(req: Request, res: Response, next: NextFunction) {
   const token = extractAuthToken(req);
-  const clientApp = req.headers['x-client-app'] || req.headers['X-Client-App'];
 
   // Collect configured admin secrets from server environment (EXCLUDING API_KEY which is for Gemini)
   const configuredSecrets = [
@@ -54,9 +53,6 @@ export function adminAuthMiddleware(req: Request, res: Response, next: NextFunct
 
   if (configuredSecrets.length > 0) {
     if (token && configuredSecrets.includes(token)) {
-      isAuthorized = true;
-    } else if (clientApp || req.headers['sec-fetch-site'] === 'same-origin' || req.headers['referer']) {
-      // Allow legitimate requests from the built-in frontend application client or same-origin browser
       isAuthorized = true;
     }
   } else {

@@ -1,6 +1,7 @@
 /**
- * Explicit Allowed-Origin CORS Middleware (Gate 69)
- * Replaces wildcard Access-Control-Allow-Origin: * with explicit APP_URL / ALLOWED_ORIGINS.
+ * Explicit Allowed-Origin CORS Middleware (Gate 97)
+ * Replaces wildcard Access-Control-Allow-Origin: * with explicit approved origins.
+ * Hard-codes https://trading-signal-chi.vercel.app for production.
  * Rejects unauthorized origins for credentialed and mutating requests.
  */
 
@@ -15,26 +16,28 @@ export function normalizeOrigin(origin: string): string {
 }
 
 /**
- * Helper to retrieve allowed origins list from APP_URL and ALLOWED_ORIGINS env vars.
+ * Helper to retrieve allowed origins list.
+ * Production hard-codes https://trading-signal-chi.vercel.app.
+ * Development allows localhost / 127.0.0.1 and optional APP_URL.
  */
 export function getAllowedOrigins(): string[] {
+  const isDev = process.env.NODE_ENV !== 'production';
   const origins: string[] = [];
 
-  if (process.env.APP_URL && process.env.APP_URL.trim().length > 0) {
-    origins.push(normalizeOrigin(process.env.APP_URL));
-  }
-
-  if (process.env.ALLOWED_ORIGINS && process.env.ALLOWED_ORIGINS.trim().length > 0) {
-    const list = process.env.ALLOWED_ORIGINS.split(',').map((o) => normalizeOrigin(o)).filter(Boolean);
-    origins.push(...list);
+  if (isDev) {
+    if (process.env.APP_URL && process.env.APP_URL.trim().length > 0) {
+      origins.push(normalizeOrigin(process.env.APP_URL));
+    }
+  } else {
+    // Production hard-coded origin
+    origins.push('https://trading-signal-chi.vercel.app');
   }
 
   return Array.from(new Set(origins));
 }
 
 /**
- * CORS Middleware enforcing explicit APP_URL and ALLOWED_ORIGINS.
- * Replaces wildcard '*' and rejects unauthorized origins for credentialed/mutating requests.
+ * CORS Middleware enforcing strict production and development origins.
  */
 export function corsMiddleware(req: Request, res: Response, next: NextFunction) {
   const origin = req.headers.origin;
@@ -48,18 +51,15 @@ export function corsMiddleware(req: Request, res: Response, next: NextFunction) 
 
   const normalizedReqOrigin = normalizeOrigin(origin);
 
-  // Check if requested origin is allowed
+  // Check if requested origin is explicitly allowed
   let isAllowed = allowedOrigins.includes(normalizedReqOrigin);
 
-  // Always allow standard dev and platform preview environments (.run.app, .ai.studio, .vercel.app, localhost, same-origin)
-  if (!isAllowed) {
+  // In development mode only, allow localhost and 127.0.0.1
+  if (!isAllowed && isDev) {
     if (
       allowedOrigins.length === 0 ||
       normalizedReqOrigin.includes('localhost') ||
       normalizedReqOrigin.includes('127.0.0.1') ||
-      normalizedReqOrigin.includes('.run.app') ||
-      normalizedReqOrigin.includes('.ai.studio') ||
-      normalizedReqOrigin.includes('.vercel.app') ||
       (req.headers.host && normalizedReqOrigin.includes(req.headers.host.toLowerCase()))
     ) {
       isAllowed = true;
@@ -107,3 +107,4 @@ export function corsMiddleware(req: Request, res: Response, next: NextFunction) 
   // Public GET without credentials from unauthorized origin: proceed without CORS headers
   next();
 }
+

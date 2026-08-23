@@ -1491,7 +1491,10 @@ export class SignalEngine {
             }
 
             // COMMIT CAP RESERVATION!
-            await ScannerPersistence.commitCap(inc.reservationId);
+            const commitRes = await ScannerPersistence.commitCap(inc.reservationId);
+            if (!commitRes.success) {
+              logger.error(`[SignalEngine] CRITICAL CAP-STATE ERROR: Failed to commit cap reservation ${inc.reservationId} for ${sig.symbol}. Signal remains persisted and tradeable.`, { error: commitRes.error });
+            }
 
             // ONLY AFTER BOTH SUCCEED: activate signal
             this.activeSignals.set(sig.symbol, sig);

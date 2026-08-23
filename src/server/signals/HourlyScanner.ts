@@ -895,7 +895,10 @@ export class HourlyScannerService {
         }
 
         // COMMIT CAP RESERVATION!
-        await ScannerPersistence.commitCap(inc.reservationId);
+        const commitRes = await ScannerPersistence.commitCap(inc.reservationId);
+        if (!commitRes.success) {
+          logger.error(`[Hourly Scanner] CRITICAL CAP-STATE ERROR: Failed to commit cap reservation ${inc.reservationId} for ${sig.symbol}. Signal remains persisted and tradeable.`, { error: commitRes.error });
+        }
 
         // GATE 36: Record notification count
         Gate36ConfigurableSignalFrequency.recordNotificationCount(1);

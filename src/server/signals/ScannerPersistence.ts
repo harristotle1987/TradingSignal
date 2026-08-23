@@ -495,10 +495,10 @@ export class ScannerPersistence {
   /**
    * Commits a previously reserved daily cap count.
    */
-  static async commitCap(reservationId?: string): Promise<void> {
+  static async commitCap(reservationId?: string): Promise<{ success: boolean; error?: string }> {
     if (!reservationId) {
       logger.warn('[ScannerPersistence] commitCap called without a reservationId. No-op.');
-      return;
+      return { success: false, error: 'Missing reservationId' };
     }
     this.init();
     const today = new Date().toISOString().split('T')[0];
@@ -514,7 +514,7 @@ export class ScannerPersistence {
           logger.info(`[ScannerPersistence] Committed reservation locally: ${reservationId}`);
         }
       }
-      return;
+      return { success: true };
     }
 
     try {
@@ -533,8 +533,10 @@ export class ScannerPersistence {
           }
         }
       });
+      return { success: true };
     } catch (err) {
       logger.warn('[ScannerPersistence] commitCap Firestore transaction failed:', { error: String(err) });
+      return { success: false, error: String(err) };
     }
   }
 
