@@ -194,12 +194,28 @@ export class HourlyScannerService {
       : 30;
     const intervalMs = intervalMinutes * 60 * 1000;
     const timeElapsed = now - capState.lastScanTime;
+    const nextDueTime = capState.lastScanTime > 0 ? capState.lastScanTime + intervalMs : now;
+    const millisecondsUntilDue = Math.max(0, nextDueTime - now);
+    const configuredTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
+    logger.info(`[Timezone Diagnostic] Evaluation:`, {
+      dateNow: now,
+      isoUtc: new Date(now).toISOString(),
+      configuredTimezone: configuredTz,
+      lastScanTime: capState.lastScanTime,
+      lastScanTimeIsoUtc: capState.lastScanTime > 0 ? new Date(capState.lastScanTime).toISOString() : 'NEVER',
+      nextScanTime: nextDueTime,
+      nextScanTimeIsoUtc: nextDueTime > 0 ? new Date(nextDueTime).toISOString() : 'NOW',
+      millisecondsUntilDue,
+      intervalMinutes,
+      intervalMs,
+      timeElapsed,
+      isDue: capState.lastScanTime === 0 || timeElapsed >= intervalMs
+    });
 
     // Enforce configured interval: minimum time that must elapse between automated evaluations
     if (capState.lastScanTime > 0 && timeElapsed < intervalMs) {
-      const nextDueTime = capState.lastScanTime + intervalMs;
-      const timeRemainingMs = Math.max(0, nextDueTime - now);
-      const minutesRemaining = Math.ceil(timeRemainingMs / (60 * 1000));
+      const minutesRemaining = Math.ceil(millisecondsUntilDue / (60 * 1000));
 
       logger.info(`[Hourly Scanner] External trigger skipped: minimum interval (${intervalMinutes}m) not due. Time elapsed: ${Math.floor(timeElapsed / (60 * 1000))}m. Next scan due in ${minutesRemaining}m.`);
 
@@ -285,7 +301,7 @@ export class HourlyScannerService {
     this.isScanning = true;
     const scanStartTime = Date.now();
     // Persist scanStartTime immediately upon acquiring lock to prevent race conditions
-    await ScannerPersistence.updateLastScanTime(scanStartTime);
+    await ScannerPersistence.updateLastScanTime(scanStartTime, 'ACTUAL_MARKET_SCAN_EXECUTION_START');
 
     logger.info('================================================================');
     logger.info('[Hourly Intelligent Scanner] Initiating Multi-Asset Scan Cycle...');
@@ -312,7 +328,7 @@ export class HourlyScannerService {
 
       if (currentDailyCount >= dailyCap) {
         logger.info(`[Hourly Scanner] Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Scanning skipped to preserve portfolio limits.`);
-        await ScannerPersistence.updateLastScanTime(scanStartTime);
+        await ScannerPersistence.updateLastScanTime(scanStartTime, 'SCAN_ATTEMPT_DAILY_CAP_REACHED');
         return {
           success: true,
           status: 'SKIPPED_CAP_REACHED',
@@ -1050,7 +1066,7 @@ export class HourlyScannerService {
       }
 
       // 10. Update last scan timestamp
-      await ScannerPersistence.updateLastScanTime(Date.now());
+      await ScannerPersistence.updateLastScanTime(scanStartTime, 'ACTUAL_MARKET_SCAN_COMPLETED');
 
       const finalCapState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
       logger.info(`================================================================`);
@@ -1082,7 +1098,7 @@ export class HourlyScannerService {
     } catch (err) {
       logger.error('[Hourly Scanner] Critical failure during scan execution:', { error: String(err) });
       try {
-        await ScannerPersistence.updateLastScanTime(Date.now());
+        await ScannerPersistence.updateLastScanTime(scanStartTime, 'ACTUAL_MARKET_SCAN_ERROR_RECOVERY');
       } catch (tsErr) {
         logger.error('[Hourly Scanner] Failed to update lastScanTime after error:', { error: String(tsErr) });
       }

@@ -162,8 +162,10 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
     });
   }
 
-  // 1. Log external scan start
-  logger.info('EXTERNAL_HOURLY_SCAN_STARTED');
+  // 1. Log external scan start with full UTC / Unix timezone diagnostics
+  const now = Date.now();
+  const configuredTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  logger.info(`[Scanner Diagnostic] EXTERNAL_HOURLY_SCAN_TRIGGERED | Date.now(): ${now} | ISO UTC: ${new Date(now).toISOString()} | Runtime TZ: ${configuredTz}`);
 
   try {
     // Trigger automated scan enforcing configured interval (15m, 30m, 45m, 60m)
@@ -902,26 +904,8 @@ router.get('/signals', async (_req: Request, res: Response) => {
 router.post('/signals/generate', async (req: Request, res: Response) => {
   try {
     const requestedSymbol = (req.body?.symbol as string) || 'EURUSD';
-    const scanResult = await hourlyScanner.triggerManualScan();
-
-    const acceptedSignals = scanResult.acceptedSignals || scanResult.qualifiedSetups || [];
-    const matchingSignal = acceptedSignals.find((s) => s.symbol === requestedSymbol) || (acceptedSignals.length > 0 ? acceptedSignals[0] : undefined);
-
-    const response: SignalGenerationResponse = {
-      success: scanResult.success,
-      message: scanResult.message || (acceptedSignals.length > 0 ? `Scan identified ${acceptedSignals.length} tradeable setups.` : 'Scan completed. No tradeable setups met strict risk criteria.'),
-      symbol: matchingSignal?.symbol || requestedSymbol,
-      marketPrice: matchingSignal?.entryPrice,
-      signal: matchingSignal,
-      signals: acceptedSignals,
-      bestTrade: acceptedSignals[0],
-      secondBest: acceptedSignals[1],
-      suggestions: acceptedSignals.slice(2),
-      reason: scanResult.rejectionReasons && scanResult.rejectionReasons.length > 0 ? scanResult.rejectionReasons.join('; ') : undefined,
-      timestamp: scanResult.timestamp || Date.now(),
-    };
-
-    return res.status(200).json(response);
+    const generationResult = await signalEngine.generateSignal(requestedSymbol, undefined, true);
+    return res.status(200).json(generationResult);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return res.status(500).json({

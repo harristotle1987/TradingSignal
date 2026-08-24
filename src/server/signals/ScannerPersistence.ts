@@ -1434,13 +1434,14 @@ export class ScannerPersistence {
 
   /**
    * Updates last scan time in local disk persistence and Firestore.
+   * Only called during actual market scan executions.
    */
-  static async updateLastScanTime(timestamp = Date.now()): Promise<void> {
+  static async updateLastScanTime(timestamp = Date.now(), reason = 'UNSPECIFIED_SCAN_EVENT'): Promise<void> {
     this.init();
-    if (!this.isProductionMode()) {
-      this.localData.capState.lastScanTime = timestamp;
-      this.saveLocalData();
-    }
+    logger.info(`[ScannerPersistence] WRITING lastScanTime: ${timestamp} (${new Date(timestamp).toISOString()}) | Reason: ${reason}`);
+    
+    this.localData.capState.lastScanTime = timestamp;
+    this.saveLocalData();
 
     const firestore = getFirestoreAdmin();
     if (firestore) {
@@ -1448,6 +1449,7 @@ export class ScannerPersistence {
         await firestore
           .doc(FIRESTORE_CAP_DOC)
           .set({ lastScanTime: timestamp }, { merge: true });
+        logger.info(`[ScannerPersistence] Firestore lastScanTime successfully synchronized: ${timestamp}`);
       } catch (err) {
         logger.warn('[ScannerPersistence] Failed to update lastScanTime in Firestore:', { error: String(err) });
       }
