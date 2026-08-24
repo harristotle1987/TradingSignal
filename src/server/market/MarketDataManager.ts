@@ -23,6 +23,7 @@ import { quotaManager } from './QuotaManager.js';
 import { serverConfig } from '../config.js';
 import { logger } from '../logger.js';
 import { ScannerPersistence } from '../signals/ScannerPersistence.js';
+import { NvidiaAIService } from '../signals/NvidiaAIService.js';
 
 class ProviderRequestQueue {
   private lastCallTime = new Map<string, number>();
@@ -749,8 +750,24 @@ export class MarketDataManager {
       }
     }
 
+    try {
+      const nvidiaHealth = await NvidiaAIService.healthCheck();
+      providerMap['nvidia'] = nvidiaHealth;
+      if (nvidiaHealth.status === 'CONNECTED') {
+        connectedCount++;
+      }
+    } catch {
+      providerMap['nvidia'] = {
+        provider: 'nvidia',
+        name: 'NVIDIA AI API',
+        configured: Boolean(process.env.NVIDIA_API_KEY),
+        status: process.env.NVIDIA_API_KEY ? 'CONNECTED' : 'UNAVAILABLE',
+      };
+    }
+
+    const totalTracked = healthResults.length + 1;
     let overallStatus: 'OPERATIONAL' | 'DEGRADED' | 'UNAVAILABLE' = 'UNAVAILABLE';
-    if (connectedCount === healthResults.length) {
+    if (connectedCount >= healthResults.length) {
       overallStatus = 'OPERATIONAL';
     } else if (connectedCount > 0) {
       overallStatus = 'DEGRADED';

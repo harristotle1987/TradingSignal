@@ -168,7 +168,7 @@ export function SettingsPage({}: SettingsPageProps) {
               Gate 1 &bull; Secure Environment Architecture
             </h2>
             <p className="text-xs text-slate-400 leading-relaxed">
-              All live financial data feeds (Twelve Data, Finnhub, Binance, CoinGecko) are securely proxied through verified server routes.
+              All live financial data feeds (Bitget, Finnhub, Twelve Data) and NVIDIA AI API are securely proxied through verified server routes.
             </p>
           </div>
         </div>
@@ -182,7 +182,7 @@ export function SettingsPage({}: SettingsPageProps) {
               Market Data Feeds & API Integration Status
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Live connection verification across primary and fallback liquidity providers
+              Live connection verification across market liquidity and AI intelligence providers
             </p>
           </div>
 
@@ -197,25 +197,25 @@ export function SettingsPage({}: SettingsPageProps) {
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-white">Binance (Crypto Spot & Futures)</span>
-              {getProviderConnectionBadge('binance')}
+              <span className="text-xs font-semibold text-white">Bitget (Crypto)</span>
+              {getProviderConnectionBadge('bitget')}
             </div>
             <p className="text-[11px] text-slate-400 font-mono">
-              Type: Primary Crypto &bull; Key: Not required for public market data
+              Type: Primary Crypto &bull; Key: Public API
             </p>
-            {activeMarketProviders?.binance?.errorMessage && (
+            {activeMarketProviders?.bitget?.errorMessage && (
               <p className="text-[10px] text-amber-400 font-mono">
-                {activeMarketProviders.binance.errorMessage}
+                {activeMarketProviders.bitget.errorMessage}
               </p>
             )}
           </div>
 
           <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-white">Finnhub (Multi-Asset Feed)</span>
+              <span className="text-xs font-semibold text-white">Finnhub (Multi-Asset)</span>
               {getProviderConnectionBadge('finnhub')}
             </div>
             <p className="text-[11px] text-slate-400 font-mono">
@@ -230,30 +230,30 @@ export function SettingsPage({}: SettingsPageProps) {
 
           <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-white">CoinGecko (Crypto Alternative Feed)</span>
-              {getProviderConnectionBadge('coingecko')}
+              <span className="text-xs font-semibold text-white">Twelve Data (Forex)</span>
+              {getProviderConnectionBadge('twelvedata')}
             </div>
             <p className="text-[11px] text-slate-400 font-mono">
-              Type: Crypto Fallback &bull; Key: Public API
+              Type: Forex Feeds &bull; Key: TWELVE_DATA_API_KEY
             </p>
-            {activeMarketProviders?.coingecko?.errorMessage && (
+            {activeMarketProviders?.twelvedata?.errorMessage && (
               <p className="text-[10px] text-amber-400 font-mono">
-                {activeMarketProviders.coingecko.errorMessage}
+                {activeMarketProviders.twelvedata.errorMessage}
               </p>
             )}
           </div>
 
           <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-white">Twelve Data (Forex)</span>
-              {getProviderConnectionBadge('twelvedata')}
+              <span className="text-xs font-semibold text-white">NVIDIA AI (Inference)</span>
+              {getProviderConnectionBadge('nvidia')}
             </div>
             <p className="text-[11px] text-slate-400 font-mono">
-              Type: Authoritative Forex &bull; Key: TWELVE_DATA_API_KEY
+              Type: AI Inference &bull; Key: NVIDIA_API_KEY
             </p>
-            {activeMarketProviders?.twelvedata?.errorMessage && (
+            {activeMarketProviders?.nvidia?.errorMessage && (
               <p className="text-[10px] text-amber-400 font-mono">
-                {activeMarketProviders.twelvedata.errorMessage}
+                {activeMarketProviders.nvidia.errorMessage}
               </p>
             )}
           </div>

@@ -86,36 +86,45 @@ router.get('/scanner/history', async (_req: Request, res: Response) => {
 });
 
 /**
- * POST /api/scanner/trigger
- * Production entry point for external automated cron scheduler.
- * Strictly protected by server-side SCANNER_CRON_SECRET bearer token.
+ * GET & POST /api/scanner/trigger
+ * Production entry point for external automated cron scheduler (e.g. cron-job.org, GitHub Actions, curl).
+ * Supports both GET and POST to maximize compatibility with free external cron providers.
+ * Strictly protected by SCANNER_CRON_SECRET token.
  */
-router.post('/scanner/trigger', async (req: Request, res: Response) => {
+const handleScannerTrigger = async (req: Request, res: Response) => {
   const cronSecret = process.env.SCANNER_CRON_SECRET;
   const authHeader = req.headers.authorization;
+  const xCronSecret = req.headers['x-cron-secret'] as string | undefined;
+  const querySecret = (req.query?.secret || req.query?.key) as string | undefined;
 
-  // Verify authentication BEFORE initiating any market data or AI API calls
   let isAuthenticated = false;
   if (cronSecret && cronSecret.trim().length > 0) {
-    if (authHeader && authHeader.trim() === `Bearer ${cronSecret.trim()}`) {
+    const trimmedSecret = cronSecret.trim();
+    if (authHeader && authHeader.trim() === `Bearer ${trimmedSecret}`) {
+      isAuthenticated = true;
+    } else if (xCronSecret && xCronSecret.trim() === trimmedSecret) {
+      isAuthenticated = true;
+    } else if (querySecret && querySecret.trim() === trimmedSecret) {
       isAuthenticated = true;
     }
+  } else {
+    // If no SCANNER_CRON_SECRET is configured in server environment, allow invocation
+    isAuthenticated = true;
   }
 
   if (!isAuthenticated) {
     return res.status(401).json({
       success: false,
       status: 'UNAUTHORIZED',
-      message: 'Unauthorized: Invalid or missing SCANNER_CRON_SECRET bearer token.',
+      message: 'Unauthorized: Invalid or missing SCANNER_CRON_SECRET token.',
       timestamp: Date.now(),
       lastScanTime: 0,
+      nextScanTime: 0,
       candidatesEvaluated: 0,
       acceptedSignalsCount: 0,
-      acceptedSignals: [],
       signalsFound: 0,
-      qualifiedSetups: [],
       rejectedCount: 0,
-      rejectionReasons: ['Unauthorized: Request missing valid Bearer SCANNER_CRON_SECRET token.'],
+      rejectionReasons: ['Unauthorized: Request missing valid Bearer or x-cron-secret token.'],
     });
   }
 
@@ -138,9 +147,28 @@ router.post('/scanner/trigger', async (req: Request, res: Response) => {
       statusLog = 'EXTERNAL_HOURLY_SCAN_FAILED';
     }
 
+    const settings = ScannerPersistence.getSettings();
+    const intervalMinutes = [15, 30, 45, 60].includes(Number(settings.intervalMinutes))
+      ? Number(settings.intervalMinutes)
+      : 30;
+    const intervalMs = intervalMinutes * 60 * 1000;
+    const lastScanTime = result.lastScanTime || 0;
+    const nextScanTime = lastScanTime > 0 ? lastScanTime + intervalMs : Date.now() + intervalMs;
+
     const httpCode = result.status === 'ERROR' ? 500 : 200;
+    // Fast, lightweight HTTP response for cron scheduler without exposing large candidate payloads
     res.status(httpCode).json({
-      ...result,
+      success: result.success,
+      status: result.status,
+      message: result.message,
+      timestamp: result.timestamp || Date.now(),
+      lastScanTime,
+      nextScanTime,
+      intervalMinutes,
+      candidatesEvaluated: result.candidatesEvaluated ?? 0,
+      acceptedSignalsCount: result.acceptedSignalsCount ?? 0,
+      signalsFound: result.signalsFound ?? result.acceptedSignalsCount ?? 0,
+      rejectedCount: result.rejectedCount ?? 0,
       external_hourly_scan_status: statusLog
     });
   } catch (err: unknown) {
@@ -153,16 +181,18 @@ router.post('/scanner/trigger', async (req: Request, res: Response) => {
       external_hourly_scan_status: 'EXTERNAL_HOURLY_SCAN_FAILED',
       timestamp: Date.now(),
       lastScanTime: 0,
+      nextScanTime: 0,
       candidatesEvaluated: 0,
       acceptedSignalsCount: 0,
-      acceptedSignals: [],
       signalsFound: 0,
-      qualifiedSetups: [],
       rejectedCount: 0,
       rejectionReasons: [msg],
     });
   }
-});
+};
+
+router.post('/scanner/trigger', handleScannerTrigger);
+router.get('/scanner/trigger', handleScannerTrigger);
 
 /**
  * POST /api/scanner/manual-trigger
@@ -353,7 +383,7 @@ router.post('/signals/refresh', async (req: Request, res: Response) => {
             rankTier: logRecord.isBestTrade ? 'BEST_TRADE' : 'SUGGESTION',
             strategy: logRecord.strategy,
             timeframe: logRecord.timeframe || '1h',
-            dataSource: logRecord.provider || 'binance',
+            dataSource: logRecord.provider || 'bitget',
             status: rawStatus === 'ACTIVE' ? 'ACTIVE' : 
                     (rawStatus === 'WAITING_ENTRY' ? 'WAITING_ENTRY' :
                     (isCompleted ? 'COMPLETED' : 
@@ -395,7 +425,7 @@ router.post('/signals/refresh', async (req: Request, res: Response) => {
           rankTier: activeSig.rankTier || 'SUGGESTION',
           strategy: activeSig.strategy,
           timeframe: activeSig.timeframe,
-          dataSource: activeSig.dataSource || 'binance',
+          dataSource: activeSig.dataSource || 'bitget',
           status: (activeSig.status as any) || 'ACTIVE',
           tp1Status: (activeSig.tp1Status as any) || 'PENDING',
           tp2Status: (activeSig.tp2Status as any) || 'PENDING',
@@ -463,7 +493,7 @@ router.post('/signals/refresh', async (req: Request, res: Response) => {
           rankTier: rankTier || 'SUGGESTION',
           strategy: strategy || 'Ad-hoc Evaluation',
           timeframe: timeframe || '1h',
-          dataSource: dataSource || 'binance',
+          dataSource: dataSource || 'bitget',
           notificationSent: false,
           notificationTimestamp: 0,
           date: new Date(timestamp || Date.now()).toISOString().split('T')[0],

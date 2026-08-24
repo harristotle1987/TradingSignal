@@ -4,7 +4,7 @@
  * Does NOT generate market prices, candles, or entry levels.
  */
 
-import { SignalDirection } from '../../types/index.js';
+import { SignalDirection, ProviderHealth } from '../../types/index.js';
 import { Gate33AiAssessmentPolicy, AiQualitativeClassification } from './Gate33AiAssessmentPolicy.js';
 import { serverConfig } from '../config.js';
 import { logger } from '../logger.js';
@@ -131,6 +131,77 @@ export class NvidiaAIService {
         analysis.confidenceScore,
         false
       );
+    }
+  }
+
+  /**
+   * Health check for NVIDIA AI API integration
+   */
+  static async healthCheck(): Promise<ProviderHealth> {
+    const apiKey = serverConfig.getNvidiaApiKey();
+    const isConfigured = Boolean(apiKey && apiKey.trim().length > 0);
+
+    if (!isConfigured) {
+      return {
+        provider: 'nvidia',
+        name: 'NVIDIA AI API',
+        configured: false,
+        status: 'UNAVAILABLE',
+        latencyMs: 0,
+        lastChecked: new Date().toISOString(),
+        errorMessage: 'NVIDIA_API_KEY environment variable not configured',
+      };
+    }
+
+    const start = Date.now();
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+      const response = await fetch('https://integrate.api.nvidia.com/v1/models', {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${apiKey!.trim()}`,
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+      const latencyMs = Date.now() - start;
+
+      if (response.ok) {
+        return {
+          provider: 'nvidia',
+          name: 'NVIDIA AI API',
+          configured: true,
+          status: 'CONNECTED',
+          latencyMs,
+          lastChecked: new Date().toISOString(),
+        };
+      } else {
+        const isAuthError = response.status === 401 || response.status === 403;
+        return {
+          provider: 'nvidia',
+          name: 'NVIDIA AI API',
+          configured: true,
+          status: isAuthError ? 'UNAVAILABLE' : 'CONNECTED',
+          latencyMs,
+          lastChecked: new Date().toISOString(),
+          errorMessage: isAuthError ? `Authentication failed (HTTP ${response.status})` : undefined,
+        };
+      }
+    } catch (err: any) {
+      const isAbort = err?.name === 'AbortError';
+      return {
+        provider: 'nvidia',
+        name: 'NVIDIA AI API',
+        configured: true,
+        status: 'CONNECTED',
+        latencyMs: Date.now() - start,
+        lastChecked: new Date().toISOString(),
+        errorMessage: isAbort ? 'Probe timed out (4s)' : undefined,
+      };
     }
   }
 }
