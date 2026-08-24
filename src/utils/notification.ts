@@ -136,6 +136,42 @@ export class NotificationService {
   }
 
   /**
+   * Universal browser notification dispatcher.
+   * Uses ServiceWorkerRegistration.showNotification() when available (required for mobile/Android where new Notification() throws Illegal constructor),
+   * and falls back to window.Notification constructor on supported desktop browsers.
+   */
+  private static async displayNotification(title: string, options: NotificationOptions): Promise<boolean> {
+    // 1. Try ServiceWorker registration first (required on Android/mobile browsers)
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        if (registration && typeof registration.showNotification === 'function') {
+          await registration.showNotification(title, options);
+          return true;
+        }
+      } catch (swErr) {
+        console.debug('[NotificationService] ServiceWorker showNotification failed, trying fallback:', swErr);
+      }
+    }
+
+    // 2. Fallback to desktop window Notification constructor
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      try {
+        const notification = new Notification(title, options);
+        notification.onclick = () => {
+          window.focus();
+          notification.close();
+        };
+        return true;
+      } catch (notifErr) {
+        console.warn('[NotificationService] Notification constructor failed:', notifErr);
+      }
+    }
+
+    return false;
+  }
+
+  /**
    * Dispatches an in-tab notification for an active user.
    */
   static notifyTopTrade(signal: TradingSignal, playSound = true): boolean {
@@ -164,17 +200,18 @@ export class NotificationService {
       const title = `🚨 ${tierLabel}: ${signal.symbol} [${signal.direction}]`;
       const body = `Live Entry: ${formattedEntry}\nTP: ${formattedTP} | SL: ${formattedSL} (R:R ${signal.riskRewardRatio}:1)\nScore: ${signal.score || signal.confidenceScore}/100`;
 
-      const notification = new Notification(title, {
+      const options: NotificationOptions = {
         body,
         icon: '/icon-192.png',
+        badge: '/icon-192.png',
         tag: `top_trade_${signal.symbol}_${signal.timestamp}`,
         requireInteraction: false,
-      });
-
-      notification.onclick = () => {
-        window.focus();
-        notification.close();
       };
+
+      // Trigger notification dispatch asynchronously
+      this.displayNotification(title, options).catch((err) => {
+        console.warn('[NotificationService] notifyTopTrade failed:', err);
+      });
 
       return true;
     } catch (err) {
@@ -204,18 +241,19 @@ export class NotificationService {
     }
 
     try {
-      const notification = new Notification('🔔 Trading Signal AI Alert Active', {
+      const options: NotificationOptions = {
         body: 'Browser notifications are configured! You will receive instant alerts whenever a new verified trade is qualified.',
         icon: '/icon-192.png',
+        badge: '/icon-192.png',
         tag: `test_alert_${Date.now()}`,
-      });
-
-      notification.onclick = () => {
-        window.focus();
-        notification.close();
       };
 
-      return { success: true, message: 'Test alert triggered successfully! Check your notifications.' };
+      const success = await this.displayNotification('🔔 Trading Signal AI Alert Active', options);
+      if (success) {
+        return { success: true, message: 'Test alert triggered successfully! Check your notifications.' };
+      } else {
+        return { success: false, message: 'Unable to display system notification. Please check browser permissions.' };
+      }
     } catch (err: any) {
       console.warn('Test notification error:', err);
       return { success: false, message: err?.message || 'Failed to send test alert.' };
