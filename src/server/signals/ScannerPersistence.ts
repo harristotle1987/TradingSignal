@@ -310,7 +310,7 @@ export class ScannerPersistence {
           date: today,
           dailySignalCount: defaultCap,
           dailySignalCap: defaultCap,
-          lastScanTime: Date.now(),
+          lastScanTime: this.localData.capState.lastScanTime || 0,
         };
       }
       return this.localData.capState;
@@ -368,7 +368,7 @@ export class ScannerPersistence {
           date: today,
           dailySignalCount: defaultCap,
           dailySignalCap: defaultCap,
-          lastScanTime: Date.now(),
+          lastScanTime: this.localData.capState.lastScanTime || 0,
         };
       }
       return this.localData.capState;
@@ -419,7 +419,7 @@ export class ScannerPersistence {
             date: today,
             dailySignalCount: 0,
             dailySignalCap: limit,
-            lastScanTime: Date.now(),
+            lastScanTime: this.localData.capState.lastScanTime || 0,
             reservations: [],
           };
         } else {
@@ -429,7 +429,7 @@ export class ScannerPersistence {
               date: today,
               dailySignalCount: 0,
               dailySignalCap: data.dailySignalCap || limit,
-              lastScanTime: Date.now(),
+              lastScanTime: typeof data.lastScanTime === 'number' ? data.lastScanTime : (this.localData.capState.lastScanTime || 0),
               reservations: [],
             };
           }
@@ -452,7 +452,7 @@ export class ScannerPersistence {
           date: today,
           dailySignalCount: newCount,
           dailySignalCap: currentLimit,
-          lastScanTime: Date.now(),
+          lastScanTime: typeof data.lastScanTime === 'number' ? data.lastScanTime : (this.localData.capState.lastScanTime || 0),
           reservations,
         };
         tx.set(docRef, updated);
@@ -700,7 +700,7 @@ export class ScannerPersistence {
         date: new Date().toISOString().split('T')[0],
         dailySignalCount: 0,
         dailySignalCap: serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 10,
-        lastScanTime: Date.now(),
+        lastScanTime: this.localData.capState.lastScanTime || 0,
       };
       this.saveLocalData();
     }
@@ -730,11 +730,16 @@ export class ScannerPersistence {
 
         const capDocRef = firestore.doc(FIRESTORE_CAP_DOC);
         await firestore.runTransaction(async (transaction) => {
-           transaction.set(capDocRef, {
+          const capSnap = await transaction.get(capDocRef);
+          const currentLastScan = capSnap.exists && typeof capSnap.data()?.lastScanTime === 'number'
+            ? capSnap.data()!.lastScanTime
+            : (this.localData.capState.lastScanTime || 0);
+
+          transaction.set(capDocRef, {
             date: new Date().toISOString().split('T')[0],
             dailySignalCount: 0,
             dailySignalCap: serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 10,
-            lastScanTime: Date.now(),
+            lastScanTime: currentLastScan,
           });
         });
       } catch (err) {

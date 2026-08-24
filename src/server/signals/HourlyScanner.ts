@@ -1139,7 +1139,7 @@ export class HourlyScannerService {
 
     const lastScanTime = capState.lastScanTime || 0;
     const intervalMs = intervalMinutes * 60 * 1000;
-    const nextScanTime = lastScanTime > 0 ? lastScanTime + intervalMs : Date.now() + intervalMs;
+    const nextScanTime = lastScanTime > 0 ? lastScanTime + intervalMs : Date.now();
 
     let scannerStatus: 'ACTIVE' | 'RUNNING' | 'DISABLED' | 'CAP_REACHED' = 'ACTIVE';
     if (!settings.enabled) {

@@ -94,17 +94,51 @@ router.get('/scanner/history', async (_req: Request, res: Response) => {
 const handleScannerTrigger = async (req: Request, res: Response) => {
   const cronSecret = process.env.SCANNER_CRON_SECRET;
   const authHeader = req.headers.authorization;
-  const xCronSecret = req.headers['x-cron-secret'] as string | undefined;
-  const querySecret = (req.query?.secret || req.query?.key) as string | undefined;
+  const xCronSecret = (req.headers['x-cron-secret'] || 
+                       req.headers['x-scanner-secret'] || 
+                       req.headers['x-cron-key'] ||
+                       req.headers['x-api-key'] ||
+                       req.headers['cron-secret']) as string | undefined;
+
+  const querySecret = (req.query?.secret || 
+                       req.query?.token || 
+                       req.query?.key || 
+                       req.query?.cron_secret || 
+                       req.query?.cronSecret ||
+                       req.query?.scanner_cron_secret) as string | undefined;
+
+  const bodySecret = (req.body?.secret || 
+                      req.body?.token || 
+                      req.body?.key || 
+                      req.body?.cronSecret || 
+                      req.body?.cron_secret) as string | undefined;
 
   let isAuthenticated = false;
   if (cronSecret && cronSecret.trim().length > 0) {
     const trimmedSecret = cronSecret.trim();
-    if (authHeader && authHeader.trim() === `Bearer ${trimmedSecret}`) {
+    
+    // Check Authorization header (Bearer <secret> or raw <secret>)
+    if (authHeader) {
+      const trimmedAuth = authHeader.trim();
+      if (trimmedAuth === `Bearer ${trimmedSecret}` || 
+          trimmedAuth.toLowerCase() === `bearer ${trimmedSecret.toLowerCase()}` ||
+          trimmedAuth === trimmedSecret) {
+        isAuthenticated = true;
+      }
+    }
+    
+    // Check custom headers
+    if (!isAuthenticated && xCronSecret && xCronSecret.trim() === trimmedSecret) {
       isAuthenticated = true;
-    } else if (xCronSecret && xCronSecret.trim() === trimmedSecret) {
+    }
+
+    // Check query string parameters
+    if (!isAuthenticated && querySecret && querySecret.trim() === trimmedSecret) {
       isAuthenticated = true;
-    } else if (querySecret && querySecret.trim() === trimmedSecret) {
+    }
+
+    // Check request body
+    if (!isAuthenticated && bodySecret && bodySecret.trim() === trimmedSecret) {
       isAuthenticated = true;
     }
   } else {
@@ -153,7 +187,7 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
       : 30;
     const intervalMs = intervalMinutes * 60 * 1000;
     const lastScanTime = result.lastScanTime || 0;
-    const nextScanTime = lastScanTime > 0 ? lastScanTime + intervalMs : Date.now() + intervalMs;
+    const nextScanTime = lastScanTime > 0 ? lastScanTime + intervalMs : Date.now();
 
     const httpCode = result.status === 'ERROR' ? 500 : 200;
     // Fast, lightweight HTTP response for cron scheduler without exposing large candidate payloads
