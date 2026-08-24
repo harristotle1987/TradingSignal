@@ -1,4 +1,5 @@
 import { logger } from '../logger.js';
+import { getDynamicPrecision } from '../../utils/formatters.js';
 import { ScannerPersistence } from './ScannerPersistence.js';
 import { SignalLogger } from './SignalLogger.js';
 import { SignalValidator } from './SignalValidator.js';
@@ -108,7 +109,7 @@ export class RepairService {
             logger.warn(`[RepairService] Failed to fetch 1H candles for ATR for ${sig.symbol}:`, err);
           }
 
-          const precision = sig.entryPrice < 10 ? 5 : 2;
+          const precision = getDynamicPrecision(sig.entryPrice, sig.symbol);
           if (!atr || isNaN(atr) || atr <= 0) {
             atr = sig.entryPrice * 0.015; // default fallback 1.5% ATR
           }

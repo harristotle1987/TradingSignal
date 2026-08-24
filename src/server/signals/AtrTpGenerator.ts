@@ -1,4 +1,5 @@
 import { SignalDirection } from '../../types/index.js';
+import { getDynamicPrecision } from '../../utils/formatters.js';
 
 export type VolatilityRegime = 'LOW' | 'NORMAL' | 'HIGH' | 'EXTREME';
 
@@ -95,13 +96,8 @@ export class AtrTpGenerator {
   /**
    * Derive decimal precision if not provided.
    */
-  public static getPrecision(entryPrice: number): number {
-    if (entryPrice <= 0) return 2;
-    if (entryPrice < 0.001) return 6;
-    if (entryPrice < 1) return 5;
-    if (entryPrice < 10) return 4;
-    if (entryPrice < 1000) return 2;
-    return 2;
+  public static getPrecision(entryPrice: number, symbol?: string): number {
+    return getDynamicPrecision(entryPrice, symbol);
   }
 
   /**

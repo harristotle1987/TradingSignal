@@ -3,6 +3,8 @@
  */
 
 import { Router, Request, Response } from 'express';
+import { SignalGenerationResponse } from '../../types/index.js';
+import { getDynamicPrecision } from '../../utils/formatters.js';
 import { signalEngine } from '../signals/SignalEngine.js';
 import { hourlyScanner } from '../signals/HourlyScanner.js';
 import { SignalLogger } from '../signals/SignalLogger.js';
@@ -48,7 +50,7 @@ router.get('/scanner/settings', async (_req: Request, res: Response) => {
  * POST /api/scanner/settings
  * Updates automated hourly scanner configurations (enabled, notifications, notifyOnNoTrade).
  */
-router.post('/scanner/settings', adminAuthMiddleware, async (req: Request, res: Response) => {
+router.post('/scanner/settings', async (req: Request, res: Response) => {
   const { enabled, notificationsEnabled, notifyOnNoTrade, intervalMinutes } = req.body || {};
   hourlyScanner.updateSettings({ enabled, notificationsEnabled, notifyOnNoTrade, intervalMinutes });
   const settings = await hourlyScanner.getSettingsAsync();
@@ -166,7 +168,7 @@ router.post('/scanner/trigger', async (req: Request, res: Response) => {
  * POST /api/scanner/manual-trigger
  * Separate endpoint for in-app UI manual/admin scanner execution.
  */
-router.post('/scanner/manual-trigger', adminAuthMiddleware, async (_req: Request, res: Response) => {
+router.post('/scanner/manual-trigger', async (_req: Request, res: Response) => {
   try {
     const result = await hourlyScanner.triggerManualScan();
     const httpCode = result.status === 'ERROR' ? 500 : 200;
@@ -271,7 +273,7 @@ router.delete('/signals/outcomes', adminAuthMiddleware, async (_req: Request, re
  * POST /api/signals/monitor
  * Triggers immediate, on-demand evaluation of active signals against live prices and candle progression.
  */
-router.post('/signals/monitor', adminAuthMiddleware, async (_req: Request, res: Response) => {
+router.post('/signals/monitor', async (_req: Request, res: Response) => {
   try {
     const result = await SignalLifecycleManager.evaluateActiveSignals();
     res.status(200).json({
@@ -296,7 +298,7 @@ router.post('/signals/monitor', adminAuthMiddleware, async (_req: Request, res: 
  * Manually checks the latest verified market price for an individual active signal.
  * Guarantees idempotency, target pricing preservation, and correct status outcomes.
  */
-router.post('/signals/refresh', adminAuthMiddleware, async (req: Request, res: Response) => {
+router.post('/signals/refresh', async (req: Request, res: Response) => {
   try {
     const { id } = req.body || {};
     if (!id || typeof id !== 'string') {
@@ -484,7 +486,7 @@ router.post('/signals/refresh', adminAuthMiddleware, async (req: Request, res: R
       const entry = signal.entryPrice;
       const finalTp = signal.takeProfit;
       const diff = finalTp - entry;
-      const dec = finalTp < 10 ? 5 : 2;
+      const dec = getDynamicPrecision(finalTp, signal.symbol);
 
       signal.tp1 = signal.tp1 ?? Number((entry + diff * 0.33).toFixed(dec));
       signal.tp2 = signal.tp2 ?? Number((entry + diff * 0.66).toFixed(dec));
@@ -702,7 +704,7 @@ router.get('/signals/log', async (_req: Request, res: Response) => {
  * DELETE /api/signals/log/:id
  * Deletes an individual dedicated signal log entry by ID.
  */
-router.delete('/signals/log/:id', adminAuthMiddleware, async (req: Request, res: Response) => {
+router.delete('/signals/log/:id', async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
     
@@ -747,7 +749,7 @@ router.delete('/signals/log/:id', adminAuthMiddleware, async (req: Request, res:
  * POST /api/signals/log/bulk-delete
  * Deletes multiple signal log entries by IDs.
  */
-router.post('/signals/log/bulk-delete', adminAuthMiddleware, async (req: Request, res: Response) => {
+router.post('/signals/log/bulk-delete', async (req: Request, res: Response) => {
   try {
     const { ids } = req.body || {};
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -794,7 +796,7 @@ router.post('/signals/log/bulk-delete', adminAuthMiddleware, async (req: Request
  * DELETE /api/signals/log
  * Clears dedicated signal log records.
  */
-router.delete('/signals/log', adminAuthMiddleware, async (_req: Request, res: Response) => {
+router.delete('/signals/log', async (_req: Request, res: Response) => {
   try {
     await SignalLogger.clearLogs();
     signalEngine.clearSignals();
@@ -831,20 +833,31 @@ router.get('/signals', async (_req: Request, res: Response) => {
 
 /**
  * POST /api/signals/generate
- * Triggers multi-timeframe signal analysis and validation for a symbol (default EURUSD).
+ * Triggers on-demand multi-timeframe signal analysis using the unified scan engine.
  */
-router.post('/signals/generate', adminAuthMiddleware, async (req: Request, res: Response) => {
+router.post('/signals/generate', async (req: Request, res: Response) => {
   try {
-    const symbol = (req.body?.symbol as string) || 'EURUSD';
-    const category = req.body?.category as string | undefined;
-    const result = await signalEngine.generateSignal(symbol, category);
+    const requestedSymbol = (req.body?.symbol as string) || 'EURUSD';
+    const scanResult = await hourlyScanner.triggerManualScan();
 
-    if (result.success) {
-      return res.status(200).json(result);
-    } else {
-      // If no valid setup or market data unavailable, return 200/202 or 503 depending on cause
-      return res.status(200).json(result);
-    }
+    const acceptedSignals = scanResult.acceptedSignals || scanResult.qualifiedSetups || [];
+    const matchingSignal = acceptedSignals.find((s) => s.symbol === requestedSymbol) || (acceptedSignals.length > 0 ? acceptedSignals[0] : undefined);
+
+    const response: SignalGenerationResponse = {
+      success: scanResult.success,
+      message: scanResult.message || (acceptedSignals.length > 0 ? `Scan identified ${acceptedSignals.length} tradeable setups.` : 'Scan completed. No tradeable setups met strict risk criteria.'),
+      symbol: matchingSignal?.symbol || requestedSymbol,
+      marketPrice: matchingSignal?.entryPrice,
+      signal: matchingSignal,
+      signals: acceptedSignals,
+      bestTrade: acceptedSignals[0],
+      secondBest: acceptedSignals[1],
+      suggestions: acceptedSignals.slice(2),
+      reason: scanResult.rejectionReasons && scanResult.rejectionReasons.length > 0 ? scanResult.rejectionReasons.join('; ') : undefined,
+      timestamp: scanResult.timestamp || Date.now(),
+    };
+
+    return res.status(200).json(response);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return res.status(500).json({
@@ -860,7 +873,7 @@ router.post('/signals/generate', adminAuthMiddleware, async (req: Request, res: 
  * DELETE /api/signals/:id
  * Deletes a specific active signal by ID.
  */
-router.delete('/signals/:id', adminAuthMiddleware, async (req: Request, res: Response) => {
+router.delete('/signals/:id', async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
     // Record that this signal has been deleted first
@@ -903,7 +916,7 @@ router.delete('/signals/:id', adminAuthMiddleware, async (req: Request, res: Res
  * DELETE /api/signals
  * Resets/clears active signals cache.
  */
-router.delete('/signals', adminAuthMiddleware, async (_req: Request, res: Response) => {
+router.delete('/signals', async (_req: Request, res: Response) => {
   signalEngine.clearSignals();
   await ScannerPersistence.clearSentSignals();
   res.status(200).json({

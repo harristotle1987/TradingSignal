@@ -17,28 +17,17 @@ class ApiClient {
   private adminToken: string | null = null;
 
   /**
-   * Dynamically sets admin authentication token for administrative requests
+   * Dynamically sets admin authentication token in memory for administrative requests
    */
   public setAdminToken(token: string | null): void {
     this.adminToken = token;
-    if (typeof localStorage !== 'undefined') {
-      if (token) {
-        localStorage.setItem('admin_token', token);
-      } else {
-        localStorage.removeItem('admin_token');
-      }
-    }
   }
 
   /**
-   * Retrieves active admin authentication token
+   * Retrieves active admin authentication token from memory
    */
   public getAdminToken(): string | null {
-    if (this.adminToken) return this.adminToken;
-    if (typeof localStorage !== 'undefined') {
-      return localStorage.getItem('admin_token') || null;
-    }
-    return null;
+    return this.adminToken;
   }
 
   private async fetchJson<T>(endpoint: string, options?: RequestInit, retries = 3): Promise<T> {

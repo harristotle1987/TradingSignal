@@ -1,4 +1,5 @@
 import { NormalizedCandle, SignalDirection } from '../../types/index.js';
+import { getDynamicPrecision } from '../../utils/formatters.js';
 import { TechnicalIndicators } from './TechnicalIndicators.js';
 import { StrategyEngine, MarketRegime } from './StrategyEngine.js';
 import { StrategyPerformanceTracker } from './StrategyPerformanceTracker.js';
@@ -963,11 +964,7 @@ export class ScoringEngine {
     }
 
     if (isCrypto) {
-      let precision = 2;
-      if (price < 0.001) precision = 7;
-      else if (price < 0.1) precision = 5;
-      else if (price < 5) precision = 4;
-      else if (price < 100) precision = 3;
+      const precision = getDynamicPrecision(price, symbol);
 
       return {
         assetClass: 'CRYPTO',
@@ -984,7 +981,7 @@ export class ScoringEngine {
     // Stocks
     return {
       assetClass: 'STOCK',
-      precision: 2,
+      precision: getDynamicPrecision(price, symbol),
       pipMultiplier: 1,
       pipPointUnit: 'POINTS',
       estimatedSpreadUnits: 0.03,

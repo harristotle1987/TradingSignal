@@ -23,6 +23,7 @@ import {
   formatStrategy,
   formatRankTier,
   formatProviderName,
+  getDynamicPrecision,
 } from '../utils/formatters.js';
 import {
   Search,
@@ -156,7 +157,7 @@ export function AssetClassScanner({
   const currentSymbolInfo = currentCategoryData.symbols.find((s) => s.symbol === selectedSymbol) || currentCategoryData.symbols[0];
 
   const isMarketClosed = sessionState !== 'MARKET_OPEN';
-  const precision = ticker && ticker.price < 10 ? 5 : 2;
+  const precision = ticker ? getDynamicPrecision(ticker.price, selectedSymbol) : 2;
 
   // Active scanned signal (if present from multi-asset scan)
   const scannedSignal: TradingSignal | null =
@@ -352,7 +353,7 @@ export function AssetClassScanner({
             const bestCandidate = scanResult.bestTrade || (scanResult.signals && scanResult.signals.find(s => s.isBestTrade || s.rankTier === 'BEST_TRADE'));
             if (!isStrictlyTradeable(bestCandidate)) return null;
             const best = bestCandidate;
-            const bestPrec = best.entryPrice < 10 ? 5 : 2;
+            const bestPrec = getDynamicPrecision(best.entryPrice, best.symbol);
             return (
               <div className="bg-slate-950 border-2 border-amber-500/80 rounded-xl p-6 sm:p-7 space-y-5 shadow-xl relative overflow-hidden">
                 <div className="absolute top-0 right-0 bg-amber-500 text-slate-950 font-black font-mono text-xs px-4 py-1.5 rounded-bl-xl uppercase tracking-wider shadow-md">
@@ -485,7 +486,7 @@ export function AssetClassScanner({
             const secondCandidate = scanResult.secondBest || (scanResult.signals && scanResult.signals.find(s => s.isSecondBest || s.rankTier === 'SECOND_BEST'));
             if (!isStrictlyTradeable(secondCandidate)) return null;
             const second = secondCandidate;
-            const secondPrec = second.entryPrice < 10 ? 5 : 2;
+            const secondPrec = getDynamicPrecision(second.entryPrice, second.symbol);
             return (
               <div className="bg-slate-950 border border-emerald-500/80 rounded-xl p-6 sm:p-7 space-y-5 shadow-lg relative overflow-hidden">
                 <div className="absolute top-0 right-0 bg-emerald-500 text-slate-950 font-black font-mono text-xs px-4 py-1.5 rounded-bl-xl uppercase tracking-wider shadow-md">
@@ -615,7 +616,7 @@ export function AssetClassScanner({
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {sugList.map((sug) => {
-                    const sugPrec = sug.entryPrice < 10 ? 5 : 2;
+                    const sugPrec = getDynamicPrecision(sug.entryPrice, sug.symbol);
                     return (
                       <div key={sug.id || sug.snapshotId || `${sug.symbol}_${sug.timestamp}`} className="bg-slate-950 border border-slate-800 rounded-xl p-4 sm:p-5 space-y-3 font-mono shadow-md">
                         <div className="flex items-center justify-between pb-2.5 border-b border-slate-800">

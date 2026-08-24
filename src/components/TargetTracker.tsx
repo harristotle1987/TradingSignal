@@ -10,7 +10,7 @@ import { useState } from 'react';
 import { TradingSignal } from '../types/index.js';
 import { CheckCircle2, Clock, Check, ShieldAlert, Award } from 'lucide-react';
 import { SignalRefreshButton } from './SignalRefreshButton.js';
-import { formatStatus } from '../utils/formatters.js';
+import { formatStatus, getDynamicPrecision } from '../utils/formatters.js';
 
 interface TargetTrackerProps {
   signal: TradingSignal;
@@ -29,7 +29,7 @@ export function TargetTracker({ signal, precision, onSignalRefreshed }: TargetTr
     setPrevSignalId(signal.id);
   }
 
-  const prec = precision ?? (currentSignal?.entryPrice ? (currentSignal.entryPrice < 10 ? 5 : 2) : 2);
+  const prec = precision ?? (currentSignal?.entryPrice ? getDynamicPrecision(currentSignal.entryPrice, currentSignal.symbol) : 2);
 
   const tp1 = currentSignal?.tp1 ?? currentSignal?.takeProfit;
   const tp2 = currentSignal?.tp2;

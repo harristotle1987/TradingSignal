@@ -30,6 +30,7 @@
  */
 
 import { signalEngine } from './SignalEngine.js';
+import { getDynamicPrecision } from '../../utils/formatters.js';
 import { TradeRankingEngine } from './TradeRankingEngine.js';
 import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 import { Gate17CorrelationExposure } from './Gate17CorrelationExposure.js';
@@ -124,20 +125,24 @@ export class HourlyScannerService {
    * Checks settings and runs the scanner if the configured interval (15, 30, 45, or 60 min) has elapsed since lastScanTime.
    */
   private async checkScheduleAndRun(): Promise<void> {
-    const settings = ScannerPersistence.getSettings();
-    if (!settings.enabled) return;
-    if (this.isScanning) return;
+    try {
+      const settings = ScannerPersistence.getSettings();
+      if (!settings.enabled) return;
+      if (this.isScanning) return;
 
-    const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
-    const now = Date.now();
-    const validIntervals = [15, 30, 45, 60];
-    const intervalMinutes = validIntervals.includes(Number(settings.intervalMinutes))
-      ? Number(settings.intervalMinutes)
-      : 30;
-    const intervalMs = intervalMinutes * 60 * 1000;
+      const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
+      const now = Date.now();
+      const validIntervals = [15, 30, 45, 60];
+      const intervalMinutes = validIntervals.includes(Number(settings.intervalMinutes))
+        ? Number(settings.intervalMinutes)
+        : 30;
+      const intervalMs = intervalMinutes * 60 * 1000;
 
-    if (now - capState.lastScanTime >= intervalMs) {
-      await this.runScan();
+      if (capState.lastScanTime === 0 || now - capState.lastScanTime >= intervalMs) {
+        await this.runScan();
+      }
+    } catch (err) {
+      logger.error('[Hourly Scanner] Error during automated scheduled scan check:', { error: String(err) });
     }
   }
 
@@ -976,7 +981,7 @@ export class HourlyScannerService {
             ? 'SECOND BEST (Rank #2)'
             : `ACTIONABLE SIGNAL (${thresholds.signalThreshold}+)`;
         const title = `🚨 [${tierLabel}] ${sig.symbol} [${sig.direction}]`;
-        const precision = sig.entryPrice < 10 ? 5 : 2;
+        const precision = getDynamicPrecision(sig.entryPrice, sig.symbol);
         const message = `Live Entry: ${sig.entryPrice.toFixed(precision)} | TP: ${sig.takeProfit.toFixed(precision)} | SL: ${sig.stopLoss.toFixed(precision)} (R:R ${sig.riskRewardRatio.toFixed(1)}:1, Score: ${score}/100)`;
 
         await ScannerPersistence.recordNotification({
@@ -1076,6 +1081,11 @@ export class HourlyScannerService {
       };
     } catch (err) {
       logger.error('[Hourly Scanner] Critical failure during scan execution:', { error: String(err) });
+      try {
+        await ScannerPersistence.updateLastScanTime(Date.now());
+      } catch (tsErr) {
+        logger.error('[Hourly Scanner] Failed to update lastScanTime after error:', { error: String(tsErr) });
+      }
       const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
       const errMsg = err instanceof Error ? err.message : String(err);
       return {
@@ -1109,6 +1119,9 @@ export class HourlyScannerService {
       sentSignalsToday: PersistedSentSignal[];
       recentNotifications: PersistedNotification[];
       recentRejected: PersistedRejectedCandidate[];
+      nextScanTime: number;
+      scannerStatus: 'ACTIVE' | 'RUNNING' | 'DISABLED' | 'CAP_REACHED';
+      isScanning: boolean;
     }
   > {
     const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
@@ -1119,16 +1132,34 @@ export class HourlyScannerService {
 
     // Map timestamps for UI backwards compatibility
     const timestamps = sentSignalsToday.map((s) => s.timestamp);
+    const validIntervals = [15, 30, 45, 60];
+    const intervalMinutes = validIntervals.includes(Number(settings.intervalMinutes))
+      ? Number(settings.intervalMinutes)
+      : 30;
+
+    const lastScanTime = capState.lastScanTime || 0;
+    const intervalMs = intervalMinutes * 60 * 1000;
+    const nextScanTime = lastScanTime > 0 ? lastScanTime + intervalMs : Date.now() + intervalMs;
+
+    let scannerStatus: 'ACTIVE' | 'RUNNING' | 'DISABLED' | 'CAP_REACHED' = 'ACTIVE';
+    if (!settings.enabled) {
+      scannerStatus = 'DISABLED';
+    } else if (this.isScanning) {
+      scannerStatus = 'RUNNING';
+    } else if (capState.dailySignalCount >= capState.dailySignalCap) {
+      scannerStatus = 'CAP_REACHED';
+    }
 
     return {
       enabled: settings.enabled,
       notificationsEnabled: settings.notificationsEnabled,
       notifyOnNoTrade: settings.notifyOnNoTrade,
-      intervalMinutes: [15, 30, 45, 60].includes(Number(settings.intervalMinutes))
-        ? Number(settings.intervalMinutes)
-        : 30,
+      intervalMinutes,
       signalsSentTimestamps: timestamps,
-      lastScanTime: capState.lastScanTime,
+      lastScanTime,
+      nextScanTime,
+      scannerStatus,
+      isScanning: this.isScanning,
       limit: capState.dailySignalCap,
       dailySignalCount: capState.dailySignalCount,
       sentSignalsToday,

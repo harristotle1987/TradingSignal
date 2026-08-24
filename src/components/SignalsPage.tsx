@@ -460,6 +460,8 @@ export function SignalsPage({ health }: SignalsPageProps) {
         if (result.signal.isTopTrade || result.signal.strategy?.includes('[TOP TRADE]')) {
           NotificationService.notifyTopTrade(result.signal, soundAlerts);
         }
+      } else if (result.signals && result.signals.length > 0) {
+        addSignalsToHistory(result.signals);
       }
 
       await loadActiveSignals();

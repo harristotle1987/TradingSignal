@@ -20,6 +20,7 @@ import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { logger } from '../logger.js';
 import { serverConfig } from '../config.js';
 import { TradingSignal } from '../../types/index.js';
+import { getDynamicPrecision } from '../../utils/formatters.js';
 
 export interface StoredPushSubscription {
   id: string;
@@ -288,7 +289,7 @@ export class PushNotificationService {
     }
 
     // 3. Format Notification Content
-    const precision = signal.entryPrice < 10 ? 5 : 2;
+    const precision = getDynamicPrecision(signal.entryPrice, signal.symbol);
     const thresholds = serverConfig.getConfig().thresholds;
     const score = signal.score ?? signal.confidenceScore ?? thresholds.signalThreshold;
     const isBestTrade = signal.isBestTrade === true || signal.rankTier === 'BEST_TRADE';

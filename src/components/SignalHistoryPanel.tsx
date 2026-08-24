@@ -16,6 +16,7 @@ import {
   formatStatus,
   formatRankTier,
   formatProviderName,
+  getDynamicPrecision,
 } from '../utils/formatters.js';
 import {
   History,
@@ -367,7 +368,7 @@ export function SignalHistoryPanel({
 
           {filteredHistory.map((item, idx) => {
             const isExpanded = expandedId === item.id;
-            const precision = item.entryPrice && item.entryPrice < 10 ? 5 : 2;
+            const precision = item.entryPrice ? getDynamicPrecision(item.entryPrice, item.symbol) : 2;
             const isDeleting = deletingIds.includes(item.id);
 
             // Determine custom visual statuses

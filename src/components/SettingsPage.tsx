@@ -72,10 +72,13 @@ export function SettingsPage({}: SettingsPageProps) {
         setScannerMessage({ type: 'success', text: 'Scanner configuration updated successfully.' });
         setTimeout(() => setScannerMessage(null), 4000);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to update scanner settings:', err);
-      setScannerMessage({ type: 'error', text: 'Failed to update scanner settings.' });
-      setTimeout(() => setScannerMessage(null), 4000);
+      setScannerMessage({
+        type: 'error',
+        text: err?.message || 'Failed to update scanner settings.',
+      });
+      setTimeout(() => setScannerMessage(null), 6000);
     }
   };
 
@@ -444,11 +447,11 @@ export function SettingsPage({}: SettingsPageProps) {
 
           {/* Statistics and Controls */}
           <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="space-y-1">
-                <span className="text-xs font-semibold text-white block">Autonomous Scan Diagnostics</span>
-                <p className="text-[11px] text-slate-400 font-mono">
-                  Last Scan: {scannerSettings?.lastScanTime ? new Date(scannerSettings.lastScanTime).toLocaleString() : 'Never'} &bull; Dispatched Today: {scannerSettings?.signalsSentTimestamps?.length || 0} / {scannerSettings?.limit || 5}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-slate-800/80">
+              <div className="space-y-0.5">
+                <span className="text-xs font-semibold text-white block">Autonomous Scanner Schedule & Diagnostics</span>
+                <p className="text-[11px] text-slate-400">
+                  Continuous 24/7 background execution schedule and real-time operational status.
                 </p>
               </div>
 
@@ -461,6 +464,59 @@ export function SettingsPage({}: SettingsPageProps) {
                 <RefreshCw className={`w-3.5 h-3.5 ${triggeringScan ? 'animate-spin' : ''}`} />
                 <span>{triggeringScan ? 'Running Scan...' : 'Trigger Now'}</span>
               </button>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
+              {/* 1. Scanner Status */}
+              <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-3 space-y-1">
+                <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Scanner Status</span>
+                <div className="flex items-center gap-1.5 pt-0.5">
+                  <span className={`w-2 h-2 rounded-full ${
+                    scannerSettings?.scannerStatus === 'RUNNING' || triggeringScan
+                      ? 'bg-amber-400 animate-ping'
+                      : scannerSettings?.enabled && scannerSettings?.scannerStatus !== 'DISABLED'
+                      ? 'bg-emerald-400'
+                      : 'bg-slate-500'
+                  }`} />
+                  <span className={`font-semibold ${
+                    scannerSettings?.scannerStatus === 'RUNNING' || triggeringScan
+                      ? 'text-amber-400'
+                      : scannerSettings?.enabled && scannerSettings?.scannerStatus !== 'DISABLED'
+                      ? 'text-emerald-400'
+                      : 'text-slate-400'
+                  }`}>
+                    {triggeringScan ? 'RUNNING' : (scannerSettings?.scannerStatus || (scannerSettings?.enabled ? 'ACTIVE' : 'DISABLED'))}
+                  </span>
+                </div>
+              </div>
+
+              {/* 2. Current Scan Interval */}
+              <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-3 space-y-1">
+                <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Current Interval</span>
+                <span className="font-semibold text-white block pt-0.5">
+                  {scannerSettings?.intervalMinutes ?? 30} minutes
+                </span>
+              </div>
+
+              {/* 3. Last Scan Time */}
+              <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-3 space-y-1">
+                <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Last Scan Time</span>
+                <span className="font-semibold text-slate-200 block pt-0.5 truncate" title={scannerSettings?.lastScanTime ? new Date(scannerSettings.lastScanTime).toLocaleString() : 'Never'}>
+                  {scannerSettings?.lastScanTime ? new Date(scannerSettings.lastScanTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Never'}
+                </span>
+              </div>
+
+              {/* 4. Next Scan Time */}
+              <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-3 space-y-1">
+                <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Next Scan Time</span>
+                <span className="font-semibold text-emerald-400 block pt-0.5 truncate" title={scannerSettings?.nextScanTime ? new Date(scannerSettings.nextScanTime).toLocaleString() : 'Scheduled'}>
+                  {scannerSettings?.enabled !== false
+                    ? (scannerSettings?.nextScanTime
+                        ? new Date(scannerSettings.nextScanTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                        : 'Scheduled')
+                    : 'Paused'}
+                </span>
+              </div>
             </div>
           </div>
         </div>

@@ -21,6 +21,7 @@
  */
 
 import { NormalizedTicker, NormalizedCandle, ExecutionEvidenceState, HistoricalEntryPolicy } from '../../types/index.js';
+import { getDynamicPrecision } from '../../utils/formatters.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
 import { ScannerPersistence, PersistedSentSignal } from './ScannerPersistence.js';
 import { StrategyPerformanceTracker } from './StrategyPerformanceTracker.js';
@@ -135,7 +136,7 @@ export class SignalLifecycleManager {
       const entry = sig.entryPrice;
       const finalTp = sig.takeProfit;
       const diff = finalTp - entry;
-      const dec = finalTp < 10 ? 5 : 2;
+      const dec = getDynamicPrecision(finalTp, symbol);
 
       sig.tp1 = sig.tp1 ?? Number((entry + diff * 0.33).toFixed(dec));
       sig.tp2 = sig.tp2 ?? Number((entry + diff * 0.66).toFixed(dec));

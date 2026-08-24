@@ -11,7 +11,7 @@
  */
 
 import { TradingSignal } from '../types/index.js';
-import { formatRankTier } from './formatters.js';
+import { formatRankTier, getDynamicPrecision } from './formatters.js';
 
 export type NotificationPermissionStatus = 'granted' | 'denied' | 'default' | 'unsupported';
 
@@ -155,7 +155,7 @@ export class NotificationService {
     }
 
     try {
-      const precision = signal.entryPrice < 10 ? 5 : 2;
+      const precision = getDynamicPrecision(signal.entryPrice, signal.symbol);
       const formattedEntry = signal.entryPrice.toFixed(precision);
       const formattedSL = signal.stopLoss.toFixed(precision);
       const formattedTP = signal.takeProfit.toFixed(precision);

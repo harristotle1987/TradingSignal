@@ -13,6 +13,7 @@
  */
 
 import { NormalizedCandle, NormalizedTicker, SignalDirection, SignalValidationReason } from '../../types/index.js';
+import { getDynamicPrecision } from '../../utils/formatters.js';
 import { logger } from '../logger.js';
 import { TechnicalIndicators } from './TechnicalIndicators.js';
 import { AtrTpGenerator } from './AtrTpGenerator.js';
@@ -302,7 +303,7 @@ export class SignalValidator {
     tp2?: number,
     tp3?: number
   ): { isValid: boolean; message: string; adjustedStopLoss?: number; adjustedTakeProfit?: number; adjustedNetRR?: number } {
-    const precision = livePrice < 10 ? 5 : 2;
+    const precision = getDynamicPrecision(livePrice, symbol);
 
     // Adjust SL/TP if minor live price drift occurred
     const slDist = Math.abs(originalEntry - stopLoss);

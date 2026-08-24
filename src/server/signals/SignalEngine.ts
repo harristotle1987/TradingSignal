@@ -15,6 +15,7 @@
  */
 
 import { TradingSignal, SignalGenerationResponse, NormalizedCandle, NormalizedTicker, SignalDirection, isActionableSignal } from '../../types/index.js';
+import { getDynamicPrecision } from '../../utils/formatters.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
 import { quotaManager } from '../market/QuotaManager.js';
 import { MarketSessionManager } from '../market/MarketSessionManager.js';
@@ -1146,7 +1147,7 @@ export class SignalEngine {
           ? 'Bitget Live Feed'
           : (classification === 'FOREX' ? 'Twelve Data' : 'Finnhub');
 
-        const precision = decimals(finalEntry);
+        const precision = decimals(finalEntry, asset);
         const isForex = asset.includes('USD') && precision === 5;
         const isJPY = asset.includes('JPY');
         const multiplier = isForex ? 10000 : (isJPY ? 100 : 1);
@@ -1867,6 +1868,6 @@ export class SignalEngine {
 
 export const signalEngine = new SignalEngine();
 
-function decimals(price: number): number {
-  return price < 10 ? 5 : 2;
+function decimals(price: number, symbol?: string): number {
+  return getDynamicPrecision(price, symbol);
 }

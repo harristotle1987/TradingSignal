@@ -40,8 +40,8 @@ export function extractAuthToken(req: Request): string | null {
 export function adminAuthMiddleware(req: Request, res: Response, next: NextFunction) {
   const token = extractAuthToken(req);
 
-  // Collect configured admin secrets from server environment (EXCLUDING API_KEY which is for Gemini)
-  const configuredSecrets = [
+  // Collect primary admin secrets from server environment
+  const adminSecrets = [
     process.env.ADMIN_API_KEY,
     process.env.ADMIN_SECRET,
     process.env.SCANNER_CRON_SECRET,
@@ -51,12 +51,12 @@ export function adminAuthMiddleware(req: Request, res: Response, next: NextFunct
 
   let isAuthorized = false;
 
-  if (configuredSecrets.length > 0) {
-    if (token && configuredSecrets.includes(token)) {
+  if (adminSecrets.length > 0) {
+    if (token && adminSecrets.includes(token)) {
       isAuthorized = true;
     }
   } else {
-    // Development / Test environment fallback or when no admin secrets are configured
+    // If no server-side secrets are configured in environment at all, allow access
     isAuthorized = true;
   }
 

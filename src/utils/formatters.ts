@@ -157,3 +157,43 @@ export function formatProviderName(provider?: string | null): string {
   if (lower === 'binance') return 'Binance';
   return formatLabel(provider);
 }
+
+/**
+ * Calculates dynamic decimal precision based on asset price magnitude and optional symbol name.
+ * Prevents rounding collapse on micro-priced crypto tokens (e.g. SHIB 0.0000055, PEPE 0.0000012)
+ * and guarantees proper precision for Forex major/minor/JPY pairs.
+ */
+export function getDynamicPrecision(price?: number | null, symbol?: string | null): number {
+  if (price === undefined || price === null || price <= 0 || isNaN(price)) return 2;
+
+  const sym = (symbol || '').toUpperCase();
+
+  // Major/minor Forex pairs standard: 5 decimals (pipettes)
+  if (sym && (
+    sym.includes('EURUSD') || sym.includes('GBPUSD') || sym.includes('AUDUSD') ||
+    sym.includes('USDCAD') || sym.includes('USDCHF') || sym.includes('NZDUSD') ||
+    sym.includes('EURGBP') || sym.includes('EURCAD') || sym.includes('AUDCAD') ||
+    sym.includes('EURAUD') || sym.includes('GBPAUD') || sym.includes('GBPCAD') ||
+    sym.includes('EURCHF') || sym.includes('GBPCHF')
+  )) {
+    return 5;
+  }
+
+  // JPY pairs standard: 3 decimals
+  if (sym && sym.includes('JPY')) {
+    return 3;
+  }
+
+  // Dynamic pricing tiers for equities and crypto
+  if (price >= 1000) return 2;
+  if (price >= 100) return 2;
+  if (price >= 10) return 3;
+  if (price >= 1) return 4;
+  if (price >= 0.1) return 5;
+  if (price >= 0.01) return 6;
+  if (price >= 0.001) return 7;
+  if (price >= 0.0001) return 8;
+  if (price >= 0.00001) return 9;
+  return 10;
+}
+
