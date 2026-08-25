@@ -80,7 +80,6 @@ export interface ManualScanResult {
 }
 
 export class HourlyScannerService {
-  private timerId: NodeJS.Timeout | null = null;
   private isScanning = false;
 
   constructor() {
@@ -88,62 +87,20 @@ export class HourlyScannerService {
   }
 
   /**
-   * Initializes the hourly scanner.
-   * On Vercel serverless environments, setInterval loop is skipped. External invocations drive scans via /api/scanner/trigger.
+   * Initializes the hourly scanner in Authoritative Cron-Driven Mode.
+   * Background setInterval loop is removed to eliminate competing timers against cron-job.org.
+   * All automated scans are driven authoritatively through /api/scanner/trigger.
    */
   start(): void {
-    if (process.env.VERCEL || process.env.VERCEL_ENV) {
-      logger.info('[Hourly Scanner] Vercel serverless environment detected. Skipping background setInterval loop. Scans driven via /api/scanner/trigger.');
-      return;
-    }
-
-    if (this.timerId) return;
-
-    logger.info('[Hourly Scanner] Starting background service.');
-
-    // Quick initial check on startup
-    this.checkScheduleAndRun();
-
-    // Check interval elapsed every 15 seconds
-    this.timerId = setInterval(() => {
-      this.checkScheduleAndRun();
-    }, 15 * 1000);
+    ScannerPersistence.init();
+    logger.info('[Hourly Scanner] Initialized in Authoritative Cron-Driven Mode. Automated scans driven strictly via /api/scanner/trigger (cron-job.org).');
   }
 
   /**
-   * Stops the background timer loop.
+   * Stops the scanner service.
    */
   stop(): void {
-    if (this.timerId) {
-      clearInterval(this.timerId);
-      this.timerId = null;
-      logger.info('[Hourly Scanner] Background service stopped.');
-    }
-  }
-
-  /**
-   * Checks settings and runs the scanner if the configured interval (15, 30, 45, or 60 min) has elapsed since lastScanTime.
-   */
-  private async checkScheduleAndRun(): Promise<void> {
-    try {
-      const settings = ScannerPersistence.getSettings();
-      if (!settings.enabled) return;
-      if (this.isScanning) return;
-
-      const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
-      const now = Date.now();
-      const validIntervals = [15, 30, 45, 60];
-      const intervalMinutes = validIntervals.includes(Number(settings.intervalMinutes))
-        ? Number(settings.intervalMinutes)
-        : 30;
-      const intervalMs = intervalMinutes * 60 * 1000;
-
-      if (capState.lastScanTime === 0 || now - capState.lastScanTime >= intervalMs) {
-        await this.runScan();
-      }
-    } catch (err) {
-      logger.error('[Hourly Scanner] Error during automated scheduled scan check:', { error: String(err) });
-    }
+    logger.info('[Hourly Scanner] Scanner service stopped.');
   }
 
   /**
@@ -241,14 +198,6 @@ export class HourlyScannerService {
     marketCache.clearExpired();
     marketCache.clearTickers();
     return await this.executeIntelligentScan(isExternal);
-  }
-
-  /**
-   * Background scan runner.
-   */
-  private async runScan(): Promise<number> {
-    const result = await this.executeIntelligentScan();
-    return result.signalsFound;
   }
 
   /**

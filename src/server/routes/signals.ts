@@ -30,18 +30,35 @@ import { logger } from '../logger.js';
 import { ScannerPersistence, PersistedSentSignal } from '../signals/ScannerPersistence.js';
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { adminAuthMiddleware } from '../middleware/adminAuth.js';
+import { CronJobOrgService } from '../cron/CronJobOrgService.js';
 
 const router = Router();
 
 /**
  * GET /api/scanner/settings
- * Retrieves automated hourly scanner configurations and today's stats.
+ * Retrieves automated hourly scanner configurations, today's stats, and cron-job.org status.
  */
 router.get('/scanner/settings', async (_req: Request, res: Response) => {
   const settings = await hourlyScanner.getSettingsAsync();
+  const cronJobOrg = await CronJobOrgService.getJobStatus();
   res.status(200).json({
     success: true,
     settings,
+    cronJobOrg,
+    timestamp: Date.now(),
+  });
+});
+
+/**
+ * GET /api/cron/status
+ * Dedicated route for retrieving cron-job.org execution details & history.
+ */
+router.get('/cron/status', async (req: Request, res: Response) => {
+  const forceRefresh = req.query.refresh === 'true';
+  const status = await CronJobOrgService.getJobStatus(forceRefresh);
+  res.status(200).json({
+    success: true,
+    cronJobOrg: status,
     timestamp: Date.now(),
   });
 });
@@ -162,8 +179,9 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
     });
   }
 
-  // 1. Log external scan start with full UTC / Unix timezone diagnostics
+  // 1. Log external scan start with full UTC / Unix timezone diagnostics and record cron trigger timestamp
   const now = Date.now();
+  await ScannerPersistence.updateLastCronTriggerTime(now);
   const configuredTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   logger.info(`[Scanner Diagnostic] EXTERNAL_HOURLY_SCAN_TRIGGERED | Date.now(): ${now} | ISO UTC: ${new Date(now).toISOString()} | Runtime TZ: ${configuredTz}`);
 

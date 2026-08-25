@@ -39,11 +39,29 @@ export function SettingsPage({}: SettingsPageProps) {
     intervalMinutes: number;
     signalsSentTimestamps: number[];
     lastScanTime: number;
+    nextScanTime: number;
+    scannerStatus: 'ACTIVE' | 'RUNNING' | 'DISABLED' | 'CAP_REACHED';
     limit: number;
+    dailySignalCount?: number;
+  } | null>(null);
+  const [cronJobOrg, setCronJobOrg] = useState<{
+    configured: boolean;
+    enabled?: boolean;
+    statusText?: string;
+    schedule?: { intervalDescription?: string; timezone?: string };
+    lastExecution?: { timestamp: number; dateIso: string; httpStatus?: number } | null;
+    nextExecution?: { timestamp: number; dateIso: string } | null;
+    error?: string;
   } | null>(null);
   const [loadingScanner, setLoadingScanner] = useState<boolean>(false);
-  const [triggeringScan, setTriggeringScan] = useState<boolean>(false);
   const [scannerMessage, setScannerMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [nowDisplayTime, setNowDisplayTime] = useState<number>(Date.now());
+
+  // Update display clock every second for live countdown rendering
+  useEffect(() => {
+    const timer = setInterval(() => setNowDisplayTime(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const fetchScannerSettings = useCallback(async () => {
     setLoadingScanner(true);
@@ -51,6 +69,9 @@ export function SettingsPage({}: SettingsPageProps) {
       const res = await api.getScannerSettings();
       if (res.success) {
         setScannerSettings(res.settings);
+        if (res.cronJobOrg) {
+          setCronJobOrg(res.cronJobOrg);
+        }
       }
     } catch (err) {
       console.error('Failed to fetch scanner settings:', err);
@@ -79,32 +100,6 @@ export function SettingsPage({}: SettingsPageProps) {
         text: err?.message || 'Failed to update scanner settings.',
       });
       setTimeout(() => setScannerMessage(null), 6000);
-    }
-  };
-
-  const handleManualScanTrigger = async () => {
-    setTriggeringScan(true);
-    setScannerMessage(null);
-    try {
-      const res = await api.triggerScannerManualScan();
-      if (res.success) {
-        try {
-          const freshSettings = await api.getScannerSettings();
-          setScannerSettings(freshSettings.settings);
-        } catch (_) {}
-        setScannerMessage({
-          type: 'success',
-          text: `Scan Complete! Dispatched ${res.signalsFound} qualified automated setup(s).`,
-        });
-      }
-    } catch (err: any) {
-      console.error('Failed to trigger manual scan:', err);
-      setScannerMessage({
-        type: 'error',
-        text: err?.message || 'Failed to complete scanner run.',
-      });
-    } finally {
-      setTriggeringScan(false);
     }
   };
 
@@ -445,77 +440,166 @@ export function SettingsPage({}: SettingsPageProps) {
             </div>
           </div>
 
-          {/* Statistics and Controls */}
+          {/* Cron & Market Scan Schedules (Read-Only Display) */}
           <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-slate-800/80">
               <div className="space-y-0.5">
-                <span className="text-xs font-semibold text-white block">Autonomous Scanner Schedule & Diagnostics</span>
+                <span className="text-xs font-semibold text-white block">External Cron Scheduler & Market Scan Status</span>
                 <p className="text-[11px] text-slate-400">
-                  Continuous 24/7 background execution schedule and real-time operational status.
+                  Real-time synchronization between cron-job.org execution and actual market scans.
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={handleManualScanTrigger}
-                disabled={triggeringScan}
-                className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1.5 shrink-0"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${triggeringScan ? 'animate-spin' : ''}`} />
-                <span>{triggeringScan ? 'Running Scan...' : 'Trigger Now'}</span>
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900 border border-slate-700/80 text-[11px] font-mono text-slate-300">
+                  <span className={`w-1.5 h-1.5 rounded-full ${cronJobOrg?.configured ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
+                  cron-job.org
+                </span>
+                <button
+                  type="button"
+                  onClick={fetchScannerSettings}
+                  disabled={loadingScanner}
+                  title="Refresh authoritative state from backend"
+                  className="px-2.5 py-1 rounded-md bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-slate-300 text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  <RefreshCw className={`w-3 h-3 ${loadingScanner ? 'animate-spin' : ''}`} />
+                  <span>Refresh</span>
+                </button>
+              </div>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
-              {/* 1. Scanner Status */}
-              <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-3 space-y-1">
-                <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Scanner Status</span>
-                <div className="flex items-center gap-1.5 pt-0.5">
-                  <span className={`w-2 h-2 rounded-full ${
-                    scannerSettings?.scannerStatus === 'RUNNING' || triggeringScan
-                      ? 'bg-amber-400 animate-ping'
-                      : scannerSettings?.enabled && scannerSettings?.scannerStatus !== 'DISABLED'
-                      ? 'bg-emerald-400'
-                      : 'bg-slate-500'
-                  }`} />
-                  <span className={`font-semibold ${
-                    scannerSettings?.scannerStatus === 'RUNNING' || triggeringScan
-                      ? 'text-amber-400'
-                      : scannerSettings?.enabled && scannerSettings?.scannerStatus !== 'DISABLED'
-                      ? 'text-emerald-400'
-                      : 'text-slate-400'
-                  }`}>
-                    {triggeringScan ? 'RUNNING' : (scannerSettings?.scannerStatus || (scannerSettings?.enabled ? 'ACTIVE' : 'DISABLED'))}
+            {/* Section 1: External Cron Job Execution Status */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  1. External Cron Execution (cron-job.org)
+                </span>
+                {cronJobOrg?.schedule?.intervalDescription && (
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    Schedule: {cronJobOrg.schedule.intervalDescription}
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs font-mono">
+                {/* Cron Status */}
+                <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-2.5 space-y-1">
+                  <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Cron Status</span>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <span className={`w-2 h-2 rounded-full ${cronJobOrg?.configured && cronJobOrg?.enabled !== false ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+                    <span className="font-semibold text-slate-200">
+                      {cronJobOrg?.configured ? (cronJobOrg?.statusText || 'ACTIVE') : 'NOT CONFIGURED'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Cron Schedule */}
+                <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-2.5 space-y-1">
+                  <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Cron Interval</span>
+                  <span className="font-semibold text-white block pt-0.5 truncate">
+                    {cronJobOrg?.schedule?.intervalDescription || 'Every 15 min'}
+                  </span>
+                </div>
+
+                {/* Last Cron Execution */}
+                <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-2.5 space-y-1">
+                  <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Last Cron Execution</span>
+                  <span className="font-semibold text-slate-200 block pt-0.5 truncate">
+                    {cronJobOrg?.lastExecution?.timestamp && cronJobOrg.lastExecution.timestamp > 0
+                      ? `${new Date(cronJobOrg.lastExecution.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}${cronJobOrg.lastExecution.httpStatus ? ` (${cronJobOrg.lastExecution.httpStatus})` : ''}`
+                      : 'Never'}
+                  </span>
+                </div>
+
+                {/* Next Cron Execution */}
+                <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-2.5 space-y-1">
+                  <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Next Cron Execution</span>
+                  <span className="font-semibold text-emerald-400 block pt-0.5 truncate">
+                    {cronJobOrg?.nextExecution?.timestamp && cronJobOrg.nextExecution.timestamp > 0
+                      ? new Date(cronJobOrg.nextExecution.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                      : 'Scheduled'}
                   </span>
                 </div>
               </div>
+            </div>
 
-              {/* 2. Current Scan Interval */}
-              <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-3 space-y-1">
-                <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Current Interval</span>
-                <span className="font-semibold text-white block pt-0.5">
-                  {scannerSettings?.intervalMinutes ?? 30} minutes
+            {/* Section 2: Actual Market Scan Status */}
+            <div className="space-y-2 pt-2 border-t border-slate-800/60">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-blue-400 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
+                  2. Automated Market Scan (Engine)
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono">
+                  Min Due Interval: {scannerSettings?.intervalMinutes ?? 30}m
                 </span>
               </div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs font-mono">
+                {/* Scanner Status */}
+                <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-2.5 space-y-1">
+                  <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Scan Status</span>
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <span className={`w-2 h-2 rounded-full ${
+                      scannerSettings?.scannerStatus === 'RUNNING'
+                        ? 'bg-amber-400 animate-ping'
+                        : scannerSettings?.enabled && scannerSettings?.scannerStatus !== 'DISABLED'
+                        ? 'bg-emerald-400'
+                        : 'bg-slate-500'
+                    }`} />
+                    <span className={`font-semibold ${
+                      scannerSettings?.scannerStatus === 'RUNNING'
+                        ? 'text-amber-400'
+                        : scannerSettings?.enabled && scannerSettings?.scannerStatus !== 'DISABLED'
+                        ? 'text-emerald-400'
+                        : 'text-slate-400'
+                    }`}>
+                      {scannerSettings?.scannerStatus || (scannerSettings?.enabled ? 'ACTIVE' : 'DISABLED')}
+                    </span>
+                  </div>
+                </div>
 
-              {/* 3. Last Scan Time */}
-              <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-3 space-y-1">
-                <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Last Scan Time</span>
-                <span className="font-semibold text-slate-200 block pt-0.5 truncate" title={scannerSettings?.lastScanTime ? new Date(scannerSettings.lastScanTime).toLocaleString() : 'Never'}>
-                  {scannerSettings?.lastScanTime ? new Date(scannerSettings.lastScanTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Never'}
-                </span>
-              </div>
+                {/* Daily Cap / Progress */}
+                <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-2.5 space-y-1">
+                  <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Daily Signals Sent</span>
+                  <span className="font-semibold text-white block pt-0.5">
+                    {scannerSettings?.dailySignalCount ?? 0} / {scannerSettings?.limit ?? 5}
+                  </span>
+                </div>
 
-              {/* 4. Next Scan Time */}
-              <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-3 space-y-1">
-                <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Next Scan Time</span>
-                <span className="font-semibold text-emerald-400 block pt-0.5 truncate" title={scannerSettings?.nextScanTime ? new Date(scannerSettings.nextScanTime).toLocaleString() : 'Scheduled'}>
-                  {scannerSettings?.enabled !== false
-                    ? (scannerSettings?.nextScanTime
-                        ? new Date(scannerSettings.nextScanTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                        : 'Scheduled')
-                    : 'Paused'}
-                </span>
+                {/* Last ACTUAL Automated Scan */}
+                <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-2.5 space-y-1">
+                  <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Last Market Scan</span>
+                  <span
+                    className="font-semibold text-slate-200 block pt-0.5 truncate"
+                    title={scannerSettings?.lastScanTime ? new Date(scannerSettings.lastScanTime).toLocaleString() : 'Never'}
+                  >
+                    {scannerSettings?.lastScanTime && scannerSettings.lastScanTime > 0
+                      ? new Date(scannerSettings.lastScanTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                      : 'Never'}
+                  </span>
+                </div>
+
+                {/* Next Market Scan Due */}
+                <div className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-2.5 space-y-1">
+                  <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Next Scan Due</span>
+                  <div className="flex items-center justify-between gap-1 pt-0.5">
+                    <span
+                      className="font-semibold text-blue-400 block truncate"
+                      title={scannerSettings?.nextScanTime ? new Date(scannerSettings.nextScanTime).toLocaleString() : 'Scheduled'}
+                    >
+                      {scannerSettings?.enabled !== false
+                        ? (scannerSettings?.nextScanTime && scannerSettings.nextScanTime > 0
+                            ? new Date(scannerSettings.nextScanTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                            : 'Scheduled')
+                        : 'Paused'}
+                    </span>
+                    {scannerSettings?.nextScanTime && scannerSettings.nextScanTime > nowDisplayTime && scannerSettings.enabled !== false && (
+                      <span className="text-[10px] text-slate-400 font-normal">
+                        ({Math.ceil((scannerSettings.nextScanTime - nowDisplayTime) / 60000)}m)
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           </div>

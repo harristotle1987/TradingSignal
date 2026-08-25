@@ -30,6 +30,7 @@ export interface DailyCapState {
   dailySignalCount: number;
   dailySignalCap: number;
   lastScanTime: number;
+  lastCronTriggerTime?: number;
   reservations?: DailyCapReservation[];
 }
 
@@ -336,6 +337,9 @@ export class ScannerPersistence {
       const remoteLastScan = typeof remote.lastScanTime === 'number' && remote.lastScanTime > 0
         ? remote.lastScanTime
         : (this.localData.capState.lastScanTime || 0);
+      const remoteLastCronTrigger = typeof remote.lastCronTriggerTime === 'number' && remote.lastCronTriggerTime > 0
+        ? remote.lastCronTriggerTime
+        : (this.localData.capState.lastCronTriggerTime || 0);
 
       if (remote.date !== today) {
         const resetState: DailyCapState = {
@@ -343,6 +347,7 @@ export class ScannerPersistence {
           dailySignalCount: 0,
           dailySignalCap: remote.dailySignalCap || defaultCap,
           lastScanTime: remoteLastScan,
+          lastCronTriggerTime: remoteLastCronTrigger,
           reservations: [],
         };
         await docRef.set(resetState);
@@ -357,6 +362,7 @@ export class ScannerPersistence {
         dailySignalCount: typeof remote.dailySignalCount === 'number' ? remote.dailySignalCount : 0,
         dailySignalCap: remote.dailySignalCap || defaultCap,
         lastScanTime: remoteLastScan,
+        lastCronTriggerTime: remoteLastCronTrigger,
         reservations: remote.reservations || [],
       };
       this.saveLocalData();
@@ -1455,6 +1461,29 @@ export class ScannerPersistence {
       }
     } else if (this.isProductionMode()) {
       logger.error('[ScannerPersistence] FAIL CLOSED: Cannot update lastScanTime without Firestore in production.');
+    }
+  }
+
+  /**
+   * Records the timestamp of an external cron-job.org HTTP heartbeat/trigger ping.
+   * Completely independent of lastScanTime (does not modify market scan state or schedule).
+   */
+  static async updateLastCronTriggerTime(timestamp = Date.now()): Promise<void> {
+    this.init();
+    logger.info(`[ScannerPersistence] Recording external cron trigger ping: ${timestamp} (${new Date(timestamp).toISOString()})`);
+
+    this.localData.capState.lastCronTriggerTime = timestamp;
+    this.saveLocalData();
+
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      try {
+        await firestore
+          .doc(FIRESTORE_CAP_DOC)
+          .set({ lastCronTriggerTime: timestamp }, { merge: true });
+      } catch (err) {
+        logger.warn('[ScannerPersistence] Failed to update lastCronTriggerTime in Firestore:', { error: String(err) });
+      }
     }
   }
 

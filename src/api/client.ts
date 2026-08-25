@@ -166,10 +166,17 @@ class ApiClient {
   }
 
   /**
-   * Fetch automated hourly scanner settings and stats
+   * Fetch automated hourly scanner settings, market scan state, and cron-job.org status
    */
-  async getScannerSettings(): Promise<{ success: boolean; settings: any }> {
-    return this.fetchJson<{ success: boolean; settings: any }>('/api/scanner/settings');
+  async getScannerSettings(): Promise<{ success: boolean; settings: any; cronJobOrg?: any }> {
+    return this.fetchJson<{ success: boolean; settings: any; cronJobOrg?: any }>('/api/scanner/settings');
+  }
+
+  /**
+   * Dedicated method to fetch cron-job.org execution details & history
+   */
+  async getCronStatus(refresh = false): Promise<{ success: boolean; cronJobOrg: any }> {
+    return this.fetchJson<{ success: boolean; cronJobOrg: any }>(`/api/cron/status${refresh ? '?refresh=true' : ''}`);
   }
 
   /**
