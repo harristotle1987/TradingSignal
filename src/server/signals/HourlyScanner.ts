@@ -77,6 +77,8 @@ export interface ManualScanResult {
   qualifiedSetups: TradingSignal[];
   rejectedCount: number;
   rejectionReasons: string[];
+  diagnosticsCount?: number;
+  diagnostics?: string[];
   capState: DailyCapState;
   scanDurationMs?: number;
 }
@@ -232,6 +234,7 @@ export class HourlyScannerService {
       const marketDataFetchStart = Date.now();
       const categories: Array<'CRYPTO' | 'FOREX' | 'STOCKS'> = ['CRYPTO', 'FOREX', 'STOCKS'];
       const rawCandidates: TradingSignal[] = [];
+      const universeDiagnostics: Array<{ symbol: string; reason: string }> = [];
       const rejectedDuringScan: Array<{ symbol: string; direction?: string; score?: number; reason: string }> = [];
 
       const categoryScanResults = await Promise.all(
@@ -251,7 +254,7 @@ export class HourlyScannerService {
         if (result.success && Array.isArray(result.signals)) {
           rawCandidates.push(...result.signals);
         } else if (result.reason) {
-          rejectedDuringScan.push({
+          universeDiagnostics.push({
             symbol: category,
             reason: result.reason,
           });
@@ -775,7 +778,7 @@ export class HourlyScannerService {
       }
 
       const evaluationDurationMs = Date.now() - evaluationStart;
-      logger.info(`[Scanner Telemetry] SIGNAL_EVALUATION | duration: ${evaluationDurationMs}ms | selectedSetupsCount: ${selectedSetups.length} | rejectedCount: ${rejectedDuringScan.length}`);
+      logger.info(`[Scanner Telemetry] SIGNAL_EVALUATION | duration: ${evaluationDurationMs}ms | candidatesEvaluated: ${rawCandidates.length} | selectedSetupsCount: ${selectedSetups.length} | rejectedCandidatesCount: ${rejectedDuringScan.length} | universeDiagnosticsCount: ${universeDiagnostics.length}`);
 
       // 7. Dispatch & Persistence
       const persistenceStart = Date.now();
@@ -986,6 +989,9 @@ export class HourlyScannerService {
       const rejectionReasonStrings = rejectedDuringScan.map(
         (r) => `${r.symbol}${r.direction ? ` [${r.direction}]` : ''}: ${r.reason}`
       );
+      const diagnosticStrings = universeDiagnostics.map(
+        (d) => `${d.symbol}: ${d.reason}`
+      );
 
       return {
         success: true,
@@ -1003,6 +1009,8 @@ export class HourlyScannerService {
         qualifiedSetups: selectedSetups,
         rejectedCount: rejectedDuringScan.length,
         rejectionReasons: rejectionReasonStrings,
+        diagnosticsCount: universeDiagnostics.length,
+        diagnostics: diagnosticStrings,
         capState: finalCapState,
         scanDurationMs,
       };
