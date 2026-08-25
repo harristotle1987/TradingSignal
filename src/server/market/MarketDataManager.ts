@@ -31,14 +31,16 @@ class ProviderRequestQueue {
 
   // Minimum spacing in ms between outbound network requests per provider
   private minSpacingMs: Record<string, number> = {
-    twelvedata: 7500, // Twelve Data limit: 8 req/min (7.5s safe spacing)
-    finnhub: 1000,    // Finnhub limit: 30-60 req/min
-    bitget: 200,      // Bitget limit: 100 req/min
+    twelvedata: 1000,
+    finnhub: 300,
+    bitget: 100,
+    exchangerate: 100,
   };
 
   async enqueue<T>(providerId: string, fn: () => Promise<T>): Promise<T> {
     const cleanId = providerId.toLowerCase();
-    const spacing = this.minSpacingMs[cleanId] || 100;
+    const hasTwelveDataKey = Boolean(process.env.TWELVE_DATA_API_KEY && process.env.TWELVE_DATA_API_KEY.trim().length > 0);
+    const spacing = cleanId === 'twelvedata' && !hasTwelveDataKey ? 0 : (this.minSpacingMs[cleanId] || 100);
 
     const previousPromise = this.providerQueues.get(cleanId) || Promise.resolve();
 

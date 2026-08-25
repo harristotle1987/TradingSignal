@@ -268,53 +268,57 @@ export class SignalEngine {
         direction: SignalDirection;
       }> = [];
 
-      let count = 0;
-      for (const asset of openAssets) {
-        // Rate-limit conservation: slight pacing to protect external quotas
-        if (universe.length > 1 && count > 0 && count % 5 === 0) {
-          await new Promise((resolve) => setTimeout(resolve, 200));
-        }
-        count++;
+      // Process open assets in bounded concurrent batches (batch size 8)
+      const BATCH_SIZE = 8;
+      for (let i = 0; i < openAssets.length; i += BATCH_SIZE) {
+        const batch = openAssets.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(
+          batch.map(async (asset) => {
+            let htf1h: NormalizedCandle[];
+            try {
+              htf1h = await marketDataManager.getCandles(asset, undefined, '1h', 50, false);
+            } catch (err) {
+              logger.info(`[Stage 1/2 Screen] Skipped ${asset}: 1H candles unavailable (${err instanceof Error ? err.message : String(err)})`);
+              return null;
+            }
 
-        let htf1h: NormalizedCandle[];
-        try {
-          htf1h = await marketDataManager.getCandles(asset, undefined, '1h', 50, false);
-        } catch (err) {
-          logger.info(`[Stage 1/2 Screen] Skipped ${asset}: 1H candles unavailable (${err instanceof Error ? err.message : String(err)})`);
-          continue;
-        }
+            if (!htf1h || htf1h.length < 20) {
+              logger.info(`[Stage 1/2 Screen] Skipped ${asset}: Insufficient 1H candle history (${htf1h?.length || 0})`);
+              return null;
+            }
 
-        if (!htf1h || htf1h.length < 20) {
-          logger.info(`[Stage 1/2 Screen] Skipped ${asset}: Insufficient 1H candle history (${htf1h?.length || 0})`);
-          continue;
-        }
+            // Gate 0: Data Integrity & Market Data Validation
+            const gate0 = Gate0DataValidator.validate({
+              symbol: asset,
+              timeframe: '1h',
+              liveTicker: null,
+              candles: htf1h,
+              minCandlesRequired: 20
+            });
 
-        // Gate 0: Data Integrity & Market Data Validation
-        const gate0 = Gate0DataValidator.validate({
-          symbol: asset,
-          timeframe: '1h',
-          liveTicker: null,
-          candles: htf1h,
-          minCandlesRequired: 20
-        });
+            if (gate0.dataStatus !== 'VALID') {
+              logger.info(`[Gate 0 Data Integrity] Skipped ${asset}: ${gate0.dataStatus} - ${gate0.reasons.join(', ')}`);
+              return null;
+            }
 
-        if (gate0.dataStatus !== 'VALID') {
-          logger.info(`[Gate 0 Data Integrity] Skipped ${asset}: ${gate0.dataStatus} - ${gate0.reasons.join(', ')}`);
-          continue;
-        }
+            const pass = this.computeTechnicalVolatilityScore(asset, htf1h);
+            logger.info(`[Stage 2 Filter] ${asset}: Score = ${pass.preliminaryScore}/100 (${pass.reason})`);
 
-        const pass = this.computeTechnicalVolatilityScore(asset, htf1h);
-        logger.info(`[Stage 2 Filter] ${asset}: Score = ${pass.preliminaryScore}/100 (${pass.reason})`);
+            const isManualQuery = universe.length === 1;
+            if (isManualQuery || pass.preliminaryScore >= 40) {
+              return {
+                asset,
+                htf1h,
+                preliminaryScore: isManualQuery ? Math.max(40, pass.preliminaryScore) : pass.preliminaryScore,
+                direction: pass.direction,
+              };
+            }
+            return null;
+          })
+        );
 
-        // If manual single-asset query, advance to Stage 3 for complete analysis; otherwise require >= 40 preliminary score
-        const isManualQuery = universe.length === 1;
-        if (isManualQuery || pass.preliminaryScore >= 40) {
-          stage2Candidates.push({
-            asset,
-            htf1h,
-            preliminaryScore: isManualQuery ? Math.max(40, pass.preliminaryScore) : pass.preliminaryScore,
-            direction: pass.direction,
-          });
+        for (const res of batchResults) {
+          if (res) stage2Candidates.push(res);
         }
       }
 
@@ -380,15 +384,21 @@ export class SignalEngine {
         // 5M = Entry
         // 30M/2H/1W = Auxiliary confirmation only when required
         const coreIntervals = ['4h', '15m', '5m'];
-        for (const interval of coreIntervals) {
-          try {
-            const fetched = await marketDataManager.getCandles(asset, undefined, interval, 50, false);
-            if (fetched && fetched.length >= 20) {
-              candlesMap[interval] = fetched.sort((a, b) => a.timestamp - b.timestamp);
+        const coreFetched = await Promise.all(
+          coreIntervals.map(async (interval) => {
+            try {
+              const fetched = await marketDataManager.getCandles(asset, undefined, interval, 50, false);
+              if (fetched && fetched.length >= 20) {
+                return { interval, candles: fetched.sort((a, b) => a.timestamp - b.timestamp) };
+              }
+            } catch (err) {
+              logger.debug(`Core timeframe '${interval}' unavailable for ${asset}`, { reason: String(err) });
             }
-          } catch (err) {
-            logger.debug(`Core timeframe '${interval}' unavailable for ${asset}`, { reason: String(err) });
-          }
+            return null;
+          })
+        );
+        for (const item of coreFetched) {
+          if (item) candlesMap[item.interval] = item.candles;
         }
 
         // Fetch 1D only if 4H is unavailable or shallow (< 15 candles)
@@ -1727,21 +1737,33 @@ export class SignalEngine {
   }
 
   // --- Finnhub News Helpers ---
+  private static cachedGeneralNews: { data: Array<{ headline?: string; summary?: string }>; timestamp: number } | null = null;
 
   private async fetchGeneralNews(): Promise<Array<{ headline?: string; summary?: string }>> {
+    if (SignalEngine.cachedGeneralNews && (Date.now() - SignalEngine.cachedGeneralNews.timestamp) < 5 * 60 * 1000) {
+      return SignalEngine.cachedGeneralNews.data;
+    }
     const apiKey = process.env.FINNHUB_API_KEY;
     if (!apiKey || apiKey.trim().length === 0) return [];
 
     try {
-      const response = await fetch(`https://finnhub.io/api/v1/news?category=general&token=${apiKey.trim()}`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+      const response = await fetch(`https://finnhub.io/api/v1/news?category=general&token=${apiKey.trim()}`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
       if (response.ok) {
         const json = await response.json();
-        if (Array.isArray(json)) return json;
+        if (Array.isArray(json)) {
+          SignalEngine.cachedGeneralNews = { data: json, timestamp: Date.now() };
+          return json;
+        }
       }
     } catch (err) {
-      logger.warn('Finnhub global news fetch failed', { error: String(err) });
+      logger.warn('Finnhub global news fetch failed or timed out', { error: String(err) });
     }
-    return [];
+    return SignalEngine.cachedGeneralNews?.data || [];
   }
 
   private evaluateNewsSentiment(

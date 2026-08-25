@@ -29,6 +29,18 @@ export interface DailyCapState {
   date: string;
   dailySignalCount: number;
   dailySignalCap: number;
+
+  // HARD GATE 2: Track scan & cron metrics separately in backend state
+  lastCronExecution?: number;
+  lastAutomatedScan?: number;
+  lastScanCompletedAt?: number;
+  lastScanDuration?: number;
+  lastCandidatesEvaluated?: number;
+  lastSignalsFound?: number;
+  lastAcceptedSignals?: number;
+  nextCronExecution?: number;
+
+  // Backward compatibility fields
   lastScanTime: number;
   lastCronTriggerTime?: number;
   reservations?: DailyCapReservation[];
@@ -166,6 +178,13 @@ export class ScannerPersistence {
       dailySignalCount: 0,
       dailySignalCap: 5,
       lastScanTime: 0,
+      lastCronExecution: 0,
+      lastAutomatedScan: 0,
+      lastScanCompletedAt: 0,
+      lastScanDuration: 0,
+      lastCandidatesEvaluated: 0,
+      lastSignalsFound: 0,
+      lastAcceptedSignals: 0,
       reservations: [],
     },
     sentSignals: [],
@@ -337,9 +356,17 @@ export class ScannerPersistence {
       const remoteLastScan = typeof remote.lastScanTime === 'number' && remote.lastScanTime > 0
         ? remote.lastScanTime
         : (this.localData.capState.lastScanTime || 0);
-      const remoteLastCronTrigger = typeof remote.lastCronTriggerTime === 'number' && remote.lastCronTriggerTime > 0
-        ? remote.lastCronTriggerTime
-        : (this.localData.capState.lastCronTriggerTime || 0);
+      const remoteLastCronExecution = typeof remote.lastCronExecution === 'number' && remote.lastCronExecution > 0
+        ? remote.lastCronExecution
+        : (typeof remote.lastCronTriggerTime === 'number' && remote.lastCronTriggerTime > 0 ? remote.lastCronTriggerTime : (this.localData.capState.lastCronExecution || 0));
+      const remoteLastAutomatedScan = typeof remote.lastAutomatedScan === 'number' && remote.lastAutomatedScan > 0
+        ? remote.lastAutomatedScan
+        : (this.localData.capState.lastAutomatedScan || remoteLastScan || 0);
+      const remoteLastScanCompletedAt = typeof remote.lastScanCompletedAt === 'number' ? remote.lastScanCompletedAt : (this.localData.capState.lastScanCompletedAt || 0);
+      const remoteLastScanDuration = typeof remote.lastScanDuration === 'number' ? remote.lastScanDuration : (this.localData.capState.lastScanDuration || 0);
+      const remoteLastCandidatesEvaluated = typeof remote.lastCandidatesEvaluated === 'number' ? remote.lastCandidatesEvaluated : (this.localData.capState.lastCandidatesEvaluated || 0);
+      const remoteLastSignalsFound = typeof remote.lastSignalsFound === 'number' ? remote.lastSignalsFound : (this.localData.capState.lastSignalsFound || 0);
+      const remoteLastAcceptedSignals = typeof remote.lastAcceptedSignals === 'number' ? remote.lastAcceptedSignals : (this.localData.capState.lastAcceptedSignals || 0);
 
       if (remote.date !== today) {
         const resetState: DailyCapState = {
@@ -347,7 +374,14 @@ export class ScannerPersistence {
           dailySignalCount: 0,
           dailySignalCap: remote.dailySignalCap || defaultCap,
           lastScanTime: remoteLastScan,
-          lastCronTriggerTime: remoteLastCronTrigger,
+          lastCronExecution: remoteLastCronExecution,
+          lastAutomatedScan: remoteLastAutomatedScan,
+          lastScanCompletedAt: remoteLastScanCompletedAt,
+          lastScanDuration: remoteLastScanDuration,
+          lastCandidatesEvaluated: remoteLastCandidatesEvaluated,
+          lastSignalsFound: remoteLastSignalsFound,
+          lastAcceptedSignals: remoteLastAcceptedSignals,
+          lastCronTriggerTime: remoteLastCronExecution,
           reservations: [],
         };
         await docRef.set(resetState);
@@ -362,7 +396,14 @@ export class ScannerPersistence {
         dailySignalCount: typeof remote.dailySignalCount === 'number' ? remote.dailySignalCount : 0,
         dailySignalCap: remote.dailySignalCap || defaultCap,
         lastScanTime: remoteLastScan,
-        lastCronTriggerTime: remoteLastCronTrigger,
+        lastCronExecution: remoteLastCronExecution,
+        lastAutomatedScan: remoteLastAutomatedScan,
+        lastScanCompletedAt: remoteLastScanCompletedAt,
+        lastScanDuration: remoteLastScanDuration,
+        lastCandidatesEvaluated: remoteLastCandidatesEvaluated,
+        lastSignalsFound: remoteLastSignalsFound,
+        lastAcceptedSignals: remoteLastAcceptedSignals,
+        lastCronTriggerTime: remoteLastCronExecution,
         reservations: remote.reservations || [],
       };
       this.saveLocalData();
@@ -1439,6 +1480,75 @@ export class ScannerPersistence {
   }
 
   /**
+   * Updates external cron trigger execution timestamp.
+   */
+  static async updateLastCronExecution(timestamp = Date.now()): Promise<void> {
+    this.init();
+    logger.info(`[ScannerPersistence] WRITING lastCronExecution: ${timestamp} (${new Date(timestamp).toISOString()})`);
+    
+    this.localData.capState.lastCronExecution = timestamp;
+    this.localData.capState.lastCronTriggerTime = timestamp;
+    this.saveLocalData();
+
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      try {
+        await firestore
+          .doc(FIRESTORE_CAP_DOC)
+          .set({ lastCronExecution: timestamp, lastCronTriggerTime: timestamp }, { merge: true });
+      } catch (err) {
+        logger.warn('[ScannerPersistence] Failed to update lastCronExecution in Firestore:', { error: String(err) });
+      }
+    }
+  }
+
+  /**
+   * Updates actual automated market scan engine metrics.
+   * MAY ONLY BE CALLED when Market Scan Engine actually executes from /api/scanner/trigger (isExternal = true).
+   * NEVER updated from UI activity, page loads, manual signal generation, heartbeat, scheduler checks, or skipped requests.
+   */
+  static async recordAutomatedScanMetrics(metrics: {
+    lastAutomatedScan: number;
+    lastScanCompletedAt: number;
+    lastScanDuration: number;
+    lastCandidatesEvaluated: number;
+    lastSignalsFound: number;
+    lastAcceptedSignals: number;
+  }): Promise<void> {
+    this.init();
+    logger.info(`[ScannerPersistence] WRITING lastAutomatedScan metrics:`, metrics);
+
+    this.localData.capState.lastAutomatedScan = metrics.lastAutomatedScan;
+    this.localData.capState.lastScanTime = metrics.lastAutomatedScan;
+    this.localData.capState.lastScanCompletedAt = metrics.lastScanCompletedAt;
+    this.localData.capState.lastScanDuration = metrics.lastScanDuration;
+    this.localData.capState.lastCandidatesEvaluated = metrics.lastCandidatesEvaluated;
+    this.localData.capState.lastSignalsFound = metrics.lastSignalsFound;
+    this.localData.capState.lastAcceptedSignals = metrics.lastAcceptedSignals;
+    this.saveLocalData();
+
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      try {
+        await firestore.doc(FIRESTORE_CAP_DOC).set({
+          lastAutomatedScan: metrics.lastAutomatedScan,
+          lastScanTime: metrics.lastAutomatedScan,
+          lastScanCompletedAt: metrics.lastScanCompletedAt,
+          lastScanDuration: metrics.lastScanDuration,
+          lastCandidatesEvaluated: metrics.lastCandidatesEvaluated,
+          lastSignalsFound: metrics.lastSignalsFound,
+          lastAcceptedSignals: metrics.lastAcceptedSignals,
+        }, { merge: true });
+        logger.info(`[ScannerPersistence] Firestore lastAutomatedScan metrics successfully synchronized.`);
+      } catch (err) {
+        logger.warn('[ScannerPersistence] Failed to update lastAutomatedScan metrics in Firestore:', { error: String(err) });
+      }
+    } else if (this.isProductionMode()) {
+      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot update scan metrics without Firestore in production.');
+    }
+  }
+
+  /**
    * Updates last scan time in local disk persistence and Firestore.
    * Only called during actual market scan executions.
    */
@@ -1447,6 +1557,7 @@ export class ScannerPersistence {
     logger.info(`[ScannerPersistence] WRITING lastScanTime: ${timestamp} (${new Date(timestamp).toISOString()}) | Reason: ${reason}`);
     
     this.localData.capState.lastScanTime = timestamp;
+    this.localData.capState.lastAutomatedScan = timestamp;
     this.saveLocalData();
 
     const firestore = getFirestoreAdmin();
@@ -1454,7 +1565,7 @@ export class ScannerPersistence {
       try {
         await firestore
           .doc(FIRESTORE_CAP_DOC)
-          .set({ lastScanTime: timestamp }, { merge: true });
+          .set({ lastScanTime: timestamp, lastAutomatedScan: timestamp }, { merge: true });
         logger.info(`[ScannerPersistence] Firestore lastScanTime successfully synchronized: ${timestamp}`);
       } catch (err) {
         logger.warn('[ScannerPersistence] Failed to update lastScanTime in Firestore:', { error: String(err) });

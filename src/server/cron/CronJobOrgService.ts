@@ -44,17 +44,27 @@ export class CronJobOrgService {
   private static isFetching = false;
 
   /**
-   * Normalize cron-job.org timestamps which can be either seconds (10-digit) or ms (13-digit).
+   * Normalize cron-job.org timestamps which can be either seconds (10-digit), ms (13-digit),
+   * nested objects ({ timestamp, date, executedAt }), or date strings.
    */
   private static normalizeTimestamp(raw: unknown): number {
     if (typeof raw === 'number' && raw > 0) {
       return raw < 1e11 ? raw * 1000 : raw;
     }
+    if (typeof raw === 'object' && raw !== null) {
+      const obj = raw as Record<string, unknown>;
+      if (obj.timestamp !== undefined) return this.normalizeTimestamp(obj.timestamp);
+      if (obj.date !== undefined) return this.normalizeTimestamp(obj.date);
+      if (obj.executedAt !== undefined) return this.normalizeTimestamp(obj.executedAt);
+    }
     if (typeof raw === 'string') {
-      const parsed = Date.parse(raw);
-      if (!isNaN(parsed) && parsed > 0) return parsed;
-      const num = Number(raw);
+      const trimmed = raw.trim();
+      const num = Number(trimmed);
       if (!isNaN(num) && num > 0) return num < 1e11 ? num * 1000 : num;
+      
+      const isoCandidate = trimmed.includes(' ') && !trimmed.includes('T') ? trimmed.replace(' ', 'T') + 'Z' : trimmed;
+      const parsed = Date.parse(isoCandidate);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
     }
     return 0;
   }

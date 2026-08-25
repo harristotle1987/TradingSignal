@@ -1,76 +1,21 @@
 {
   "capState": {
-    "date": "2026-08-23",
+    "date": "2026-08-25",
     "dailySignalCount": 0,
     "dailySignalCap": 10,
-    "lastScanTime": 1787509343093,
+    "lastScanTime": 1787652907682,
+    "lastCronExecution": 1787652905961,
+    "lastAutomatedScan": 1787648409645,
+    "lastScanCompletedAt": 0,
+    "lastScanDuration": 0,
+    "lastCandidatesEvaluated": 0,
+    "lastSignalsFound": 0,
+    "lastAcceptedSignals": 0,
+    "lastCronTriggerTime": 1787652905961,
     "reservations": []
   },
   "sentSignals": [],
   "rejectedCandidates": [
-    {
-      "id": "rej_1787181130737_yhyp0",
-      "symbol": "STOCKS",
-      "reason": "All instruments in the STOCKS universe (AAPL, NVDA, MSFT, TSLA, AMZN, GOOGL, META, LLY, V, UNH, TSM, JPM, NVO, XOM, WMT, MA, AVGO, ASML, JNJ, HD, PG, ADBE, MRK, COST, CVX, AMD, CRM, NFLX, PEP, KO, TMO, BAC, ABT, DIS, NKE, INTC, CMG, ORCL, QCOM, CSCO, IBM, AMGN, SPGI, INTU, GE, AXP, NOW, TXN) are currently outside official exchange trading hours. Forex and Stock markets operate only during active market sessions. Crypto operates 24/7.",
-      "timestamp": 1787181130737,
-      "date": "2026-08-19"
-    },
-    {
-      "id": "rej_1787182987331_13gqo",
-      "symbol": "CRYPTO",
-      "reason": "Multi-asset scan completed across CRYPTO universe (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, DOGEUSDT, DOTUSDT, LTCUSDT, LINKUSDT, AVAXUSDT, POLUSDT, SHIBUSDT, TRXUSDT, UNIUSDT, ATOMUSDT, ETCUSDT, FILUSDT, APTUSDT, SUIUSDT, NEARUSDT, OPUSDT, ARBUSDT, LDOUSDT, HBARUSDT, ICPUSDT, GRTUSDT, SUSDT, INJUSDT, RENDERUSDT, STXUSDT, IMXUSDT, TIAUSDT, SEIUSDT, WIFUSDT, BONKUSDT, FLOKIUSDT, PEPEUSDT, JUPUSDT, PYTHUSDT, DYDXUSDT, AAVEUSDT, FETUSDT, RUNEUSDT, PIUSDT): No setups satisfied all strict confluence, volatility, risk-reward (>= 2:1), win-rate (> 30%), or live price validation hurdles. The system will never create placeholder signals.",
-      "timestamp": 1787182987331,
-      "date": "2026-08-19"
-    },
-    {
-      "id": "rej_1787182987331_8axna",
-      "symbol": "FOREX",
-      "reason": "Multi-asset screening completed across FOREX universe (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD, EURGBP, EURJPY, GBPJPY, AUDJPY, EURCAD, AUDCAD, EURAUD, GBPAUD, CHFJPY, CADJPY, GBPCAD, EURCHF, GBPCHF): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
-      "timestamp": 1787182987331,
-      "date": "2026-08-19"
-    },
-    {
-      "id": "rej_1787182987331_4osxk",
-      "symbol": "STOCKS",
-      "reason": "All instruments in the STOCKS universe (AAPL, NVDA, MSFT, TSLA, AMZN, GOOGL, META, LLY, V, UNH, TSM, JPM, NVO, XOM, WMT, MA, AVGO, ASML, JNJ, HD, PG, ADBE, MRK, COST, CVX, AMD, CRM, NFLX, PEP, KO, TMO, BAC, ABT, DIS, NKE, INTC, CMG, ORCL, QCOM, CSCO, IBM, AMGN, SPGI, INTU, GE, AXP, NOW, TXN) are currently outside official exchange trading hours. Forex and Stock markets operate only during active market sessions. Crypto operates 24/7.",
-      "timestamp": 1787182987331,
-      "date": "2026-08-19"
-    },
-    {
-      "id": "rej_1787219089089_zdcuj",
-      "symbol": "CRYPTO",
-      "reason": "Multi-asset scan completed across CRYPTO universe (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, DOGEUSDT, DOTUSDT, LTCUSDT, LINKUSDT, AVAXUSDT, POLUSDT, SHIBUSDT, TRXUSDT, UNIUSDT, ATOMUSDT, ETCUSDT, FILUSDT, APTUSDT, SUIUSDT, NEARUSDT, OPUSDT, ARBUSDT, LDOUSDT, HBARUSDT, ICPUSDT, GRTUSDT, SUSDT, INJUSDT, RENDERUSDT, STXUSDT, IMXUSDT, TIAUSDT, SEIUSDT, WIFUSDT, BONKUSDT, FLOKIUSDT, PEPEUSDT, JUPUSDT, PYTHUSDT, DYDXUSDT, AAVEUSDT, FETUSDT, RUNEUSDT, PIUSDT): No setups satisfied all strict confluence, volatility, risk-reward (>= 2:1), win-rate (> 30%), or live price validation hurdles. The system will never create placeholder signals.",
-      "timestamp": 1787219089089,
-      "date": "2026-08-20"
-    },
-    {
-      "id": "rej_1787219089089_kelck",
-      "symbol": "FOREX",
-      "reason": "Multi-asset screening completed across FOREX universe (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD, EURGBP, EURJPY, GBPJPY, AUDJPY, EURCAD, AUDCAD, EURAUD, GBPAUD, CHFJPY, CADJPY, GBPCAD, EURCHF, GBPCHF): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
-      "timestamp": 1787219089089,
-      "date": "2026-08-20"
-    },
-    {
-      "id": "rej_1787219089089_z0mrm",
-      "symbol": "STOCKS",
-      "reason": "All instruments in the STOCKS universe (AAPL, NVDA, MSFT, TSLA, AMZN, GOOGL, META, LLY, V, UNH, TSM, JPM, NVO, XOM, WMT, MA, AVGO, ASML, JNJ, HD, PG, ADBE, MRK, COST, CVX, AMD, CRM, NFLX, PEP, KO, TMO, BAC, ABT, DIS, NKE, INTC, CMG, ORCL, QCOM, CSCO, IBM, AMGN, SPGI, INTU, GE, AXP, NOW, TXN) are currently outside official exchange trading hours. Forex and Stock markets operate only during active market sessions. Crypto operates 24/7.",
-      "timestamp": 1787219089089,
-      "date": "2026-08-20"
-    },
-    {
-      "id": "rej_1787224048739_qwq8k",
-      "symbol": "CRYPTO",
-      "reason": "Multi-asset scan completed across CRYPTO universe (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, DOGEUSDT, DOTUSDT, LTCUSDT, LINKUSDT, AVAXUSDT, POLUSDT, SHIBUSDT, TRXUSDT, UNIUSDT, ATOMUSDT, ETCUSDT, FILUSDT, APTUSDT, SUIUSDT, NEARUSDT, OPUSDT, ARBUSDT, LDOUSDT, HBARUSDT, ICPUSDT, GRTUSDT, SUSDT, INJUSDT, RENDERUSDT, STXUSDT, IMXUSDT, TIAUSDT, SEIUSDT, WIFUSDT, BONKUSDT, FLOKIUSDT, PEPEUSDT, JUPUSDT, PYTHUSDT, DYDXUSDT, AAVEUSDT, FETUSDT, RUNEUSDT, PIUSDT): No setups satisfied all strict confluence, volatility, risk-reward (>= 2:1), win-rate (> 30%), or live price validation hurdles. The system will never create placeholder signals.",
-      "timestamp": 1787224048739,
-      "date": "2026-08-20"
-    },
-    {
-      "id": "rej_1787224048739_xh8iv",
-      "symbol": "FOREX",
-      "reason": "Multi-asset screening completed across FOREX universe (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD, EURGBP, EURJPY, GBPJPY, AUDJPY, EURCAD, AUDCAD, EURAUD, GBPAUD, CHFJPY, CADJPY, GBPCAD, EURCHF, GBPCHF): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
-      "timestamp": 1787224048739,
-      "date": "2026-08-20"
-    },
     {
       "id": "rej_1787224048739_vv27f",
       "symbol": "STOCKS",
@@ -707,14 +652,76 @@
       "reason": "All instruments in the STOCKS universe (AAPL, NVDA, MSFT, TSLA, AMZN, GOOGL, META, LLY, V, UNH, TSM, JPM, NVO, XOM, WMT, MA, AVGO, ASML, JNJ, HD, PG, ADBE, MRK, COST, CVX, AMD, CRM, NFLX, PEP, KO, TMO, BAC, ABT, DIS, NKE, INTC, CMG, ORCL, QCOM, CSCO, IBM, AMGN, SPGI, INTU, GE, AXP, NOW, TXN) are currently outside official exchange trading hours. Forex and Stock markets operate only during active market sessions. Crypto operates 24/7.",
       "timestamp": 1787509342926,
       "date": "2026-08-23"
+    },
+    {
+      "id": "rej_1787652705412_ymxh9",
+      "symbol": "CRYPTO",
+      "reason": "Multi-asset scan completed across CRYPTO universe (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, DOGEUSDT, DOTUSDT, LTCUSDT, LINKUSDT, AVAXUSDT, POLUSDT, SHIBUSDT, TRXUSDT, UNIUSDT, ATOMUSDT, ETCUSDT, FILUSDT, APTUSDT, SUIUSDT, NEARUSDT, OPUSDT, ARBUSDT, LDOUSDT, HBARUSDT, ICPUSDT, GRTUSDT, SUSDT, INJUSDT, RENDERUSDT, STXUSDT, IMXUSDT, TIAUSDT, SEIUSDT, WIFUSDT, BONKUSDT, FLOKIUSDT, PEPEUSDT, JUPUSDT, PYTHUSDT, DYDXUSDT, AAVEUSDT, FETUSDT, RUNEUSDT, PIUSDT): No setups satisfied all strict confluence, volatility, risk-reward (>= 2:1), win-rate (> 30%), or live price validation hurdles. The system will never create placeholder signals.",
+      "timestamp": 1787652705412,
+      "date": "2026-08-25"
+    },
+    {
+      "id": "rej_1787652705412_7bz67",
+      "symbol": "FOREX",
+      "reason": "Multi-asset screening completed across FOREX universe (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD, EURGBP, EURJPY, GBPJPY, AUDJPY, EURCAD, AUDCAD, EURAUD, GBPAUD, CHFJPY, CADJPY, GBPCAD, EURCHF, GBPCHF): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
+      "timestamp": 1787652705412,
+      "date": "2026-08-25"
+    },
+    {
+      "id": "rej_1787652705412_vs8as",
+      "symbol": "STOCKS",
+      "reason": "All instruments in the STOCKS universe (AAPL, NVDA, MSFT, TSLA, AMZN, GOOGL, META, LLY, V, UNH, TSM, JPM, NVO, XOM, WMT, MA, AVGO, ASML, JNJ, HD, PG, ADBE, MRK, COST, CVX, AMD, CRM, NFLX, PEP, KO, TMO, BAC, ABT, DIS, NKE, INTC, CMG, ORCL, QCOM, CSCO, IBM, AMGN, SPGI, INTU, GE, AXP, NOW, TXN) are currently outside official exchange trading hours. Forex and Stock markets operate only during active market sessions. Crypto operates 24/7.",
+      "timestamp": 1787652705412,
+      "date": "2026-08-25"
+    },
+    {
+      "id": "rej_1787652803610_5t4d2",
+      "symbol": "CRYPTO",
+      "reason": "Multi-asset scan completed across CRYPTO universe (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, DOGEUSDT, DOTUSDT, LTCUSDT, LINKUSDT, AVAXUSDT, POLUSDT, SHIBUSDT, TRXUSDT, UNIUSDT, ATOMUSDT, ETCUSDT, FILUSDT, APTUSDT, SUIUSDT, NEARUSDT, OPUSDT, ARBUSDT, LDOUSDT, HBARUSDT, ICPUSDT, GRTUSDT, SUSDT, INJUSDT, RENDERUSDT, STXUSDT, IMXUSDT, TIAUSDT, SEIUSDT, WIFUSDT, BONKUSDT, FLOKIUSDT, PEPEUSDT, JUPUSDT, PYTHUSDT, DYDXUSDT, AAVEUSDT, FETUSDT, RUNEUSDT, PIUSDT): No setups satisfied all strict confluence, volatility, risk-reward (>= 2:1), win-rate (> 30%), or live price validation hurdles. The system will never create placeholder signals.",
+      "timestamp": 1787652803610,
+      "date": "2026-08-25"
+    },
+    {
+      "id": "rej_1787652803610_o5jv4",
+      "symbol": "FOREX",
+      "reason": "Multi-asset screening completed across FOREX universe (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD, EURGBP, EURJPY, GBPJPY, AUDJPY, EURCAD, AUDCAD, EURAUD, GBPAUD, CHFJPY, CADJPY, GBPCAD, EURCHF, GBPCHF): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
+      "timestamp": 1787652803610,
+      "date": "2026-08-25"
+    },
+    {
+      "id": "rej_1787652803610_f4t3q",
+      "symbol": "STOCKS",
+      "reason": "All instruments in the STOCKS universe (AAPL, NVDA, MSFT, TSLA, AMZN, GOOGL, META, LLY, V, UNH, TSM, JPM, NVO, XOM, WMT, MA, AVGO, ASML, JNJ, HD, PG, ADBE, MRK, COST, CVX, AMD, CRM, NFLX, PEP, KO, TMO, BAC, ABT, DIS, NKE, INTC, CMG, ORCL, QCOM, CSCO, IBM, AMGN, SPGI, INTU, GE, AXP, NOW, TXN) are currently outside official exchange trading hours. Forex and Stock markets operate only during active market sessions. Crypto operates 24/7.",
+      "timestamp": 1787652803610,
+      "date": "2026-08-25"
+    },
+    {
+      "id": "rej_1787652878829_gi0fe",
+      "symbol": "CRYPTO",
+      "reason": "Multi-asset scan completed across CRYPTO universe (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, DOGEUSDT, DOTUSDT, LTCUSDT, LINKUSDT, AVAXUSDT, POLUSDT, SHIBUSDT, TRXUSDT, UNIUSDT, ATOMUSDT, ETCUSDT, FILUSDT, APTUSDT, SUIUSDT, NEARUSDT, OPUSDT, ARBUSDT, LDOUSDT, HBARUSDT, ICPUSDT, GRTUSDT, SUSDT, INJUSDT, RENDERUSDT, STXUSDT, IMXUSDT, TIAUSDT, SEIUSDT, WIFUSDT, BONKUSDT, FLOKIUSDT, PEPEUSDT, JUPUSDT, PYTHUSDT, DYDXUSDT, AAVEUSDT, FETUSDT, RUNEUSDT, PIUSDT): No setups satisfied all strict confluence, volatility, risk-reward (>= 2:1), win-rate (> 30%), or live price validation hurdles. The system will never create placeholder signals.",
+      "timestamp": 1787652878829,
+      "date": "2026-08-25"
+    },
+    {
+      "id": "rej_1787652878829_ksdow",
+      "symbol": "FOREX",
+      "reason": "Multi-asset screening completed across FOREX universe (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, NZDUSD, EURGBP, EURJPY, GBPJPY, AUDJPY, EURCAD, AUDCAD, EURAUD, GBPAUD, CHFJPY, CADJPY, GBPCAD, EURCHF, GBPCHF): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.",
+      "timestamp": 1787652878829,
+      "date": "2026-08-25"
+    },
+    {
+      "id": "rej_1787652878829_8rv7v",
+      "symbol": "STOCKS",
+      "reason": "All instruments in the STOCKS universe (AAPL, NVDA, MSFT, TSLA, AMZN, GOOGL, META, LLY, V, UNH, TSM, JPM, NVO, XOM, WMT, MA, AVGO, ASML, JNJ, HD, PG, ADBE, MRK, COST, CVX, AMD, CRM, NFLX, PEP, KO, TMO, BAC, ABT, DIS, NKE, INTC, CMG, ORCL, QCOM, CSCO, IBM, AMGN, SPGI, INTU, GE, AXP, NOW, TXN) are currently outside official exchange trading hours. Forex and Stock markets operate only during active market sessions. Crypto operates 24/7.",
+      "timestamp": 1787652878829,
+      "date": "2026-08-25"
     }
   ],
   "notifications": [],
   "settings": {
     "enabled": true,
-    "notificationsEnabled": true
-  },
-  "deletedSignals": [
-    "sig_test123||"
-  ]
+    "notificationsEnabled": true,
+    "notifyOnNoTrade": false,
+    "intervalMinutes": 30
+  }
 }

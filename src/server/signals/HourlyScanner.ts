@@ -50,6 +50,7 @@ import {
   PersistedNotification,
 } from './ScannerPersistence.js';
 import { PushNotificationService } from '../notifications/PushNotificationService.js';
+import { CronJobOrgService } from '../cron/CronJobOrgService.js';
 import { logger } from '../logger.js';
 import { serverConfig } from '../config.js';
 import { TradingSignal, SignalDirection, isActionableSignal } from '../../types/index.js';
@@ -77,6 +78,7 @@ export interface ManualScanResult {
   rejectedCount: number;
   rejectionReasons: string[];
   capState: DailyCapState;
+  scanDurationMs?: number;
 }
 
 export class HourlyScannerService {
@@ -111,89 +113,16 @@ export class HourlyScannerService {
   }
 
   /**
-   * Enforces user's configured Automated Signal Interval (15m, 30m, 45m, 60m) before running an automated scan.
-   * Called by POST /api/scanner/trigger (Vercel external cron).
-   *
-   * Behavior:
-   * 1. Fetches current settings & persisted capState (including lastScanTime from Firestore/disk).
-   * 2. Checks if automated scanning is enabled in settings.
-   * 3. Calculates time elapsed since lastScanTime.
-   * 4. If time elapsed < configured interval, returns successful SKIPPED_NOT_DUE response without running scan or clearing cache.
-   * 5. If interval has elapsed, clears marketCache and executes scan cycle.
+   * Directly invokes Market Scan Engine when triggered by external cron-job.org.
+   * A cron execution means: "SCAN THE MARKET NOW."
+   * It does NOT check whether an internal timer or setting says it is due.
    */
   async triggerAutomatedScan(isExternal = true): Promise<ManualScanResult> {
-    const settings = ScannerPersistence.getSettings();
-    const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
     const now = Date.now();
-
-    if (!settings.enabled) {
-      logger.info('[Hourly Scanner] External trigger received but automated scanner is disabled in settings. Skipping scan.');
-      return {
-        success: true,
-        status: 'SKIPPED_NOT_DUE',
-        message: 'Automated scanner is currently disabled in settings.',
-        timestamp: now,
-        lastScanTime: capState.lastScanTime,
-        candidatesEvaluated: 0,
-        acceptedSignalsCount: 0,
-        acceptedSignals: [],
-        signalsFound: 0,
-        qualifiedSetups: [],
-        rejectedCount: 0,
-        rejectionReasons: ['REJECTED: SCANNER_DISABLED. Automated scanner is disabled in settings.'],
-        capState,
-      };
-    }
-
-    const validIntervals = [15, 30, 45, 60];
-    const intervalMinutes = validIntervals.includes(Number(settings.intervalMinutes))
-      ? Number(settings.intervalMinutes)
-      : 30;
-    const intervalMs = intervalMinutes * 60 * 1000;
-    const timeElapsed = now - capState.lastScanTime;
-    const nextDueTime = capState.lastScanTime > 0 ? capState.lastScanTime + intervalMs : now;
-    const millisecondsUntilDue = Math.max(0, nextDueTime - now);
     const configuredTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    logger.info(`[Hourly Scanner] CRON_TRIGGER_EXECUTING | Date.now(): ${now} | ISO UTC: ${new Date(now).toISOString()} | Runtime TZ: ${configuredTz}`);
 
-    logger.info(`[Timezone Diagnostic] Evaluation:`, {
-      dateNow: now,
-      isoUtc: new Date(now).toISOString(),
-      configuredTimezone: configuredTz,
-      lastScanTime: capState.lastScanTime,
-      lastScanTimeIsoUtc: capState.lastScanTime > 0 ? new Date(capState.lastScanTime).toISOString() : 'NEVER',
-      nextScanTime: nextDueTime,
-      nextScanTimeIsoUtc: nextDueTime > 0 ? new Date(nextDueTime).toISOString() : 'NOW',
-      millisecondsUntilDue,
-      intervalMinutes,
-      intervalMs,
-      timeElapsed,
-      isDue: capState.lastScanTime === 0 || timeElapsed >= intervalMs
-    });
-
-    // Enforce configured interval: minimum time that must elapse between automated evaluations
-    if (capState.lastScanTime > 0 && timeElapsed < intervalMs) {
-      const minutesRemaining = Math.ceil(millisecondsUntilDue / (60 * 1000));
-
-      logger.info(`[Hourly Scanner] External trigger skipped: minimum interval (${intervalMinutes}m) not due. Time elapsed: ${Math.floor(timeElapsed / (60 * 1000))}m. Next scan due in ${minutesRemaining}m.`);
-
-      return {
-        success: true,
-        status: 'SKIPPED_NOT_DUE',
-        message: `Automated scan skipped: configured interval of ${intervalMinutes} minutes has not elapsed since last evaluation. Next scan due in ${minutesRemaining} minute(s).`,
-        timestamp: now,
-        lastScanTime: capState.lastScanTime,
-        candidatesEvaluated: 0,
-        acceptedSignalsCount: 0,
-        acceptedSignals: [],
-        signalsFound: 0,
-        qualifiedSetups: [],
-        rejectedCount: 0,
-        rejectionReasons: [`REJECTED: INTERVAL_NOT_DUE. Interval not due. Configured: ${intervalMinutes}m. Time elapsed: ${Math.floor(timeElapsed / 60000)}m.`],
-        capState,
-      };
-    }
-
-    // Interval IS due: selectively clear expired cache entries and ticker quotes before scan cycle
+    // Selectively clear expired cache entries and ticker quotes before scan cycle
     const { marketCache } = await import('../market/CacheStore.js');
     marketCache.clearExpired();
     marketCache.clearTickers();
@@ -204,6 +133,9 @@ export class HourlyScannerService {
    * Main Intelligent Multi-Asset Scan & Signal Selection Pipeline.
    */
   private async executeIntelligentScan(isExternal = false): Promise<ManualScanResult> {
+    const scanStartTime = Date.now();
+    logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime}`);
+
     if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
       logger.error('[Hourly Scanner] AUTOMATED SCANNER DISPATCH DISABLED: Production persistence is unavailable (FIREBASE_SERVICE_ACCOUNT required).');
       const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
@@ -248,9 +180,6 @@ export class HourlyScannerService {
     }
 
     this.isScanning = true;
-    const scanStartTime = Date.now();
-    // Persist scanStartTime immediately upon acquiring lock to prevent race conditions
-    await ScannerPersistence.updateLastScanTime(scanStartTime, 'ACTUAL_MARKET_SCAN_EXECUTION_START');
 
     logger.info('================================================================');
     logger.info('[Hourly Intelligent Scanner] Initiating Multi-Asset Scan Cycle...');
@@ -258,6 +187,7 @@ export class HourlyScannerService {
 
     try {
       // 0. Evaluate active signals lifecycle (TP/SL/Expiration hits) and Adaptive Opportunity Funnel
+      const lifecycleStart = Date.now();
       const lifecycleEval = await SignalLifecycleManager.evaluateActiveSignals();
       if (lifecycleEval.evaluatedCount > 0) {
         logger.info(`[Hourly Scanner] Lifecycle evaluation complete: ${lifecycleEval.evaluatedCount} active signals evaluated. TP Hits: ${lifecycleEval.tpHitCount}, SL Hits: ${lifecycleEval.slHitCount}, Expired: ${lifecycleEval.expiredCount}.`);
@@ -268,22 +198,22 @@ export class HourlyScannerService {
       if (funnelReport.totalActive > 0) {
         logger.info(`[Hourly Scanner] Opportunity Funnel evaluation: ${funnelReport.totalActive} active tracked candidates (${funnelReport.watchingCount} watching, ${funnelReport.qualifiedCount} qualified, ${funnelReport.promotedCount} promoted).`);
       }
+      const lifecycleDurationMs = Date.now() - lifecycleStart;
+      logger.info(`[Scanner Telemetry] LIFECYCLE_EVALUATION | duration: ${lifecycleDurationMs}ms`);
 
       // 1. Check current Daily Cap state
       const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
       const currentDailyCount = capState.dailySignalCount;
       const dailyCap = capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap;
-      const settings = ScannerPersistence.getSettings();
 
       if (currentDailyCount >= dailyCap) {
         logger.info(`[Hourly Scanner] Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Scanning skipped to preserve portfolio limits.`);
-        await ScannerPersistence.updateLastScanTime(scanStartTime, 'SCAN_ATTEMPT_DAILY_CAP_REACHED');
         return {
           success: true,
           status: 'SKIPPED_CAP_REACHED',
           message: `REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving risk limits.`,
           timestamp: Date.now(),
-          lastScanTime: scanStartTime,
+          lastScanTime: capState.lastAutomatedScan || capState.lastScanTime || 0,
           candidatesEvaluated: 0,
           acceptedSignalsCount: 0,
           acceptedSignals: [],
@@ -298,33 +228,44 @@ export class HourlyScannerService {
       const remainingAllowance = dailyCap - currentDailyCount;
       logger.info(`[Hourly Scanner] Daily Cap status: ${currentDailyCount}/${dailyCap} used. Remaining allowance: ${remainingAllowance}`);
 
-      // 2. Scan all three universes: CRYPTO, FOREX, STOCKS
+      // 2. Scan all three universes in parallel: CRYPTO, FOREX, STOCKS
+      const marketDataFetchStart = Date.now();
       const categories: Array<'CRYPTO' | 'FOREX' | 'STOCKS'> = ['CRYPTO', 'FOREX', 'STOCKS'];
       const rawCandidates: TradingSignal[] = [];
       const rejectedDuringScan: Array<{ symbol: string; direction?: string; score?: number; reason: string }> = [];
 
-      for (const category of categories) {
-        try {
-          logger.info(`[Hourly Scanner] Scanning universe: [${category}]...`);
-          const result = await signalEngine.generateSignal(category, category, false);
-
-          if (result.success && Array.isArray(result.signals)) {
-            rawCandidates.push(...result.signals);
-          } else if (result.reason) {
-            rejectedDuringScan.push({
-              symbol: category,
-              reason: result.reason,
-            });
+      const categoryScanResults = await Promise.all(
+        categories.map(async (category) => {
+          try {
+            logger.info(`[Hourly Scanner] Scanning universe: [${category}]...`);
+            const result = await signalEngine.generateSignal(category, category, false);
+            return { category, result };
+          } catch (catErr) {
+            logger.error(`[Hourly Scanner] Scan error for ${category}:`, { error: String(catErr) });
+            return { category, result: { success: false, reason: String(catErr) } as any };
           }
-        } catch (catErr) {
-          logger.error(`[Hourly Scanner] Scan error for ${category}:`, { error: String(catErr) });
-        }
+        })
+      );
 
-        // Pacing delay between categories to protect external API quotas
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+      for (const { category, result } of categoryScanResults) {
+        if (result.success && Array.isArray(result.signals)) {
+          rawCandidates.push(...result.signals);
+        } else if (result.reason) {
+          rejectedDuringScan.push({
+            symbol: category,
+            reason: result.reason,
+          });
+        }
       }
 
+      const marketDataFetchDurationMs = Date.now() - marketDataFetchStart;
+      logger.info(`[Scanner Telemetry] MARKET_DATA_FETCHING | duration: ${marketDataFetchDurationMs}ms | rawCandidatesFound: ${rawCandidates.length}`);
+      logger.info(`[Scanner Telemetry] CANDIDATE_DISCOVERY | rawCandidatesCount: ${rawCandidates.length} | duration: ${marketDataFetchDurationMs}ms`);
+
       logger.info(`[Hourly Scanner] Raw candidate setups gathered: ${rawCandidates.length}. Applying mandatory qualification filters...`);
+
+      // Evaluation start
+      const evaluationStart = Date.now();
 
       // GATE 36: Separate candidate count tracking (candidates do NOT consume signal slots)
       Gate36ConfigurableSignalFrequency.recordCandidateCount(rawCandidates.length);
@@ -833,7 +774,11 @@ export class HourlyScannerService {
         selectedSetups.push(sig);
       }
 
+      const evaluationDurationMs = Date.now() - evaluationStart;
+      logger.info(`[Scanner Telemetry] SIGNAL_EVALUATION | duration: ${evaluationDurationMs}ms | selectedSetupsCount: ${selectedSetups.length} | rejectedCount: ${rejectedDuringScan.length}`);
+
       // 7. Dispatch & Persistence
+      const persistenceStart = Date.now();
       let dispatchedCount = 0;
       for (const sig of selectedSetups) {
         const score = sig.score ?? sig.confidenceScore ?? 0;
@@ -972,6 +917,7 @@ export class HourlyScannerService {
       // 8. If NO setups qualified
       if (dispatchedCount === 0) {
         logger.info(`[Hourly Scanner] No setups met the strict ${thresholds.signalThreshold}+ quality and diversification criteria. Dispatched 0 signals (0-${dailyCap} is completely valid).`);
+        const settings = ScannerPersistence.getSettings();
         if (settings.notifyOnNoTrade && !isExternal) {
           await ScannerPersistence.recordNotification({
             type: 'NO_TRADE',
@@ -1014,8 +960,23 @@ export class HourlyScannerService {
         }
       }
 
-      // 10. Update last scan timestamp
-      await ScannerPersistence.updateLastScanTime(scanStartTime, 'ACTUAL_MARKET_SCAN_COMPLETED');
+      const scanDurationMs = Date.now() - scanStartTime;
+
+      // 10. Update authoritative lastAutomatedScan metrics ONLY if triggered externally from /api/scanner/trigger
+      if (isExternal) {
+        await ScannerPersistence.recordAutomatedScanMetrics({
+          lastAutomatedScan: scanStartTime,
+          lastScanCompletedAt: Date.now(),
+          lastScanDuration: scanDurationMs,
+          lastCandidatesEvaluated: rawCandidates.length,
+          lastSignalsFound: dispatchedCount,
+          lastAcceptedSignals: dispatchedCount,
+        });
+      }
+
+      const persistenceDurationMs = Date.now() - persistenceStart;
+      logger.info(`[Scanner Telemetry] PERSISTENCE | duration: ${persistenceDurationMs}ms`);
+      logger.info(`[Scanner Telemetry] TOTAL_SCAN_ENGINE_DURATION | duration: ${scanDurationMs}ms | status: COMPLETED`);
 
       const finalCapState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
       logger.info(`================================================================`);
@@ -1034,7 +995,7 @@ export class HourlyScannerService {
             ? `Scan complete: Dispatched ${dispatchedCount} qualified automated setup(s). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`
             : `Scan complete: 0 setups met strict ${finalCapState.dailySignalCap > 0 ? `${thresholds.signalThreshold}+` : ''} criteria (0-${finalCapState.dailySignalCap} is valid; no trades forced). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`,
         timestamp: Date.now(),
-        lastScanTime: finalCapState.lastScanTime,
+        lastScanTime: finalCapState.lastAutomatedScan || finalCapState.lastScanTime || scanStartTime,
         candidatesEvaluated: rawCandidates.length,
         acceptedSignalsCount: dispatchedCount,
         acceptedSignals: selectedSetups,
@@ -1043,13 +1004,23 @@ export class HourlyScannerService {
         rejectedCount: rejectedDuringScan.length,
         rejectionReasons: rejectionReasonStrings,
         capState: finalCapState,
+        scanDurationMs,
       };
     } catch (err) {
       logger.error('[Hourly Scanner] Critical failure during scan execution:', { error: String(err) });
-      try {
-        await ScannerPersistence.updateLastScanTime(scanStartTime, 'ACTUAL_MARKET_SCAN_ERROR_RECOVERY');
-      } catch (tsErr) {
-        logger.error('[Hourly Scanner] Failed to update lastScanTime after error:', { error: String(tsErr) });
+      if (isExternal) {
+        try {
+          await ScannerPersistence.recordAutomatedScanMetrics({
+            lastAutomatedScan: scanStartTime,
+            lastScanCompletedAt: Date.now(),
+            lastScanDuration: Date.now() - scanStartTime,
+            lastCandidatesEvaluated: 0,
+            lastSignalsFound: 0,
+            lastAcceptedSignals: 0,
+          });
+        } catch (tsErr) {
+          logger.error('[Hourly Scanner] Failed to record automated scan metrics after error:', { error: String(tsErr) });
+        }
       }
       const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -1058,7 +1029,7 @@ export class HourlyScannerService {
         status: 'ERROR',
         message: `REJECTED: SCAN_ERROR. Scan execution error: ${errMsg}`,
         timestamp: Date.now(),
-        lastScanTime: capState.lastScanTime,
+        lastScanTime: capState.lastAutomatedScan || capState.lastScanTime || 0,
         candidatesEvaluated: 0,
         acceptedSignalsCount: 0,
         acceptedSignals: [],
@@ -1087,6 +1058,15 @@ export class HourlyScannerService {
       nextScanTime: number;
       scannerStatus: 'ACTIVE' | 'RUNNING' | 'DISABLED' | 'CAP_REACHED';
       isScanning: boolean;
+      lastCronExecution: number;
+      lastAutomatedScan: number;
+      lastScanCompletedAt: number;
+      lastScanDuration: number;
+      lastCandidatesEvaluated: number;
+      lastSignalsFound: number;
+      lastAcceptedSignals: number;
+      nextCronExecution: number;
+      capState: DailyCapState;
     }
   > {
     const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
@@ -1102,9 +1082,13 @@ export class HourlyScannerService {
       ? Number(settings.intervalMinutes)
       : 30;
 
-    const lastScanTime = capState.lastScanTime || 0;
-    const intervalMs = intervalMinutes * 60 * 1000;
-    const nextScanTime = lastScanTime > 0 ? lastScanTime + intervalMs : Date.now();
+    const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || 0;
+    
+    // Authoritative cron-job.org job status
+    const cronStatus = await CronJobOrgService.getJobStatus();
+    const lastCronExecution = cronStatus.lastExecution?.timestamp || capState.lastCronExecution || 0;
+    const nextCronExecution = cronStatus.nextExecution?.timestamp || 0;
+    const nextScanTime = nextCronExecution;
 
     let scannerStatus: 'ACTIVE' | 'RUNNING' | 'DISABLED' | 'CAP_REACHED' = 'ACTIVE';
     if (!settings.enabled) {
@@ -1121,7 +1105,15 @@ export class HourlyScannerService {
       notifyOnNoTrade: settings.notifyOnNoTrade,
       intervalMinutes,
       signalsSentTimestamps: timestamps,
-      lastScanTime,
+      lastScanTime: lastAutomatedScan,
+      lastCronExecution,
+      lastAutomatedScan,
+      lastScanCompletedAt: capState.lastScanCompletedAt || 0,
+      lastScanDuration: capState.lastScanDuration || 0,
+      lastCandidatesEvaluated: capState.lastCandidatesEvaluated || 0,
+      lastSignalsFound: capState.lastSignalsFound || 0,
+      lastAcceptedSignals: capState.lastAcceptedSignals || 0,
+      nextCronExecution,
       nextScanTime,
       scannerStatus,
       isScanning: this.isScanning,
@@ -1130,6 +1122,7 @@ export class HourlyScannerService {
       sentSignalsToday,
       recentNotifications,
       recentRejected,
+      capState,
     };
   }
 
