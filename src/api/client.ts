@@ -180,21 +180,6 @@ class ApiClient {
   }
 
   /**
-   * Fetch 24-hour multi-asset cron scan history and telemetry
-   */
-  async getCron24hHistory(): Promise<{
-    success: boolean;
-    records: any[];
-    totalScansCompleted: number;
-    totals: any;
-    latestScan: any;
-    hasTelemetry: boolean;
-    timestamp: number;
-  }> {
-    return this.fetchJson<any>('/api/scanner/cron-history-24h');
-  }
-
-  /**
    * Update automated hourly scanner settings
    */
   async updateScannerSettings(

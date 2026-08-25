@@ -190,8 +190,7 @@ export class CronJobOrgService {
         logger.warn('[CronJobOrgService] History fetch skipped or failed:', { error: String(histErr) });
       }
 
-      const lastExecObj = typeof details?.lastExecution === 'object' && details?.lastExecution !== null ? details.lastExecution : null;
-      const rawLastExec = lastExecObj?.timestamp ?? details?.lastExecution ?? details?.lastRun ?? (historyItems.length > 0 ? historyItems[0].timestamp : null);
+      const rawLastExec = details?.lastExecution ?? details?.lastRun ?? (historyItems.length > 0 ? historyItems[0].timestamp : null);
       const lastExecTs = this.normalizeTimestamp(rawLastExec);
       
       const rawNextExec = details?.nextExecution ?? details?.nextRun;
@@ -231,9 +230,9 @@ export class CronJobOrgService {
         lastExecution: lastExecTs > 0 ? {
           timestamp: lastExecTs,
           dateIso: new Date(lastExecTs).toISOString(),
-          status: lastExecObj?.status ?? details?.lastStatus ?? (historyItems[0]?.status),
-          durationMs: lastExecObj?.duration ?? lastExecObj?.durationMs ?? details?.lastDuration ?? (historyItems[0]?.durationMs),
-          httpStatus: lastExecObj?.httpStatus ?? details?.lastHttpStatus ?? (historyItems[0]?.httpStatus),
+          status: details?.lastStatus ?? (historyItems[0]?.status),
+          durationMs: details?.lastDuration ?? (historyItems[0]?.durationMs),
+          httpStatus: details?.lastHttpStatus ?? (historyItems[0]?.httpStatus),
         } : null,
         nextExecution: nextExecTs > 0 ? {
           timestamp: nextExecTs,

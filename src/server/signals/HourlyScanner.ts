@@ -48,8 +48,6 @@ import {
   PersistedSentSignal,
   PersistedRejectedCandidate,
   PersistedNotification,
-  AssetClassScanTelemetry,
-  CronScanRecord,
 } from './ScannerPersistence.js';
 import { PushNotificationService } from '../notifications/PushNotificationService.js';
 import { CronJobOrgService } from '../cron/CronJobOrgService.js';
@@ -89,8 +87,6 @@ export interface ManualScanResult {
   diagnostics?: string[];
   capState: DailyCapState;
   scanDurationMs?: number;
-  categoryTelemetry?: Record<'CRYPTO' | 'FOREX' | 'STOCKS', AssetClassScanTelemetry>;
-  cronRecord?: CronScanRecord;
 }
 
 export class HourlyScannerService {
@@ -247,21 +243,6 @@ export class HourlyScannerService {
       const universeDiagnostics: Array<{ symbol: string; reason: string }> = [];
       const rejectedDuringScan: Array<{ symbol: string; direction?: string; score?: number; reason: string }> = [];
 
-      const resolveAssetClassKey = (symbol: string, defaultCat?: string): 'CRYPTO' | 'FOREX' | 'STOCKS' => {
-        const cls = SymbolNormalizer.getAssetClassification(symbol);
-        if (cls === 'CRYPTO') return 'CRYPTO';
-        if (cls === 'FOREX') return 'FOREX';
-        if (cls === 'STOCK' || (cls as string) === 'STOCKS' || cls === 'INDEX') return 'STOCKS';
-        if (defaultCat === 'CRYPTO' || defaultCat === 'FOREX' || defaultCat === 'STOCKS') return defaultCat as any;
-        return 'STOCKS';
-      };
-
-      const categoryTelemetry: Record<'CRYPTO' | 'FOREX' | 'STOCKS', AssetClassScanTelemetry> = {
-        CRYPTO: { assetsScanned: 45, candidatesEvaluated: 0, signalsFound: 0, signalsAccepted: 0, rejected: 0, rejectionReasons: [] },
-        FOREX: { assetsScanned: 20, candidatesEvaluated: 0, signalsFound: 0, signalsAccepted: 0, rejected: 0, rejectionReasons: [] },
-        STOCKS: { assetsScanned: 48, candidatesEvaluated: 0, signalsFound: 0, signalsAccepted: 0, rejected: 0, rejectionReasons: [] },
-      };
-
       const categoryScanResults = await Promise.all(
         categories.map(async (category) => {
           try {
@@ -283,7 +264,6 @@ export class HourlyScannerService {
       let totalSignalsGenerated = 0;
 
       for (const { category, result } of categoryScanResults) {
-        const catKey = category as 'CRYPTO' | 'FOREX' | 'STOCKS';
         const catUniverseSize = category === 'CRYPTO' ? 45 : category === 'FOREX' ? 20 : 48;
         const tel = result?.telemetry;
 
@@ -293,11 +273,6 @@ export class HourlyScannerService {
         const candidatesEvaluated = tel?.candidatesEvaluated ?? preliminaryCandidatesFound;
         const candidatesRejectedFinal = tel?.candidatesRejectedFinal ?? (candidatesEvaluated - (result.success && Array.isArray(result.signals) ? result.signals.length : 0));
         const signalsGenerated = tel?.signalsGenerated ?? (result.success && Array.isArray(result.signals) ? result.signals.length : 0);
-
-        categoryTelemetry[catKey].assetsScanned = universeSymbolsScanned;
-        categoryTelemetry[catKey].candidatesEvaluated = candidatesEvaluated;
-        categoryTelemetry[catKey].signalsFound = signalsGenerated;
-        categoryTelemetry[catKey].rejected += candidatesRejectedPreliminary;
 
         totalUniverseSymbolsScanned += universeSymbolsScanned;
         totalPreliminaryCandidatesFound += preliminaryCandidatesFound;
@@ -309,10 +284,6 @@ export class HourlyScannerService {
         if (result.success && Array.isArray(result.signals)) {
           rawCandidates.push(...result.signals);
         } else if (result.reason) {
-          categoryTelemetry[catKey].rejectionReasons.push({
-            symbol: category,
-            reason: result.reason,
-          });
           universeDiagnostics.push({
             symbol: category,
             reason: result.reason,
@@ -1022,49 +993,11 @@ export class HourlyScannerService {
         }
       }
 
-      // Populate asset-class rejection and accepted signals telemetry
-      for (const rej of rejectedDuringScan) {
-        const ac = resolveAssetClassKey(rej.symbol);
-        categoryTelemetry[ac].rejected++;
-        categoryTelemetry[ac].rejectionReasons.push({
-          symbol: rej.symbol,
-          direction: rej.direction,
-          reason: rej.reason,
-          score: rej.score,
-        });
-      }
-
-      for (const sig of selectedSetups) {
-        const ac = resolveAssetClassKey(sig.symbol);
-        categoryTelemetry[ac].signalsAccepted++;
-      }
-
       const scanDurationMs = Date.now() - scanStartTime;
       const totalCandidatesRejectedFinalCombined = totalCandidatesRejectedFinal + rejectedDuringScan.length;
 
-      let cronRecord: CronScanRecord | undefined = undefined;
-
       // 10. Update authoritative lastAutomatedScan metrics ONLY if triggered externally from /api/scanner/trigger
       if (isExternal) {
-        cronRecord = {
-          id: `cron_${scanStartTime}_${Math.random().toString(36).slice(2, 7)}`,
-          timestamp: scanStartTime,
-          formattedTime: new Date(scanStartTime).toISOString(),
-          isExternal: true,
-          scanDurationMs,
-          totalUniverseSymbolsScanned,
-          totalCandidatesEvaluated,
-          totalSignalsFound: totalSignalsGenerated,
-          totalSignalsAccepted: dispatchedCount,
-          totalRejected: totalCandidatesRejectedPreliminary + rejectedDuringScan.length,
-          status: 'COMPLETED',
-          crypto: categoryTelemetry.CRYPTO,
-          forex: categoryTelemetry.FOREX,
-          stocks: categoryTelemetry.STOCKS,
-        };
-
-        await ScannerPersistence.recordCronScan(cronRecord);
-
         await ScannerPersistence.recordAutomatedScanMetrics({
           lastAutomatedScan: scanStartTime,
           lastScanCompletedAt: Date.now(),
@@ -1124,8 +1057,6 @@ export class HourlyScannerService {
         diagnostics: diagnosticStrings,
         capState: finalCapState,
         scanDurationMs,
-        categoryTelemetry,
-        cronRecord,
       };
     } catch (err) {
       logger.error('[Hourly Scanner] Critical failure during scan execution:', { error: String(err) });

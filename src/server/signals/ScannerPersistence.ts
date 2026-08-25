@@ -35,7 +35,6 @@ export interface DailyCapState {
   lastAutomatedScan?: number;
   lastScanCompletedAt?: number;
   lastScanDuration?: number;
-  scanDurationMs?: number;
   lastCandidatesEvaluated?: number;
   lastSignalsFound?: number;
   lastAcceptedSignals?: number;
@@ -49,10 +48,6 @@ export interface DailyCapState {
   candidatesRejectedFinal?: number;
   signalsGenerated?: number;
   signalsAccepted?: number;
-  rejectedCount?: number;
-  diagnostics?: any[];
-
-  latestCronScan?: CronScanRecord;
 
   // Backward compatibility fields
   lastScanTime: number;
@@ -150,56 +145,12 @@ export interface PersistedNotification {
   date: string;
 }
 
-export interface RejectionReasonDetail {
-  symbol: string;
-  direction?: string;
-  reason: string;
-  score?: number;
-}
-
-export interface AssetClassScanTelemetry {
-  assetsScanned: number;
-  candidatesEvaluated: number;
-  signalsFound: number;
-  signalsAccepted: number;
-  rejected: number;
-  rejectionReasons: RejectionReasonDetail[];
-}
-
-export interface CronScanRecord {
-  id: string;
-  timestamp: number;
-  formattedTime: string;
-  isExternal: boolean;
-  scanDurationMs: number;
-  totalUniverseSymbolsScanned: number;
-  totalCandidatesEvaluated: number;
-  totalSignalsFound: number;
-  totalSignalsAccepted: number;
-  totalRejected: number;
-  status: string;
-  crypto: AssetClassScanTelemetry;
-  forex: AssetClassScanTelemetry;
-  stocks: AssetClassScanTelemetry;
-}
-
-export interface ArchivedScanReport {
-  id: string;
-  archivedAt: number;
-  startDateISO: string;
-  endDateISO: string;
-  totalScansCount: number;
-  records: CronScanRecord[];
-}
-
 export interface ScannerPersistenceData {
   capState: DailyCapState;
   sentSignals: PersistedSentSignal[];
   rejectedCandidates: PersistedRejectedCandidate[];
   notifications: PersistedNotification[];
   deletedSignals?: string[];
-  cronScanRecords?: CronScanRecord[];
-  archivedScanReports?: ArchivedScanReport[];
   settings: {
     enabled: boolean;
     notificationsEnabled: boolean;
@@ -248,8 +199,6 @@ export class ScannerPersistence {
     sentSignals: [],
     rejectedCandidates: [],
     notifications: [],
-    cronScanRecords: [],
-    archivedScanReports: [],
     settings: {
       enabled: true,
       notificationsEnabled: true,
@@ -306,8 +255,6 @@ export class ScannerPersistence {
             sentSignals: Array.isArray(parsed.sentSignals) ? parsed.sentSignals : [],
             rejectedCandidates: Array.isArray(parsed.rejectedCandidates) ? parsed.rejectedCandidates : [],
             notifications: Array.isArray(parsed.notifications) ? parsed.notifications : [],
-            cronScanRecords: Array.isArray(parsed.cronScanRecords) ? parsed.cronScanRecords : [],
-            archivedScanReports: Array.isArray(parsed.archivedScanReports) ? parsed.archivedScanReports : [],
             settings: {
               enabled: parsed.settings?.enabled ?? true,
               notificationsEnabled: parsed.settings?.notificationsEnabled ?? true,
@@ -336,10 +283,10 @@ export class ScannerPersistence {
     if (this.localData.capState.date !== today) {
       logger.info(`[ScannerPersistence] Daily rollover triggered: ${this.localData.capState.date} -> ${today}. Resetting daily signal count.`);
       this.localData.capState = {
-        ...this.localData.capState,
         date: today,
         dailySignalCount: 0,
         dailySignalCap: this.localData.capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap,
+        lastScanTime: this.localData.capState.lastScanTime,
         reservations: [],
       };
       this.saveLocalData();
@@ -373,160 +320,6 @@ export class ScannerPersistence {
     } catch (err) {
       logger.warn('[ScannerPersistence] Failed to write local state to disk:', { error: String(err) });
     }
-  }
-
-  /**
-   * Persists an immutable timestamped cron scan record.
-   * Performs automatic 24-hour boundary archiving.
-   */
-  static async recordCronScan(record: CronScanRecord): Promise<void> {
-    this.init();
-    if (!this.localData.cronScanRecords) {
-      this.localData.cronScanRecords = [];
-    }
-    if (!this.localData.archivedScanReports) {
-      this.localData.archivedScanReports = [];
-    }
-
-    // Must strictly be an automated cron scan
-    if (!record.isExternal) {
-      logger.warn('[ScannerPersistence] recordCronScan ignored manual non-cron scan execution.');
-      return;
-    }
-
-    // Add new record at beginning
-    this.localData.cronScanRecords.unshift(record);
-    this.localData.capState.latestCronScan = record;
-    if (record.timestamp) {
-      this.localData.capState.lastCronExecution = record.timestamp;
-      this.localData.capState.lastAutomatedScan = record.timestamp;
-      this.localData.capState.lastScanCompletedAt = record.timestamp + (record.scanDurationMs || 0);
-    }
-
-    // Perform rolling 24-hour boundary check and archiving
-    const now = Date.now();
-    const cutoff24h = now - 24 * 60 * 60 * 1000;
-
-    const activeRecords: CronScanRecord[] = [];
-    const expiredRecords: CronScanRecord[] = [];
-
-    for (const rec of this.localData.cronScanRecords) {
-      if (rec.timestamp >= cutoff24h) {
-        activeRecords.push(rec);
-      } else {
-        expiredRecords.push(rec);
-      }
-    }
-
-    this.localData.cronScanRecords = activeRecords;
-
-    if (expiredRecords.length > 0) {
-      const archiveReport: ArchivedScanReport = {
-        id: `archive_${now}_${Math.random().toString(36).slice(2, 7)}`,
-        archivedAt: now,
-        startDateISO: new Date(expiredRecords[expiredRecords.length - 1].timestamp).toISOString(),
-        endDateISO: new Date(expiredRecords[0].timestamp).toISOString(),
-        totalScansCount: expiredRecords.length,
-        records: expiredRecords,
-      };
-      this.localData.archivedScanReports.unshift(archiveReport);
-      if (this.localData.archivedScanReports.length > 30) {
-        this.localData.archivedScanReports = this.localData.archivedScanReports.slice(0, 30);
-      }
-      logger.info(`[ScannerPersistence] 24-Hour Boundary Achieved: Archived ${expiredRecords.length} completed scan records into report ${archiveReport.id}.`);
-    }
-
-    this.saveLocalData();
-
-    // Firestore sync if available
-    const firestore = getFirestoreAdmin();
-    if (firestore) {
-      try {
-        await firestore.collection('scanner_cron_scan_records').doc(record.id).set(record);
-        if (expiredRecords.length > 0 && this.localData.archivedScanReports[0]) {
-          await firestore.collection('scanner_archived_reports').doc(this.localData.archivedScanReports[0].id).set(this.localData.archivedScanReports[0]);
-        }
-      } catch (err) {
-        logger.warn('[ScannerPersistence] Firestore recordCronScan sync error:', { error: String(err) });
-      }
-    }
-  }
-
-  /**
-   * Retrieves rolling 24-hour cron scan records and aggregated totals.
-   */
-  static async getCron24hHistory(): Promise<{
-    records: CronScanRecord[];
-    totalScansCompleted: number;
-    totals: {
-      crypto: { assetsScanned: number; candidatesEvaluated: number; signalsFound: number; signalsAccepted: number; rejected: number };
-      forex: { assetsScanned: number; candidatesEvaluated: number; signalsFound: number; signalsAccepted: number; rejected: number };
-      stocks: { assetsScanned: number; candidatesEvaluated: number; signalsFound: number; signalsAccepted: number; rejected: number };
-      overall: { assetsScanned: number; candidatesEvaluated: number; signalsFound: number; signalsAccepted: number; rejected: number };
-    };
-    latestScan: CronScanRecord | null;
-    hasTelemetry: boolean;
-  }> {
-    this.init();
-    const records = this.localData.cronScanRecords || [];
-    const now = Date.now();
-    const cutoff24h = now - 24 * 60 * 60 * 1000;
-
-    // Filter for rolling 24 hours
-    const active24h = records.filter(r => r.timestamp >= cutoff24h);
-
-    const cryptoTotals = { assetsScanned: 0, candidatesEvaluated: 0, signalsFound: 0, signalsAccepted: 0, rejected: 0 };
-    const forexTotals = { assetsScanned: 0, candidatesEvaluated: 0, signalsFound: 0, signalsAccepted: 0, rejected: 0 };
-    const stocksTotals = { assetsScanned: 0, candidatesEvaluated: 0, signalsFound: 0, signalsAccepted: 0, rejected: 0 };
-    const overallTotals = { assetsScanned: 0, candidatesEvaluated: 0, signalsFound: 0, signalsAccepted: 0, rejected: 0 };
-
-    for (const r of active24h) {
-      if (r.crypto) {
-        cryptoTotals.assetsScanned += r.crypto.assetsScanned || 0;
-        cryptoTotals.candidatesEvaluated += r.crypto.candidatesEvaluated || 0;
-        cryptoTotals.signalsFound += r.crypto.signalsFound || 0;
-        cryptoTotals.signalsAccepted += r.crypto.signalsAccepted || 0;
-        cryptoTotals.rejected += r.crypto.rejected || 0;
-      }
-      if (r.forex) {
-        forexTotals.assetsScanned += r.forex.assetsScanned || 0;
-        forexTotals.candidatesEvaluated += r.forex.candidatesEvaluated || 0;
-        forexTotals.signalsFound += r.forex.signalsFound || 0;
-        forexTotals.signalsAccepted += r.forex.signalsAccepted || 0;
-        forexTotals.rejected += r.forex.rejected || 0;
-      }
-      if (r.stocks) {
-        stocksTotals.assetsScanned += r.stocks.assetsScanned || 0;
-        stocksTotals.candidatesEvaluated += r.stocks.candidatesEvaluated || 0;
-        stocksTotals.signalsFound += r.stocks.signalsFound || 0;
-        stocksTotals.signalsAccepted += r.stocks.signalsAccepted || 0;
-        stocksTotals.rejected += r.stocks.rejected || 0;
-      }
-      overallTotals.assetsScanned += r.totalUniverseSymbolsScanned || 0;
-      overallTotals.candidatesEvaluated += r.totalCandidatesEvaluated || 0;
-      overallTotals.signalsFound += r.totalSignalsFound || 0;
-      overallTotals.signalsAccepted += r.totalSignalsAccepted || 0;
-      overallTotals.rejected += r.totalRejected || 0;
-    }
-
-    const latestScan = active24h.length > 0 
-      ? active24h[0] 
-      : (records.length > 0 ? records[0] : (this.localData.capState.latestCronScan || null));
-
-    const hasTelemetry = latestScan !== null || records.length > 0 || Boolean(this.localData.capState.lastCronExecution);
-
-    return {
-      records: active24h,
-      totalScansCompleted: active24h.length,
-      totals: {
-        crypto: cryptoTotals,
-        forex: forexTotals,
-        stocks: stocksTotals,
-        overall: overallTotals,
-      },
-      latestScan,
-      hasTelemetry,
-    };
   }
 
   /**
