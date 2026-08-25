@@ -256,6 +256,15 @@ export class SignalEngine {
         symbol: cleanSymbol,
         reason: `All instruments in the ${assetCategory} universe (${universe.join(', ')}) are currently outside official exchange trading hours. Forex and Stock markets operate only during active market sessions. Crypto operates 24/7.`,
         timestamp: now,
+        telemetry: {
+          universeSymbolsScanned: universe.length,
+          preliminaryCandidatesFound: 0,
+          candidatesRejectedPreliminary: universe.length,
+          candidatesEvaluated: 0,
+          candidatesRejectedFinal: 0,
+          signalsGenerated: 0,
+          signalsAccepted: 0,
+        },
       };
     }
 
@@ -330,6 +339,15 @@ export class SignalEngine {
           symbol: cleanSymbol,
           reason: `Multi-asset screening completed across ${assetCategory} universe (${universe.join(', ')}): No symbols demonstrated sufficient preliminary trend alignment or volatility structure.`,
           timestamp: now,
+          telemetry: {
+            universeSymbolsScanned: universe.length,
+            preliminaryCandidatesFound: 0,
+            candidatesRejectedPreliminary: universe.length,
+            candidatesEvaluated: 0,
+            candidatesRejectedFinal: 0,
+            signalsGenerated: 0,
+            signalsAccepted: 0,
+          },
         };
       }
 
@@ -1564,6 +1582,15 @@ export class SignalEngine {
           secondBest,
           suggestions,
           timestamp: now,
+          telemetry: {
+            universeSymbolsScanned: universe.length,
+            preliminaryCandidatesFound: stage2Candidates.length,
+            candidatesRejectedPreliminary: universe.length - stage2Candidates.length,
+            candidatesEvaluated: topCandidates.length,
+            candidatesRejectedFinal: topCandidates.length - candidates.length,
+            signalsGenerated: validatedSignals.length,
+            signalsAccepted: validatedSignals.length,
+          },
         };
       }
 
@@ -1573,6 +1600,15 @@ export class SignalEngine {
         symbol: cleanSymbol,
         reason: `Multi-asset scan completed across ${assetCategory} universe (${universe.join(', ')}): No setups satisfied all strict confluence, volatility, risk-reward (>= 2:1), win-rate (> 30%), or live price validation hurdles. The system will never create placeholder signals.`,
         timestamp: now,
+        telemetry: {
+          universeSymbolsScanned: universe.length,
+          preliminaryCandidatesFound: stage2Candidates.length,
+          candidatesRejectedPreliminary: universe.length - stage2Candidates.length,
+          candidatesEvaluated: topCandidates.length,
+          candidatesRejectedFinal: topCandidates.length,
+          signalsGenerated: 0,
+          signalsAccepted: 0,
+        },
       };
 
     } catch (err: unknown) {
@@ -1585,6 +1621,15 @@ export class SignalEngine {
         symbol: cleanSymbol,
         reason: `Multi-asset scanning interrupted: ${errMsg}`,
         timestamp: now,
+        telemetry: {
+          universeSymbolsScanned: universe.length,
+          preliminaryCandidatesFound: 0,
+          candidatesRejectedPreliminary: universe.length,
+          candidatesEvaluated: 0,
+          candidatesRejectedFinal: 0,
+          signalsGenerated: 0,
+          signalsAccepted: 0,
+        },
       };
     }
   }

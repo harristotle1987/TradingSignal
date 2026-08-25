@@ -238,6 +238,16 @@ export interface TradingSignal {
   notifiedStates?: string[];
 }
 
+export interface ScannerFunnelCounters {
+  universeSymbolsScanned: number;
+  preliminaryCandidatesFound: number;
+  candidatesRejectedPreliminary: number;
+  candidatesEvaluated: number;
+  candidatesRejectedFinal: number;
+  signalsGenerated: number;
+  signalsAccepted: number;
+}
+
 export interface SignalGenerationResponse {
   success: boolean;
   message: string;
@@ -250,6 +260,7 @@ export interface SignalGenerationResponse {
   suggestions?: TradingSignal[];
   reason?: string;
   timestamp: number;
+  telemetry?: Partial<ScannerFunnelCounters>;
 }
 
 export interface SignalsListResponse {

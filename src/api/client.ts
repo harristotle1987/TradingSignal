@@ -180,6 +180,21 @@ class ApiClient {
   }
 
   /**
+   * Fetch 24-hour multi-asset cron scan history and telemetry
+   */
+  async getCron24hHistory(): Promise<{
+    success: boolean;
+    records: any[];
+    totalScansCompleted: number;
+    totals: any;
+    latestScan: any;
+    hasTelemetry: boolean;
+    timestamp: number;
+  }> {
+    return this.fetchJson<any>('/api/scanner/cron-history-24h');
+  }
+
+  /**
    * Update automated hourly scanner settings
    */
   async updateScannerSettings(
@@ -203,14 +218,23 @@ class ApiClient {
     message: string;
     timestamp: number;
     lastScanTime: number;
+    universeSymbolsScanned?: number;
+    preliminaryCandidatesFound?: number;
+    candidatesRejectedPreliminary?: number;
     candidatesEvaluated: number;
+    candidatesRejectedFinal?: number;
+    signalsGenerated?: number;
+    signalsAccepted?: number;
     acceptedSignalsCount: number;
     acceptedSignals: any[];
     signalsFound: number;
     qualifiedSetups: any[];
     rejectedCount: number;
     rejectionReasons: string[];
+    diagnosticsCount?: number;
+    diagnostics?: string[];
     capState: any;
+    scanDurationMs?: number;
   }> {
     return this.fetchJson<any>('/api/scanner/manual-trigger', {
       method: 'POST',

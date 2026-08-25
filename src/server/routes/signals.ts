@@ -241,10 +241,16 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
       lastAutomatedScan,
       lastScanCompletedAt: capState.lastScanCompletedAt || Date.now(),
       lastScanDuration: durationMs,
+      universeSymbolsScanned: result.universeSymbolsScanned ?? capState.universeSymbolsScanned ?? 0,
+      preliminaryCandidatesFound: result.preliminaryCandidatesFound ?? capState.preliminaryCandidatesFound ?? 0,
+      candidatesRejectedPreliminary: result.candidatesRejectedPreliminary ?? capState.candidatesRejectedPreliminary ?? 0,
+      candidatesEvaluated: result.candidatesEvaluated ?? capState.candidatesEvaluated ?? 0,
+      candidatesRejectedFinal: result.candidatesRejectedFinal ?? capState.candidatesRejectedFinal ?? (result.rejectedCount ?? 0),
+      signalsGenerated: result.signalsGenerated ?? result.signalsFound ?? capState.signalsGenerated ?? 0,
+      signalsAccepted: result.signalsAccepted ?? result.acceptedSignalsCount ?? capState.signalsAccepted ?? 0,
       lastCandidatesEvaluated: result.candidatesEvaluated ?? capState.lastCandidatesEvaluated ?? 0,
       lastSignalsFound: result.signalsFound ?? result.acceptedSignalsCount ?? capState.lastSignalsFound ?? 0,
       lastAcceptedSignals: result.acceptedSignalsCount ?? capState.lastAcceptedSignals ?? 0,
-      candidatesEvaluated: result.candidatesEvaluated ?? capState.lastCandidatesEvaluated ?? 0,
       signalsFound: result.signalsFound ?? result.acceptedSignalsCount ?? capState.lastSignalsFound ?? 0,
       acceptedSignalsCount: result.acceptedSignalsCount ?? capState.lastAcceptedSignals ?? 0,
       nextCronExecution,
@@ -286,6 +292,117 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
 
 router.post('/scanner/trigger', handleScannerTrigger);
 router.get('/scanner/trigger', handleScannerTrigger);
+
+/**
+ * GET /api/scanner/cron-history-24h
+ * Retrieves rolling 24-hour multi-asset cron scan history, per-asset-class totals, and telemetry records.
+ */
+router.get('/scanner/cron-history-24h', async (_req: Request, res: Response) => {
+  try {
+    const history = await ScannerPersistence.getCron24hHistory();
+    res.status(200).json({
+      success: true,
+      timestamp: Date.now(),
+      ...history,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve 24-hour cron scan history',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * GET /api/scanner/export-24h-report
+ * Downloads or exports the 24-hour cron scan report as CSV or JSON.
+ */
+router.get('/scanner/export-24h-report', async (req: Request, res: Response) => {
+  try {
+    const format = (req.query.format as string || 'json').toLowerCase();
+    const history = await ScannerPersistence.getCron24hHistory();
+    const timestampStr = new Date().toISOString().replace(/[:.]/g, '-');
+
+    if (format === 'csv') {
+      const headers = [
+        'Scan ID',
+        'Timestamp ISO',
+        'Scan Duration (s)',
+        'Status',
+        'Asset Class',
+        'Assets Scanned',
+        'Candidates Evaluated',
+        'Signals Found',
+        'Signals Accepted',
+        'Rejected Count',
+        'Rejection Reasons Summary'
+      ].join(',');
+
+      const rows: string[] = [headers];
+
+      for (const rec of history.records) {
+        const durationSec = (rec.scanDurationMs / 1000).toFixed(2);
+        const assetClasses: Array<{ name: string; data: typeof rec.crypto }> = [
+          { name: 'CRYPTO', data: rec.crypto },
+          { name: 'FOREX', data: rec.forex },
+          { name: 'STOCKS', data: rec.stocks },
+        ];
+
+        for (const ac of assetClasses) {
+          if (!ac.data) continue;
+          const reasonsSummary = ac.data.rejectionReasons && ac.data.rejectionReasons.length > 0
+            ? ac.data.rejectionReasons.map(r => `${r.symbol}${r.direction ? `[${r.direction}]` : ''}: ${r.reason}`).join(' | ')
+            : 'None';
+
+          const escapedReasons = `"${reasonsSummary.replace(/"/g, '""')}"`;
+
+          const row = [
+            rec.id,
+            rec.formattedTime,
+            durationSec,
+            rec.status || 'COMPLETED',
+            ac.name,
+            ac.data.assetsScanned || 0,
+            ac.data.candidatesEvaluated || 0,
+            ac.data.signalsFound || 0,
+            ac.data.signalsAccepted || 0,
+            ac.data.rejected || 0,
+            escapedReasons
+          ].join(',');
+
+          rows.push(row);
+        }
+      }
+
+      const csvContent = rows.join('\n');
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="24h_cron_scanner_report_${timestampStr}.csv"`);
+      res.status(200).send(csvContent);
+    } else {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="24h_cron_scanner_report_${timestampStr}.json"`);
+      res.status(200).json({
+        reportTitle: '24-Hour Multi-Asset Automated Cron Market Scan History Report',
+        generatedAtISO: new Date().toISOString(),
+        rollingWindowHours: 24,
+        totalScansCompleted: history.totalScansCompleted,
+        totals: history.totals,
+        records: history.records,
+      });
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to export 24-hour scan report',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
 
 /**
  * POST /api/scanner/manual-trigger
