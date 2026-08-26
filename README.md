@@ -1,24 +1,28 @@
 # Trading Signal Platform
 
-An automated cryptocurrency trading signal generator and market analytics engine. Built with React, TypeScript, Express, and Firebase, featuring multi-timeframe analysis, risk-managed signal scoring, and cross-platform mobile support via Capacitor.
+An automated cryptocurrency and multi-asset trading signal generator and high-speed market analytics engine. Built with React, TypeScript, Express, and Firebase, featuring progressive multi-timeframe analysis, strict risk-managed signal scoring, bounded parallel execution, and cross-platform mobile support via Capacitor.
 
 ---
 
 ## Key Features
 
-- **Automated Market Scanner**: Periodically sweeps cryptocurrency markets across configurable intervals (15m, 30m, 45m, 60m).
-- **Institutional Strategy Pipeline**: Setups undergo rigorous phased evaluation:
-  - **Gate 0 (Data Integrity)**: Strict OHLC geometry validation and price synchronization tracking.
-  - **Gate 1 (Regime Detection)**: Identifies precise market states (e.g., `STRONG_BULL_TREND`, `BREAKOUT`) using comprehensive technical combinations (EMAs, ADX, Bollinger Band width, ATR).
-  - **Gate 2 (MTF Confluence)**: Evaluates structural context aligning HTF (4H/1H), MTF (15M), and LTF (5M) trajectories.
-  - **Gate 3 (Market Structure)**: Identifies Break of Structure (BOS), Change of Character (CHOCH), and verifies support/resistance alignments via fractal swings.
-  - **Gate 4 (Momentum & Volatility)**: Gauges raw strength via RSI, MACD histograms, ADX/DMI alignment, and ensures sufficient market volatility via ATR and Bollinger Band expansions while filtering overextensions.
-  - **Gate 5 (Support, Resistance & Liquidity)**: Clusters price points (swings, psychological levels, higher-timeframe boundaries) into defined Price Zones, calculating strength via overlap confluence. Detects liquidity sweeps and successful retests of flipped boundaries.
-  - **Gate 6 (Volume & Price Action Confirmation)**: Validates institutional participation via relative volume expansion, On-Balance Volume (OBV) trend, and Daily VWAP alignment. Filters out 'ghost breakouts' lacking volume and rewards strong engulfing/wick-rejection candle behaviors.
-  - **Gate 7 (Market Context)**: Adapts execution logic strictly to asset class constraints. Maps trades to the correct session (e.g., rejecting out-of-hours stock trades or illiquid Sydney forex sessions). Implements a defensive block for high-risk macroeconomic news events and maps broad asset correlations.
-  - **Scoring Engine**: Evaluates Multi-Timeframe Trend, Momentum, Volatility Expansion, and Order Flow strategies.
+- **Automated Market Scanner**: Periodically sweeps cryptocurrency and forex market universes across configurable schedules with an internal safety deadline manager.
+- **Progressive Staged Scanner Pipeline**: Setups undergo rigorous phased evaluation with early candidate termination at each stage:
+  - **Gate 0 (Data Integrity)**: Strict OHLC geometry validation, volume checks, and price synchronization tracking.
+  - **Gate 1 (Regime Detection)**: Identifies precise market states (e.g., `STRONG_BULL_TREND`, `BREAKOUT`) using technical indicator combinations (EMAs, ADX, Bollinger Band width, ATR).
+  - **Gate 2 (Distributed Lock & Confluence)**: Uses Firestore document locking (`scanner/lock`) for atomic execution and evaluates structural context.
+  - **Gate 3 (Progressive Cheap Screening)**: Screens 100+ assets down to top 30–45 candidates using 1H data. Candidates failing trend alignment, liquidity, or basic structure halt processing immediately.
+  - **Gate 4 (Dynamic Request Budgeting)**: Dynamically caps deep analysis candidates (8–12) based on real-time API health and rate limit quotas.
+  - **Gate 5 (Pre-Ranking & Adaptive Selection)**: Filters and ranks the strongest candidates down to top 3–5 for multi-timeframe evaluation.
+  - **Gate 6 (Progressive Multi-Timeframe Confluence)**:
+    - **Layer 1 (15m + 1h)**: Evaluates fast MTF agreement concurrently; halts non-confluent candidates before fetching 5m/4h data.
+    - **Layer 2 (5m + 4h)**: Validates fine structure, ATR, and support/resistance boundaries exclusively on Layer 1 survivors.
+  - **Gate 7 (Executable Entry & Final Validation)**: Validates institutional volume expansion, news risk, spread friction, and risk-reward ratio to produce 0–3 high-probability tradeable signals.
+- **Cron Optimization & Time Budget Safety**:
+  - **Hard Internal Deadline (24s)**: Guarantees completion below external serverless 30s timeouts. Safely halts new requests while preserving valid candidate results (`TIME_BUDGET_EXCEEDED` status).
+  - **Fast Cron Endpoint**: Skips UI rendering, heavy historical queries, and AI chatbot calls during cron runs.
+  - **Granular Timing Telemetry**: Tracks execution benchmarks across `TOTAL SCAN TIME`, `DATA FETCH TIME`, `SCREENING TIME`, `RANKING TIME`, `MTF TIME`, `VALIDATION TIME`, and `DATABASE TIME`.
 - **Safety & Cap Governance**: Enforces a daily automated signal ceiling per UTC day to prevent over-trading and market exposure overflow.
-- **Distributed Lock Management**: Uses Firestore document locking (`scanner/lock`) for atomic execution across serverless and containerized instances.
 - **Market Diagnostics**: Live ticker monitoring, order book depth analytics, and multi-asset class scanners.
 - **Cross-Platform Readiness**: Responsive web UI optimized for mobile viewports, bundled with Capacitor for native Android deployment.
 
@@ -30,10 +34,10 @@ An automated cryptocurrency trading signal generator and market analytics engine
 ├── src/
 │   ├── components/       # UI components (Signals, Scanner, Diagnostics, Settings)
 │   ├── server/           # Express server logic
-│   │   ├── market/       # Bitget API client, caching layer, ticker streams
+│   │   ├── market/       # MarketDataManager, provider adapters, caching layer
 │   │   ├── routes/       # API endpoints (/api/signals, /api/scanner, etc.)
-│   │   └── signals/      # HourlyScanner, persistence, strategy performance tracker
-│   ├── types/            # TypeScript interfaces and signal definitions
+│   │   └── signals/      # StagedScannerPipeline, Gate3-Gate7 stages, HourlyScanner, persistence
+│   ├── types/            # TypeScript interfaces, timing telemetry, and signal definitions
 │   └── lib/              # Firebase & utility functions
 ├── server.ts             # Express entry point with Vite middleware / static server
 ├── capacitor.config.ts   # Mobile configuration for Capacitor Android
@@ -47,7 +51,7 @@ An automated cryptocurrency trading signal generator and market analytics engine
 - **Frontend**: React 19, TypeScript, Tailwind CSS, Lucide Icons, Motion
 - **Backend**: Node.js, Express, tsx / esbuild
 - **Database & Auth**: Firebase Firestore & Firebase Auth
-- **Market Data**: Bitget Public API with rate-limit deduplication & caching
+- **Market Data**: Bitget & Binance Public APIs with rate-limit deduplication & caching
 - **Mobile**: Capacitor Android (`@capacitor/android`)
 - **Build Tooling**: Vite 6, Tailwind CSS v4
 
