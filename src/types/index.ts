@@ -284,29 +284,6 @@ export interface ScannerFunnelCounters {
   finalValidationOutput?: number;
   finalScoreGateInput?: number;
   finalScoreGateOutput?: number;
-  totalScanTimeMs?: number;
-  dataFetchTimeMs?: number;
-  screeningTimeMs?: number;
-  rankingTimeMs?: number;
-  mtfTimeMs?: number;
-  validationTimeMs?: number;
-  databaseTimeMs?: number;
-  timingTelemetry?: {
-    totalScanTimeMs: number;
-    dataFetchTimeMs: number;
-    screeningTimeMs: number;
-    rankingTimeMs: number;
-    mtfTimeMs: number;
-    validationTimeMs: number;
-    databaseTimeMs: number;
-    "TOTAL SCAN TIME": number;
-    "DATA FETCH TIME": number;
-    "SCREENING TIME": number;
-    "RANKING TIME": number;
-    "MTF TIME": number;
-    "VALIDATION TIME": number;
-    "DATABASE TIME": number;
-  };
 }
 
 export interface SignalGenerationResponse {

@@ -334,18 +334,13 @@ export class TwelveDataAdapter implements IMarketDataProvider {
       } catch (err) {
         const errMsg = String(err);
         const isRateLimit = errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit');
+        logger.warn(`Twelve Data direct fetch for interval '${mappedInterval}' (${timeframe}) failed${isRateLimit ? ' (Rate Limited)' : ', trying aggregation'}`, {
+          symbol: appSymbol,
+          error: errMsg,
+        });
+        // If rate limited, do not hammer the API with an immediate secondary request
         if (isRateLimit) {
-          quotaManager.recordResponse(this.id, 429);
-          logger.info(`Twelve Data direct fetch for interval '${mappedInterval}' (${timeframe}) rate limited for ${appSymbol}, cooling down`, {
-            symbol: appSymbol,
-            error: errMsg,
-          });
           return [];
-        } else {
-          logger.warn(`Twelve Data direct fetch for interval '${mappedInterval}' (${timeframe}) failed, trying aggregation`, {
-            symbol: appSymbol,
-            error: errMsg,
-          });
         }
       }
     }

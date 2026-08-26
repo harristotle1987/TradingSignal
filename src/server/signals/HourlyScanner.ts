@@ -87,29 +87,6 @@ export interface ManualScanResult {
   diagnostics?: string[];
   capState: DailyCapState;
   scanDurationMs?: number;
-  totalScanTimeMs?: number;
-  dataFetchTimeMs?: number;
-  screeningTimeMs?: number;
-  rankingTimeMs?: number;
-  mtfTimeMs?: number;
-  validationTimeMs?: number;
-  databaseTimeMs?: number;
-  timingTelemetry?: {
-    totalScanTimeMs: number;
-    dataFetchTimeMs: number;
-    screeningTimeMs: number;
-    rankingTimeMs: number;
-    mtfTimeMs: number;
-    validationTimeMs: number;
-    databaseTimeMs: number;
-    "TOTAL SCAN TIME": number;
-    "DATA FETCH TIME": number;
-    "SCREENING TIME": number;
-    "RANKING TIME": number;
-    "MTF TIME": number;
-    "VALIDATION TIME": number;
-    "DATABASE TIME": number;
-  };
 }
 
 export class HourlyScannerService {
@@ -165,9 +142,7 @@ export class HourlyScannerService {
    */
   private async executeIntelligentScan(isExternal = false): Promise<ManualScanResult> {
     const scanStartTime = Date.now();
-    const hardCutoffMs = isExternal ? 24000 : 25000;
-    const scanDeadline = scanStartTime + hardCutoffMs;
-    logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime} | deadline: ${scanDeadline}`);
+    logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime}`);
 
     if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
       logger.error('[Hourly Scanner] AUTOMATED SCANNER DISPATCH DISABLED: Production persistence is unavailable (FIREBASE_SERVICE_ACCOUNT required).');
@@ -272,7 +247,7 @@ export class HourlyScannerService {
         categories.map(async (category) => {
           try {
             logger.info(`[Hourly Scanner] Scanning universe: [${category}]...`);
-            const result = await signalEngine.generateSignal(category, category, false, scanDeadline);
+            const result = await signalEngine.generateSignal(category, category, false);
             return { category, result };
           } catch (catErr) {
             logger.error(`[Hourly Scanner] Scan error for ${category}:`, { error: String(catErr) });
@@ -1021,40 +996,6 @@ export class HourlyScannerService {
       const scanDurationMs = Date.now() - scanStartTime;
       const totalCandidatesRejectedFinalCombined = totalCandidatesRejectedFinal + rejectedDuringScan.length;
 
-      let totalDataFetchTimeMs = 0;
-      let totalScreeningTimeMs = 0;
-      let totalRankingTimeMs = 0;
-      let totalMtfTimeMs = 0;
-      let totalValidationTimeMs = 0;
-      let totalDatabaseTimeMs = 0;
-
-      for (const { result } of categoryScanResults) {
-        const tel = result?.telemetry;
-        totalDataFetchTimeMs += tel?.dataFetchTimeMs || 0;
-        totalScreeningTimeMs += tel?.screeningTimeMs || 0;
-        totalRankingTimeMs += tel?.rankingTimeMs || 0;
-        totalMtfTimeMs += tel?.mtfTimeMs || 0;
-        totalValidationTimeMs += tel?.validationTimeMs || 0;
-        totalDatabaseTimeMs += tel?.databaseTimeMs || 0;
-      }
-
-      const timingTelemetry = {
-        totalScanTimeMs: scanDurationMs,
-        dataFetchTimeMs: totalDataFetchTimeMs,
-        screeningTimeMs: totalScreeningTimeMs,
-        rankingTimeMs: totalRankingTimeMs,
-        mtfTimeMs: totalMtfTimeMs,
-        validationTimeMs: totalValidationTimeMs,
-        databaseTimeMs: totalDatabaseTimeMs,
-        "TOTAL SCAN TIME": scanDurationMs,
-        "DATA FETCH TIME": totalDataFetchTimeMs,
-        "SCREENING TIME": totalScreeningTimeMs,
-        "RANKING TIME": totalRankingTimeMs,
-        "MTF TIME": totalMtfTimeMs,
-        "VALIDATION TIME": totalValidationTimeMs,
-        "DATABASE TIME": totalDatabaseTimeMs,
-      };
-
       // 10. Update authoritative lastAutomatedScan metrics ONLY if triggered externally from /api/scanner/trigger
       if (isExternal) {
         await ScannerPersistence.recordAutomatedScanMetrics({
@@ -1090,19 +1031,11 @@ export class HourlyScannerService {
         (d) => `${d.symbol}: ${d.reason}`
       );
 
-      const isTimeBudgetExceeded = Date.now() >= scanDeadline;
-      if (isTimeBudgetExceeded) {
-        logger.warn(`[Hourly Scanner] TIME_BUDGET_EXCEEDED | Cron scan execution reached internal ${hardCutoffMs / 1000}s safety deadline. Preserving completed candidate results.`);
-      }
-
-      const scanStatus = isTimeBudgetExceeded ? 'TIME_BUDGET_EXCEEDED' : 'COMPLETED';
-
       return {
         success: true,
-        status: scanStatus as any,
-        message: isTimeBudgetExceeded
-          ? `TIME_BUDGET_EXCEEDED: Completed scan safely within ${hardCutoffMs / 1000}s deadline. Dispatched ${dispatchedCount} setups.`
-          : dispatchedCount > 0
+        status: 'COMPLETED',
+        message:
+          dispatchedCount > 0
             ? `Scan complete: Dispatched ${dispatchedCount} qualified automated setup(s). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`
             : `Scan complete: 0 setups met strict ${finalCapState.dailySignalCap > 0 ? `${thresholds.signalThreshold}+` : ''} criteria (0-${finalCapState.dailySignalCap} is valid; no trades forced). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`,
         timestamp: Date.now(),
@@ -1124,14 +1057,6 @@ export class HourlyScannerService {
         diagnostics: diagnosticStrings,
         capState: finalCapState,
         scanDurationMs,
-        totalScanTimeMs: scanDurationMs,
-        dataFetchTimeMs: totalDataFetchTimeMs,
-        screeningTimeMs: totalScreeningTimeMs,
-        rankingTimeMs: totalRankingTimeMs,
-        mtfTimeMs: totalMtfTimeMs,
-        validationTimeMs: totalValidationTimeMs,
-        databaseTimeMs: totalDatabaseTimeMs,
-        timingTelemetry,
       };
     } catch (err) {
       logger.error('[Hourly Scanner] Critical failure during scan execution:', { error: String(err) });

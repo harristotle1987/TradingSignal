@@ -31,7 +31,7 @@ class ProviderRequestQueue {
 
   // Minimum spacing in ms between outbound network requests per provider
   private minSpacingMs: Record<string, number> = {
-    twelvedata: 7500, // 8 requests per minute limit on Twelve Data free plan (60000ms / 8 = 7500ms)
+    twelvedata: 1000,
     finnhub: 300,
     bitget: 100,
     exchangerate: 100,
