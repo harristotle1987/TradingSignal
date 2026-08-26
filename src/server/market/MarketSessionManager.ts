@@ -7,6 +7,7 @@
 
 import { SymbolNormalizer } from './SymbolNormalizer.js';
 import { logger } from '../logger.js';
+import { marketCache, CACHE_TTL } from './CacheStore.js';
 
 export type MarketSessionState = 'MARKET_OPEN' | 'MARKET_CLOSED' | 'OUTSIDE_TRADING_SESSION';
 
@@ -151,16 +152,31 @@ export class MarketSessionManager {
    * Resolves the Asset Classification of any normalized symbol.
    */
   static getAssetClassification(symbol: string): 'CRYPTO' | 'STOCK' | 'FOREX' {
+    const key = `${symbol}:metadata:classification`;
+    const cached = marketCache.getGeneric<'CRYPTO' | 'STOCK' | 'FOREX'>(key);
+    if (cached) return cached;
+
     const assetType = SymbolNormalizer.getAssetClassification(symbol);
-    if (assetType === 'FOREX') return 'FOREX';
-    if (assetType === 'STOCK') return 'STOCK';
-    return 'CRYPTO'; // Safe fallback
+    const result = assetType === 'FOREX' ? 'FOREX' : (assetType === 'STOCK' ? 'STOCK' : 'CRYPTO');
+    
+    marketCache.setGeneric(key, result, CACHE_TTL.SYMBOL_METADATA);
+    return result;
   }
 
   /**
    * Checks the exact operational state of any market symbol.
    */
   static getSessionState(symbol: string): MarketSessionState {
+    const key = `${symbol}:session_status`;
+    const cached = marketCache.getGeneric<MarketSessionState>(key);
+    if (cached) return cached;
+
+    const state = this.getSessionStateRaw(symbol);
+    marketCache.setGeneric(key, state, CACHE_TTL.MARKET_SESSION_STATUS);
+    return state;
+  }
+
+  private static getSessionStateRaw(symbol: string): MarketSessionState {
     const assetType = this.getAssetClassification(symbol);
     const now = this.getCurrentDate();
     const ny = this.getNYComponents(now);

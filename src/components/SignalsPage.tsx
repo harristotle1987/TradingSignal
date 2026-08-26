@@ -344,23 +344,31 @@ export function SignalsPage({ health }: SignalsPageProps) {
 
   const isNvidiaConfigured = health?.aiProvider?.configured ?? false;
 
-  // Load ticker for selected symbol
-  const loadTicker = useCallback(async (sym: string) => {
+  // User-triggered price fetch with debounce / concurrency lock
+  const fetchForexMarketPrice = useCallback(async (sym?: string) => {
+    if (isFetchingPrice) return;
+    const targetSymbol = (sym || selectedSymbol).trim().toUpperCase();
+
     setIsFetchingPrice(true);
+    setErrorMsg(null);
     try {
-      const data = await api.fetchMarketPrice(sym);
+      const data = await api.fetchMarketPrice(targetSymbol, undefined, 'USER_CLICK');
       if (data && data.price > 0) {
         setTicker(data);
         setErrorMsg(null);
+      } else if (data && data.status === 'MARKET_DATA_UNAVAILABLE') {
+        setErrorMsg(data.errorMessage || `Market price currently unavailable for ${targetSymbol}`);
       }
     } catch (err: unknown) {
-      console.warn(`[SignalsPage] Polling ticker for ${sym} paused:`, err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[SignalsPage] Failed to fetch price for ${targetSymbol}:`, msg);
+      setErrorMsg(`Failed to fetch price for ${targetSymbol}: ${msg}`);
     } finally {
       setIsFetchingPrice(false);
     }
-  }, []);
+  }, [selectedSymbol, isFetchingPrice]);
 
-  // Load strict session details
+  // Load strict session details (Timezone calculations only - zero external price fetches)
   const loadSessionDetails = useCallback(async (sym: string) => {
     try {
       const data = await api.getSessionDetails(sym);
@@ -408,19 +416,18 @@ export function SignalsPage({ health }: SignalsPageProps) {
   }, [checkTopTradeNotifications, addSignalsToHistory]);
 
   useEffect(() => {
-    loadTicker(selectedSymbol);
+    // Zero automated price requests on load, mount, navigation, focus or timers
     loadSessionDetails(selectedSymbol);
     loadActiveSignals();
 
-    // Auto-refresh market price, session state and signals every 15s
+    // Periodic check for session state and active signals only (Zero price requests)
     const interval = setInterval(() => {
-      loadTicker(selectedSymbol);
       loadSessionDetails(selectedSymbol);
       loadActiveSignals();
     }, 15000);
 
     return () => clearInterval(interval);
-  }, [selectedSymbol, loadTicker, loadSessionDetails, loadActiveSignals]);
+  }, [selectedSymbol, loadSessionDetails, loadActiveSignals]);
 
   // Handle Request Notification Permission
   const handleRequestNotificationPermission = async () => {
@@ -509,13 +516,15 @@ export function SignalsPage({ health }: SignalsPageProps) {
 
           <div className="flex items-center gap-2 shrink-0">
             <button
+              id="btn-signals-refresh"
               onClick={() => {
-                loadTicker(selectedSymbol);
+                if (isFetchingPrice) return;
+                fetchForexMarketPrice(selectedSymbol);
                 loadSessionDetails(selectedSymbol);
                 loadActiveSignals();
               }}
               disabled={isFetchingPrice}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-lg border border-slate-700 transition flex items-center gap-1.5"
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 text-xs font-medium rounded-lg border border-slate-700 transition flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isFetchingPrice ? 'animate-spin' : ''}`} />
               Refresh
@@ -523,8 +532,9 @@ export function SignalsPage({ health }: SignalsPageProps) {
 
             {activeSignals.length > 0 && (
               <button
+                id="btn-signals-clear"
                 onClick={handleClearSignals}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-rose-950/40 text-slate-400 hover:text-rose-300 text-xs font-medium rounded-lg border border-slate-700 hover:border-rose-800/50 transition flex items-center gap-1.5"
+                className="px-3 py-1.5 bg-slate-800 hover:bg-rose-950/40 text-slate-400 hover:text-rose-300 text-xs font-medium rounded-lg border border-slate-700 hover:border-rose-800/50 transition flex items-center gap-1.5 cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 Clear
@@ -542,6 +552,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
           setErrorMsg(null);
         }}
         onScan={handleGenerateSignal}
+        onFetchPrice={fetchForexMarketPrice}
         isScanning={isGenerating}
         scanResult={lastGenResult}
         ticker={ticker}

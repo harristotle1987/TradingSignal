@@ -23,6 +23,12 @@ import { Gate32AdaptiveCandidateSelection } from '../signals/Gate32AdaptiveCandi
 import { Gate34ExecutionFrictionStressTest } from '../signals/Gate34ExecutionFrictionStressTest.js';
 import { Gate35SignalFunnelAnalytics } from '../signals/Gate35SignalFunnelAnalytics.js';
 import { Gate36ConfigurableSignalFrequency } from '../signals/Gate36ConfigurableSignalFrequency.js';
+import { Gate2MTFConfluence } from '../signals/Gate2MTFConfluence.js';
+import { Gate3PreliminaryScreen } from '../signals/Gate3PreliminaryScreen.js';
+import { Gate4RequestBudget } from '../signals/Gate4RequestBudget.js';
+import { Gate5DeepCandidateSelection } from '../signals/Gate5DeepCandidateSelection.js';
+import { Gate6ProgressiveMTF } from '../signals/Gate6ProgressiveMTF.js';
+import { Gate7FinalTradeValidation } from '../signals/Gate7FinalTradeValidation.js';
 import { serverConfig } from '../config.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
 import { marketCache } from '../market/CacheStore.js';
@@ -1677,5 +1683,252 @@ const updateFrequencyHandler = async (req: Request, res: Response) => {
 
 router.post('/signals/frequency-config', adminAuthMiddleware, updateFrequencyHandler);
 router.put('/signals/frequency-config', adminAuthMiddleware, updateFrequencyHandler);
+
+/**
+ * GATE 3 — CHEAP PRELIMINARY SCREEN
+ * GET /api/signals/gate3/screen/:symbol
+ * Evaluates cheap preliminary screening factors (Liquidity, Volume, Trend, Momentum, Volatility, Spread).
+ * Does NOT generate a trade signal or request full MTF history.
+ */
+router.get('/signals/gate3/screen/:symbol', async (req: Request, res: Response) => {
+  try {
+    const symbol = (req.params.symbol || 'BTCUSDT').toUpperCase();
+    const htf1h = await marketDataManager.getCandles(symbol, undefined, '1h', 50, false);
+    const liveTicker = await marketDataManager.getPrice(symbol, undefined, false).catch(() => null);
+
+    const gate3Result = Gate3PreliminaryScreen.screenAsset(symbol, htf1h, liveTicker);
+    res.status(200).json({
+      success: true,
+      gate: 'GATE_3_CHEAP_PRELIMINARY_SCREEN',
+      symbol,
+      data: gate3Result,
+      isTradeSignal: false, // Strict safety guarantee: preliminary scores never create trade signals
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to run Gate 3 preliminary screening',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * GATE 4 — PROVIDER QUOTA / REQUEST BUDGET GATE
+ * GET /api/signals/gate4/budget
+ * Returns current provider request tracking, error & timeout counts, latency, and dynamic deep analysis allowance.
+ */
+router.get('/signals/gate4/budget', async (req: Request, res: Response) => {
+  try {
+    const budgetEvaluation = Gate4RequestBudget.evaluateBudget();
+    res.status(200).json({
+      success: true,
+      gate: 'GATE_4_PROVIDER_QUOTA_BUDGET',
+      data: budgetEvaluation,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to evaluate Gate 4 provider budget',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * GATE 5 — DEEP CANDIDATE SELECTION
+ * GET /api/signals/gate5/preview
+ * Runs preliminary screening on a cross-asset subset and selects the top 8–12 deep candidates
+ * ranked by Trend (25%), Momentum (20%), Volume (15%), Volatility Quality (15%), Liquidity (10%), Structure (15%).
+ */
+router.get('/signals/gate5/preview', async (req: Request, res: Response) => {
+  try {
+    const sampleUniverse = [
+      'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT', 'DOGEUSDT', 'LINKUSDT', 'AVAXUSDT', 'SUIUSDT',
+      'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'NZDUSD', 'EURGBP', 'GBPJPY',
+      'AAPL', 'NVDA', 'MSFT', 'TSLA', 'AMZN', 'GOOGL', 'META', 'LLY', 'V', 'JPM'
+    ];
+
+    // Screen each with Gate 3 using available 1H candles
+    const preliminaryCandidates: Array<{
+      asset: string;
+      htf1h: any[];
+      preliminaryScore: number;
+      direction: any;
+      gate3Result: any;
+    }> = [];
+
+    await Promise.all(
+      sampleUniverse.map(async (asset) => {
+        try {
+          const htf1h = await marketDataManager.getCandles(asset, undefined, '1h', 50, false);
+          if (!htf1h || htf1h.length < 15) return;
+          const liveTicker = await marketDataManager.getPrice(asset, undefined, false).catch(() => null);
+          const g3 = Gate3PreliminaryScreen.screenAsset(asset, htf1h, liveTicker);
+          if (g3.passed) {
+            preliminaryCandidates.push({
+              asset,
+              htf1h,
+              preliminaryScore: g3.preliminaryScore,
+              direction: g3.direction,
+              gate3Result: g3,
+            });
+          }
+        } catch {}
+      })
+    );
+
+    const gate4Budget = Gate4RequestBudget.evaluateBudget();
+    const gate5Result = Gate5DeepCandidateSelection.selectCandidates(
+      preliminaryCandidates,
+      gate4Budget.maxDeepCandidates
+    );
+
+    res.status(200).json({
+      success: true,
+      gate: 'GATE_5_DEEP_CANDIDATE_SELECTION',
+      budgetHealth: gate4Budget.overallBudgetHealth,
+      maxAllowedByBudget: gate4Budget.maxDeepCandidates,
+      preliminaryPoolCount: preliminaryCandidates.length,
+      data: gate5Result,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to run Gate 5 deep candidate selection preview',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * GET /api/signals/gate6/mtf-preview
+ * Runs Gate 6 Progressive Deep MTF Analysis on top 3-5 candidates.
+ * Demonstrates Layer 1 early termination and Layer 2 confirmation.
+ */
+router.get('/signals/gate6/mtf-preview', async (_req: Request, res: Response) => {
+  try {
+    const sampleUniverse = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'EUR/USD', 'GBP/USD', 'XAU/USD', 'AAPL'];
+    const candidatesInput: Array<{
+      asset: string;
+      direction: 'BUY' | 'SELL';
+      htf1h: any[];
+      preliminaryScore: number;
+    }> = [];
+
+    await Promise.all(
+      sampleUniverse.slice(0, 5).map(async (asset) => {
+        try {
+          const htf1h = await marketDataManager.getCandles(asset, undefined, '1h', 50, false);
+          if (!htf1h || htf1h.length < 15) return;
+          const liveTicker = await marketDataManager.getPrice(asset, undefined, false).catch(() => null);
+          const g3 = Gate3PreliminaryScreen.screenAsset(asset, htf1h, liveTicker);
+          candidatesInput.push({
+            asset,
+            direction: (g3.direction as 'BUY' | 'SELL') || 'BUY',
+            htf1h,
+            preliminaryScore: g3.preliminaryScore,
+          });
+        } catch {}
+      })
+    );
+
+    const gate6Result = await Gate6ProgressiveMTF.analyzeCandidates(candidatesInput, 5);
+
+    res.status(200).json({
+      success: true,
+      gate: 'GATE_6_PROGRESSIVE_DEEP_MTF',
+      inputCandidatesCount: candidatesInput.length,
+      data: gate6Result,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to run Gate 6 progressive MTF preview',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * GET /api/signals/gate7/validate/:symbol
+ * Runs Gate 7 13-Point Mandatory Hard Gates validation on a given symbol.
+ */
+router.get('/signals/gate7/validate/:symbol', async (req: Request, res: Response) => {
+  try {
+    const symbol = decodeURIComponent(req.params.symbol);
+    const liveTicker = await marketDataManager.getPrice(symbol, undefined, true);
+    if (!liveTicker || liveTicker.price <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Unable to fetch live ticker for ${symbol}`,
+      });
+    }
+
+    const intervals = ['1h', '15m', '5m', '4h'];
+    const candlesMap: Record<string, any[]> = {};
+    for (const interval of intervals) {
+      try {
+        const c = await marketDataManager.getCandles(symbol, undefined, interval, 50, false);
+        if (c && c.length > 0) candlesMap[interval] = c;
+      } catch {}
+    }
+
+    const price = liveTicker.price;
+    const isCrypto = symbol.includes('USDT') || symbol.includes('BTC');
+    const slOffset = price * (isCrypto ? 0.02 : 0.005);
+    const tpOffset = slOffset * 2.0;
+
+    const gate7Result = Gate7FinalTradeValidation.validateCandidate({
+      symbol,
+      direction: 'BUY',
+      entryPrice: price,
+      stopLoss: price - slOffset,
+      takeProfit: price + tpOffset,
+      tp1: price + tpOffset,
+      tp2: price + (tpOffset * 1.5),
+      tp3: price + (tpOffset * 2.0),
+      riskRewardRatio: 2.0,
+      netRiskRewardRatio: 1.8,
+      score: 82,
+      candlesMap,
+      liveTicker,
+      atr: slOffset,
+      primaryStrategy: 'Multi-Timeframe Trend Confluence',
+      marketRegime: 'TRENDING_UP',
+      activeSignals: signalEngine.activeSignals,
+      minimumRRThreshold: 1.5,
+      minimumScoreThreshold: 75,
+    });
+
+    res.status(200).json({
+      success: true,
+      gate: 'GATE_7_FINAL_TRADE_VALIDATION',
+      symbol,
+      data: gate7Result,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: `Failed to run Gate 7 validation for ${req.params.symbol}`,
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
 
 export default router;

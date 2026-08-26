@@ -7,6 +7,7 @@ import { Request, Response, Router } from 'express';
 import { marketDataManager } from '../market/MarketDataManager.js';
 import { logger } from '../logger.js';
 import { MarketSessionManager } from '../market/MarketSessionManager.js';
+import { requestRegistry } from '../market/CacheStore.js';
 
 const router = Router();
 
@@ -81,7 +82,9 @@ router.get('/market/finnhub/price', async (req: Request, res: Response) => {
  */
 router.get('/market/twelvedata/price', async (req: Request, res: Response) => {
   const symbol = (req.query.symbol as string) || 'EURUSD';
-  const ticker = await marketDataManager.getPrice(symbol, 'twelvedata');
+  const reasonParam = (req.query.reason as string) || 'USER_CLICK';
+  const reason = reasonParam === 'AUTOMATED_SCANNER' ? 'AUTOMATED_SCANNER' : 'USER_CLICK';
+  const ticker = await marketDataManager.getPrice(symbol, 'twelvedata', false, reason);
 
   if (ticker.status === 'MARKET_DATA_UNAVAILABLE') {
     res.status(503).json(ticker);
@@ -95,7 +98,9 @@ router.get('/market/twelvedata/price', async (req: Request, res: Response) => {
  */
 router.get('/market/forex/price', async (req: Request, res: Response) => {
   const symbol = (req.query.symbol as string) || 'EURUSD';
-  const ticker = await marketDataManager.getPrice(symbol, 'twelvedata');
+  const reasonParam = (req.query.reason as string) || 'USER_CLICK';
+  const reason = reasonParam === 'AUTOMATED_SCANNER' ? 'AUTOMATED_SCANNER' : 'USER_CLICK';
+  const ticker = await marketDataManager.getPrice(symbol, 'twelvedata', false, reason);
 
   if (ticker.status === 'MARKET_DATA_UNAVAILABLE') {
     res.status(503).json(ticker);
@@ -111,8 +116,10 @@ router.get('/market/forex/price', async (req: Request, res: Response) => {
 router.get('/market/price', async (req: Request, res: Response) => {
   const symbol = (req.query.symbol as string) || 'BTCUSDT';
   const provider = req.query.provider as string | undefined;
+  const reasonParam = (req.query.reason as string) || 'USER_CLICK';
+  const reason = reasonParam === 'AUTOMATED_SCANNER' ? 'AUTOMATED_SCANNER' : 'USER_CLICK';
 
-  const ticker = await marketDataManager.getPrice(symbol, provider);
+  const ticker = await marketDataManager.getPrice(symbol, provider, false, reason);
 
   if (ticker.status === 'MARKET_DATA_UNAVAILABLE') {
     res.status(503).json(ticker);
@@ -233,6 +240,23 @@ router.post('/market/time', (req: Request, res: Response) => {
       message: err instanceof Error ? err.message : String(err),
     });
   }
+});
+
+/**
+ * GET /api/market/requests
+ * Returns all recorded outbound external requests from the audit log.
+ */
+router.get('/market/requests', (_req: Request, res: Response) => {
+  res.status(200).json(requestRegistry.getRecords());
+});
+
+/**
+ * POST /api/market/requests/clear
+ * Clears the external request registry logs.
+ */
+router.post('/market/requests/clear', (_req: Request, res: Response) => {
+  requestRegistry.clear();
+  res.status(200).json({ success: true, message: 'External request audit logs cleared' });
 });
 
 export default router;

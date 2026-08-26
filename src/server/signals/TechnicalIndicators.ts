@@ -5,6 +5,7 @@
  */
 
 import { NormalizedCandle } from '../../types/index.js';
+import { marketCache, CACHE_TTL } from '../market/CacheStore.js';
 
 export interface MACDResult {
   macdLine: number;
@@ -19,11 +20,34 @@ export interface BollingerBandsResult {
 }
 
 export class TechnicalIndicators {
+  private static getFingerprint(candles: NormalizedCandle[]): string | null {
+    if (!candles || candles.length === 0) return null;
+    const first = candles[0];
+    const last = candles[candles.length - 1];
+    return `${candles.length}:${first.timestamp}:${last.timestamp}:${last.close}`;
+  }
+
+  private static getCachedResult<T>(methodName: string, fingerprint: string | null, params: string): T | null {
+    if (!fingerprint) return null;
+    const key = `indicator:${methodName}:${fingerprint}:${params}`;
+    return marketCache.getGeneric<T>(key);
+  }
+
+  private static cacheResult(methodName: string, fingerprint: string | null, params: string, value: any): void {
+    if (!fingerprint || value === null || value === undefined) return;
+    const key = `indicator:${methodName}:${fingerprint}:${params}`;
+    marketCache.setGeneric(key, value, CACHE_TTL.INDICATORS);
+  }
   /**
    * Exponential Moving Average (EMA)
    * Expects candles ordered chronologically ascending (oldest first, newest last).
    */
   static calculateEMA(candles: NormalizedCandle[], period: number): number[] {
+    const fp = this.getFingerprint(candles);
+    const params = `${period}`;
+    const cached = this.getCachedResult<number[]>('calculateEMA', fp, params);
+    if (cached) return cached;
+
     if (candles.length < period) return [];
 
     const k = 2 / (period + 1);
@@ -43,6 +67,7 @@ export class TechnicalIndicators {
       emaValues.push(currentEma);
     }
 
+    this.cacheResult('calculateEMA', fp, params, emaValues);
     return emaValues;
   }
 
@@ -50,6 +75,11 @@ export class TechnicalIndicators {
    * Relative Strength Index (RSI) using Wilder's Smoothing
    */
   static calculateRSI(candles: NormalizedCandle[], period = 14): number[] {
+    const fp = this.getFingerprint(candles);
+    const params = `${period}`;
+    const cached = this.getCachedResult<number[]>('calculateRSI', fp, params);
+    if (cached) return cached;
+
     if (candles.length <= period) return [];
 
     const rsiValues: number[] = [];
@@ -85,6 +115,7 @@ export class TechnicalIndicators {
       }
     }
 
+    this.cacheResult('calculateRSI', fp, params, rsiValues);
     return rsiValues;
   }
 
@@ -97,6 +128,11 @@ export class TechnicalIndicators {
     slowPeriod = 26,
     signalPeriod = 9
   ): MACDResult | null {
+    const fp = this.getFingerprint(candles);
+    const params = `${fastPeriod}:${slowPeriod}:${signalPeriod}`;
+    const cached = this.getCachedResult<MACDResult>('calculateMACD', fp, params);
+    if (cached) return cached;
+
     if (candles.length < slowPeriod + signalPeriod) return null;
 
     const fastEma = this.calculateEMA(candles, fastPeriod);
@@ -131,17 +167,25 @@ export class TechnicalIndicators {
     const latestMacd = macdLineSeries[macdLineSeries.length - 1];
     const histogram = latestMacd - signalLine;
 
-    return {
+    const result = {
       macdLine: latestMacd,
       signalLine,
       histogram,
     };
+
+    this.cacheResult('calculateMACD', fp, params, result);
+    return result;
   }
 
   /**
    * Average Directional Index (ADX)
    */
   static calculateADX(candles: NormalizedCandle[], period = 14): { adx: number; pdi: number; mdi: number } | null {
+    const fp = this.getFingerprint(candles);
+    const params = `${period}`;
+    const cached = this.getCachedResult<{ adx: number; pdi: number; mdi: number }>('calculateADX', fp, params);
+    if (cached) return cached;
+
     if (candles.length <= period * 2) return null;
 
     let trSum = 0;
@@ -223,13 +267,20 @@ export class TechnicalIndicators {
       adx = (adx * (period - 1) + dxList[i]) / period;
     }
 
-    return { adx, pdi, mdi };
+    const result = { adx, pdi, mdi };
+    this.cacheResult('calculateADX', fp, params, result);
+    return result;
   }
 
   /**
    * Average True Range (ATR)
    */
   static calculateATR(candles: NormalizedCandle[], period = 14): number {
+    const fp = this.getFingerprint(candles);
+    const params = `${period}`;
+    const cached = this.getCachedResult<number>('calculateATR', fp, params);
+    if (cached !== null && cached !== undefined) return cached;
+
     if (candles.length <= period) return 0; // Require sufficient candles to compute ATR
 
     const trs: number[] = [];
@@ -256,6 +307,7 @@ export class TechnicalIndicators {
       atr = (atr * (period - 1) + trs[i]) / period;
     }
 
+    this.cacheResult('calculateATR', fp, params, atr);
     return atr;
   }
 
@@ -549,9 +601,22 @@ export class TechnicalIndicators {
     swingHigh: number;
     swingLow: number;
   } {
+    const fp = this.getFingerprint(candles);
+    const params = `${lookback}`;
+    const cached = this.getCachedResult<{
+      structureBias: 'BULLISH' | 'BEARISH' | 'RANGE';
+      higherHighsCount: number;
+      higherLowsCount: number;
+      lowerHighsCount: number;
+      lowerLowsCount: number;
+      swingHigh: number;
+      swingLow: number;
+    }>('calculateMarketStructure', fp, params);
+    if (cached) return cached;
+
     if (candles.length < 6) {
-      return {
-        structureBias: 'RANGE',
+      const fallbackResult = {
+        structureBias: 'RANGE' as const,
         higherHighsCount: 0,
         higherLowsCount: 0,
         lowerHighsCount: 0,
@@ -559,6 +624,8 @@ export class TechnicalIndicators {
         swingHigh: 0,
         swingLow: 0,
       };
+      this.cacheResult('calculateMarketStructure', fp, params, fallbackResult);
+      return fallbackResult;
     }
 
     const slice = candles.slice(-Math.min(candles.length, lookback));
@@ -588,7 +655,7 @@ export class TechnicalIndicators {
       structureBias = 'BEARISH';
     }
 
-    return {
+    const result = {
       structureBias,
       higherHighsCount,
       higherLowsCount,
@@ -597,6 +664,9 @@ export class TechnicalIndicators {
       swingHigh,
       swingLow,
     };
+
+    this.cacheResult('calculateMarketStructure', fp, params, result);
+    return result;
   }
 
   /**

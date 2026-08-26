@@ -619,7 +619,7 @@ export class SignalLifecycleManager {
         if (currentState !== 'SL_HIT' && currentState !== 'STOPPED_OUT' && currentState !== 'TP3_HIT' && currentState !== 'COMPLETED' && currentState !== 'AMBIGUOUS') {
           let liveTicker: NormalizedTicker | null = null;
           try {
-            liveTicker = await marketDataManager.getPrice(sig.symbol, providerName, true);
+            liveTicker = await marketDataManager.getPrice(sig.symbol, providerName, true, 'AUTOMATED_SCANNER');
           } catch (err) {
             logger.debug(`[SignalLifecycle] Live quote lookup failed for ${sig.symbol} from ${providerName}:`, { error: String(err) });
           }

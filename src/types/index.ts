@@ -246,6 +246,44 @@ export interface ScannerFunnelCounters {
   candidatesRejectedFinal: number;
   signalsGenerated: number;
   signalsAccepted: number;
+  assetsReceived?: number;
+  assetsCached?: number;
+  cacheHits?: number;
+  cacheMisses?: number;
+  preliminaryCandidates?: number;
+  quotaRemainingBeforeDeepScan?: number;
+  deepCandidatesAllowed?: number;
+  deepCandidatesEvaluated?: number;
+  mtfLayer1Evaluated?: number;
+  mtfLayer2Evaluated?: number;
+  executionChecks?: number;
+  hardGateFailures?: number;
+  finalScores?: Array<{
+    symbol: string;
+    direction: 'BUY' | 'SELL';
+    score: number;
+    classification: string;
+    passed: boolean;
+    rejectionReason?: string | null;
+  }>;
+  providerRequests?: number;
+  providerErrors?: number;
+  providerTimeouts?: number;
+  scanDuration?: number;
+  stage0Input?: number;
+  stage0Output?: number;
+  stage1Input?: number;
+  stage1Output?: number;
+  gate4BudgetHealth?: string;
+  gate4MaxDeepAllowed?: number;
+  gate5Input?: number;
+  gate5Output?: number;
+  deepMtfInput?: number;
+  deepMtfOutput?: number;
+  finalValidationInput?: number;
+  finalValidationOutput?: number;
+  finalScoreGateInput?: number;
+  finalScoreGateOutput?: number;
 }
 
 export interface SignalGenerationResponse {

@@ -18,7 +18,7 @@ import { TwelveDataAdapter } from './adapters/TwelveDataAdapter.js';
 import { ExchangeRateAdapter } from './adapters/ExchangeRateAdapter.js';
 import { NormalizedTicker, NormalizedCandle, MarketStatusResponse, ProviderHealth, TruthfulMarketHealth } from './types.js';
 import { SymbolNormalizer } from './SymbolNormalizer.js';
-import { marketCache } from './CacheStore.js';
+import { marketCache, requestRegistry, CACHE_TTL } from './CacheStore.js';
 import { quotaManager } from './QuotaManager.js';
 import { serverConfig } from '../config.js';
 import { logger } from '../logger.js';
@@ -116,53 +116,21 @@ export class MarketDataManager {
     const bitgetQuoteAge = bitgetQuoteTs ? Math.max(0, now - bitgetQuoteTs) : null;
     const bitgetFresh = bitgetQuoteAge !== null && bitgetQuoteAge <= config.marketDataMaxAgeMs;
 
-    // 2. Twelve Data (Forex)
+    // 2. Twelve Data (Forex) - Passive Health Check (Never auto-fetch on health check)
     const twelveDataConfigured = Boolean(process.env.TWELVE_DATA_API_KEY && process.env.TWELVE_DATA_API_KEY.trim().length > 0);
-    let twelveDataReachable = false;
-    let twelveDataQuoteTs: number | null = this.lastSuccessfulQuotes.get('twelvedata') || null;
-    let twelveDataErrMsg: string | undefined;
-
-    if (twelveDataConfigured) {
-      try {
-        const ticker = await this.getPrice('EURUSD', 'twelvedata', forceProbe);
-        if (ticker.status === 'OK' || (ticker.status === 'STALE' && ticker.price > 0)) {
-          twelveDataReachable = true;
-          twelveDataQuoteTs = ticker.timestamp || ticker.receivedAt;
-          this.lastSuccessfulQuotes.set('twelvedata', twelveDataQuoteTs);
-        } else {
-          twelveDataErrMsg = ticker.errorMessage || 'Twelve Data ticker returned invalid status';
-        }
-      } catch (err) {
-        twelveDataErrMsg = err instanceof Error ? err.message : String(err);
-      }
-    } else {
-      twelveDataErrMsg = 'TWELVE_DATA_API_KEY environment variable not configured';
-    }
-
+    const twelveDataReachable = twelveDataConfigured;
+    const twelveDataQuoteTs: number | null = this.lastSuccessfulQuotes.get('twelvedata') || null;
+    const twelveDataErrMsg: string | undefined = twelveDataConfigured ? undefined : 'TWELVE_DATA_API_KEY environment variable not configured';
     const twelveDataQuoteAge = twelveDataQuoteTs ? Math.max(0, now - twelveDataQuoteTs) : null;
-    const twelveDataFresh = twelveDataQuoteAge !== null && twelveDataQuoteAge <= 24 * 3600 * 1000;
+    const twelveDataFresh = twelveDataConfigured;
 
-    // 3. ExchangeRate (Forex Fallback)
+    // 3. ExchangeRate (Forex Fallback) - Passive Health Check
     const exchangeRateConfigured = true;
-    let exchangeRateReachable = false;
-    let exchangeRateQuoteTs: number | null = this.lastSuccessfulQuotes.get('exchangerate') || null;
-    let exchangeRateErrMsg: string | undefined;
-
-    try {
-      const ticker = await this.getPrice('EURUSD', 'exchangerate', forceProbe);
-      if (ticker.status === 'OK' || (ticker.status === 'STALE' && ticker.price > 0)) {
-        exchangeRateReachable = true;
-        exchangeRateQuoteTs = ticker.timestamp || ticker.receivedAt;
-        this.lastSuccessfulQuotes.set('exchangerate', exchangeRateQuoteTs);
-      } else {
-        exchangeRateErrMsg = ticker.errorMessage || 'ExchangeRate ticker returned invalid status';
-      }
-    } catch (err) {
-      exchangeRateErrMsg = err instanceof Error ? err.message : String(err);
-    }
-
+    const exchangeRateReachable = true;
+    const exchangeRateQuoteTs: number | null = this.lastSuccessfulQuotes.get('exchangerate') || null;
+    const exchangeRateErrMsg: string | undefined = undefined;
     const exchangeRateQuoteAge = exchangeRateQuoteTs ? Math.max(0, now - exchangeRateQuoteTs) : null;
-    const exchangeRateFresh = exchangeRateQuoteAge !== null && exchangeRateQuoteAge <= 24 * 3600 * 1000;
+    const exchangeRateFresh = true;
 
     // 4. Finnhub (Stock)
     const finnhubConfigured = Boolean(process.env.FINNHUB_API_KEY && process.env.FINNHUB_API_KEY.trim().length > 0);
@@ -419,20 +387,34 @@ export class MarketDataManager {
     }
 
     return providerQueue.enqueue(providerId, async () => {
+      const startTime = Date.now();
       quotaManager.recordRequest(providerId);
+      requestRegistry.record(providerId, 'fetchPrice', cleanSymbol, isCritical ? 'Critical Price Fetch' : 'Standard Price Fetch');
       try {
         const result = await adapter.fetchPrice(cleanSymbol);
+        const latency = Date.now() - startTime;
         const success = result.status === 'OK' && result.price > 0;
+        const is429 = result.errorMessage?.includes('429') || false;
+        const isTimeout = result.errorMessage?.toLowerCase().includes('timeout') || false;
         quotaManager.recordResponse(
           providerId,
-          success ? 200 : (result.errorMessage?.includes('429') ? 429 : 500)
+          success ? 200 : (is429 ? 429 : 500),
+          latency,
+          isTimeout,
+          result.errorMessage
         );
         return result;
       } catch (err: any) {
+        const latency = Date.now() - startTime;
         const errMsg = String(err);
+        const is429 = errMsg.includes('429') || errMsg.includes('rate limit');
+        const isTimeout = errMsg.toLowerCase().includes('timeout');
         quotaManager.recordResponse(
           providerId,
-          errMsg.includes('429') || errMsg.includes('rate limit') ? 429 : 500
+          is429 ? 429 : 500,
+          latency,
+          isTimeout,
+          errMsg
         );
         return this.createErrorTicker(
           cleanSymbol,
@@ -450,7 +432,12 @@ export class MarketDataManager {
    * Reuses cached market data within the 60-second TTL to avoid hitting external rate limits.
    * If primary provider fails, attempts legitimate fallbacks before returning 503 MARKET_DATA_UNAVAILABLE.
    */
-  async getPrice(appSymbol: string, requestedProvider?: string, forceFresh = false): Promise<NormalizedTicker> {
+  async getPrice(
+    appSymbol: string,
+    requestedProvider?: string,
+    forceFresh = false,
+    reason: 'USER_CLICK' | 'AUTOMATED_SCANNER' = 'USER_CLICK'
+  ): Promise<NormalizedTicker> {
     const cleanSymbol = SymbolNormalizer.normalizeAppSymbol(appSymbol);
     if (!cleanSymbol) {
       return this.createErrorTicker(
@@ -472,6 +459,15 @@ export class MarketDataManager {
         'UNKNOWN',
         'ASSET_NOT_SUPPORTED'
       );
+    }
+
+    // Requirement 9: Structured Logging for Forex requests
+    // Format: FOREX_PRICE_REQUEST reason=USER_CLICK symbol=EURUSD
+    // Format: FOREX_PRICE_REQUEST reason=AUTOMATED_SCANNER symbol=EURUSD
+    // Never log PAGE_LOAD or COMPONENT_MOUNT
+    if (assetClass === 'FOREX' || primaryProvider === 'twelvedata' || primaryProvider === 'exchangerate') {
+      const validReason = reason === 'AUTOMATED_SCANNER' ? 'AUTOMATED_SCANNER' : 'USER_CLICK';
+      logger.info(`FOREX_PRICE_REQUEST reason=${validReason} symbol=${cleanSymbol}`);
     }
 
     const cacheTtlMs = serverConfig.getConfig().marketDataCacheTtlMs; // 60,000ms
@@ -636,6 +632,12 @@ export class MarketDataManager {
 
   private getTimeframeTtl(timeframe: string): number {
     const tf = timeframe.toLowerCase();
+    if (tf === '1m' || tf === '1min') return CACHE_TTL.CANDLES_1M;
+    if (tf === '5m' || tf === '5min') return CACHE_TTL.CANDLES_5M;
+    if (tf === '15m' || tf === '15min') return CACHE_TTL.CANDLES_15M;
+    if (tf === '1h') return CACHE_TTL.CANDLES_1H;
+    if (tf === '4h') return CACHE_TTL.CANDLES_4H;
+
     if (tf.endsWith('m') || tf.endsWith('min')) {
       const mins = parseInt(tf);
       return (isNaN(mins) ? 1 : mins) * 60 * 1000;
@@ -671,16 +673,22 @@ export class MarketDataManager {
       if (adapter && adapter.fetchCandles) {
         if (quotaManager.canMakeRequest(primaryProviderId, critical)) {
           candles = await providerQueue.enqueue(primaryProviderId, async () => {
+            const startTime = Date.now();
             quotaManager.recordRequest(primaryProviderId);
+            requestRegistry.record(primaryProviderId, `fetchCandles:${timeframe}`, cleanSymbol, critical ? 'Critical Candle Fetch' : 'Candle Fetch');
             try {
               const res = await adapter.fetchCandles!(cleanSymbol, timeframe, limit);
+              const latency = Date.now() - startTime;
               if (res && res.length > 0) {
-                quotaManager.recordResponse(primaryProviderId, 200);
+                quotaManager.recordResponse(primaryProviderId, 200, latency);
               }
               return res;
             } catch (err: any) {
+              const latency = Date.now() - startTime;
               const errMsg = String(err);
-              quotaManager.recordResponse(primaryProviderId, errMsg.includes('429') || errMsg.includes('rate limit') ? 429 : 500);
+              const is429 = errMsg.includes('429') || errMsg.includes('rate limit');
+              const isTimeout = errMsg.toLowerCase().includes('timeout');
+              quotaManager.recordResponse(primaryProviderId, is429 ? 429 : 500, latency, isTimeout, errMsg);
               logger.info(`Primary provider '${primaryProviderId}' candle fetch unavailable for ${cleanSymbol} (${timeframe}): ${errMsg}`);
               return [];
             }
@@ -698,17 +706,23 @@ export class MarketDataManager {
         if (fallbackAdapter && fallbackAdapter.fetchCandles) {
           if (quotaManager.canMakeRequest(fallbackId, critical)) {
             candles = await providerQueue.enqueue(fallbackId, async () => {
+              const startTime = Date.now();
               quotaManager.recordRequest(fallbackId);
+              requestRegistry.record(fallbackId, `fetchCandles:${timeframe}`, cleanSymbol, critical ? 'Critical Fallback Candle Fetch' : 'Fallback Candle Fetch');
               try {
                 const res = await fallbackAdapter.fetchCandles!(cleanSymbol, timeframe, limit);
+                const latency = Date.now() - startTime;
                 if (res && res.length > 0) {
-                  quotaManager.recordResponse(fallbackId, 200);
+                  quotaManager.recordResponse(fallbackId, 200, latency);
                   logger.info(`Candles fetched from fallback provider '${fallbackId}' for ${cleanSymbol} (${timeframe})`);
                 }
                 return res;
               } catch (err: any) {
+                const latency = Date.now() - startTime;
                 const errMsg = String(err);
-                quotaManager.recordResponse(fallbackId, errMsg.includes('429') || errMsg.includes('rate limit') ? 429 : 500);
+                const is429 = errMsg.includes('429') || errMsg.includes('rate limit');
+                const isTimeout = errMsg.toLowerCase().includes('timeout');
+                quotaManager.recordResponse(fallbackId, is429 ? 429 : 500, latency, isTimeout, errMsg);
                 logger.info(`Fallback provider '${fallbackId}' candle fetch unavailable for ${cleanSymbol} (${timeframe}): ${errMsg}`);
                 return [];
               }

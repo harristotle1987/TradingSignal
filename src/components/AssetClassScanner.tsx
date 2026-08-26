@@ -119,6 +119,7 @@ interface AssetClassScannerProps {
   selectedSymbol: string;
   onSelectSymbol: (symbol: string) => void;
   onScan: () => Promise<void>;
+  onFetchPrice?: (symbol: string) => Promise<void>;
   isScanning: boolean;
   scanResult: SignalGenerationResponse | null;
   ticker: NormalizedTicker | null;
@@ -131,6 +132,7 @@ export function AssetClassScanner({
   selectedSymbol,
   onSelectSymbol,
   onScan,
+  onFetchPrice,
   isScanning,
   scanResult,
   ticker,
@@ -275,17 +277,35 @@ export function AssetClassScanner({
             <span className="text-slate-400 text-[10px] block">ACTIVE SYMBOL</span>
             <span className="text-white font-bold">{selectedSymbol}</span>
           </div>
-          <div className="border-l border-slate-800 pl-3 xs:pl-4">
-            <span className="text-slate-400 text-[10px] block">LIVE PRICE</span>
-            <span className="text-emerald-400 font-bold">
-              {isFetchingPrice ? (
-                <span className="text-slate-400 text-xs">Loading...</span>
-              ) : ticker && ticker.price ? (
-                ticker.price.toFixed(precision)
-              ) : (
-                '--'
-              )}
-            </span>
+          <div className="border-l border-slate-800 pl-3 xs:pl-4 flex items-center gap-2">
+            <div>
+              <span className="text-slate-400 text-[10px] block">LIVE PRICE</span>
+              <span className="text-emerald-400 font-bold">
+                {isFetchingPrice ? (
+                  <span className="text-slate-400 text-xs animate-pulse">Loading...</span>
+                ) : ticker && ticker.price ? (
+                  ticker.price.toFixed(precision)
+                ) : (
+                  '--'
+                )}
+              </span>
+            </div>
+            {onFetchPrice && (
+              <button
+                type="button"
+                id="btn-fetch-market-price"
+                onClick={() => {
+                  if (isFetchingPrice) return;
+                  onFetchPrice(selectedSymbol);
+                }}
+                disabled={isFetchingPrice}
+                title={`Fetch market price for ${selectedSymbol}`}
+                className="ml-1.5 px-2 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-[10px] text-slate-300 font-medium rounded border border-slate-700 transition flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed"
+              >
+                <Zap className={`w-3 h-3 text-emerald-400 ${isFetchingPrice ? 'animate-spin' : ''}`} />
+                <span>{isFetchingPrice ? 'Fetching...' : ticker?.price ? 'Refresh' : 'Get Price'}</span>
+              </button>
+            )}
           </div>
           <div className="border-l border-slate-800 pl-3 xs:pl-4 hidden xs:block">
             <span className="text-slate-400 text-[10px] block">SESSION STATUS</span>

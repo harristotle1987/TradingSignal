@@ -122,12 +122,22 @@ class ApiClient {
   /**
    * Fetch price for a symbol from MarketDataManager
    */
-  async fetchMarketPrice(symbol: string, provider?: string): Promise<NormalizedTicker> {
+  async fetchMarketPrice(symbol: string, provider?: string, reason: string = 'USER_CLICK'): Promise<NormalizedTicker> {
     const query = new URLSearchParams({ symbol });
     if (provider) {
       query.append('provider', provider);
     }
+    if (reason) {
+      query.append('reason', reason);
+    }
     return this.fetchJson<NormalizedTicker>(`/api/market/price?${query.toString()}`);
+  }
+
+  /**
+   * Explicit user-triggered Forex price fetch
+   */
+  async fetchForexMarketPrice(symbol: string = 'EURUSD'): Promise<NormalizedTicker> {
+    return this.fetchMarketPrice(symbol, undefined, 'USER_CLICK');
   }
 
   /**
@@ -412,6 +422,27 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify(params),
     });
+  }
+
+  /**
+   * Run Gate 3 cheap preliminary screening for a symbol
+   */
+  async getGate3Screen(symbol: string): Promise<any> {
+    return this.fetchJson<any>(`/api/signals/gate3/screen/${encodeURIComponent(symbol)}`);
+  }
+
+  /**
+   * Fetch Gate 4 provider quota and dynamic deep budget status
+   */
+  async getGate4Budget(): Promise<any> {
+    return this.fetchJson<any>('/api/signals/gate4/budget');
+  }
+
+  /**
+   * Fetch Gate 5 deep candidate selection preview
+   */
+  async getGate5Preview(): Promise<any> {
+    return this.fetchJson<any>('/api/signals/gate5/preview');
   }
 }
 
