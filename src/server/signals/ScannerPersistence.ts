@@ -1469,6 +1469,30 @@ export class ScannerPersistence {
   }
 
   /**
+   * Retrieves all sent signals from Firestore or local data.
+   */
+  static async getSentSignals(): Promise<PersistedSentSignal[]> {
+    this.init();
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      try {
+        const query = await firestore.collection(FIRESTORE_SIGNALS_COL).get();
+        if (!query.empty) {
+          const res: PersistedSentSignal[] = [];
+          query.forEach((doc) => {
+            const data = doc.data() as PersistedSentSignal;
+            if (data && data.id) res.push(data);
+          });
+          return res;
+        }
+      } catch (err) {
+        logger.warn('[ScannerPersistence] Failed to fetch sent signals from Firestore:', { error: String(err) });
+      }
+    }
+    return this.localData.sentSignals || [];
+  }
+
+  /**
    * Retrieves scanner settings.
    */
   static getSettings(): ScannerPersistenceData['settings'] {

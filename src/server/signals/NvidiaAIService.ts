@@ -22,16 +22,38 @@ export interface ConfluenceAnalysisResult {
   takeProfit: number;
   riskRewardRatio: number;
   technicalMetrics?: {
-    htfEma9: number;
-    htfEma21: number;
-    htfRsi: number;
-    ltfEma9: number;
-    ltfEma21: number;
-    ltfRsi: number;
-    ltfMacdHistogram: number;
-    atr: number;
+    htfEma9?: number;
+    htfEma21?: number;
+    htfRsi?: number;
+    ltfEma9?: number;
+    ltfEma21?: number;
+    ltfRsi?: number;
+    ltfMacdHistogram?: number;
+    atr?: number;
   };
   rejectionReason?: string;
+}
+
+export interface CandidateAnalysisPayload extends ConfluenceAnalysisResult {
+  assetClass?: string;
+  marketRegime?: string;
+  winRateEstimate?: number;
+}
+
+export interface CandidateRanking {
+  symbol: string;
+  rank: number;
+  isRecommended: boolean;
+  reasoning: string;
+  detectedRisks?: string;
+}
+
+export interface NvidiaBatchEvaluationResult {
+  aiAssessment: string;
+  rankings: CandidateRanking[];
+  recommendedSymbols: string[];
+  isAiValidated: boolean;
+  classification: AiQualitativeClassification;
 }
 
 export interface NvidiaEvaluationResult {
@@ -47,6 +69,178 @@ export interface NvidiaEvaluationResult {
 }
 
 export class NvidiaAIService {
+  /**
+   * Evaluates and ranks a batch of top 3-5 pre-calculated technical candidate setups using NVIDIA AI API.
+   * Enforces Gate 2 & Gate 3:
+   * - Receives ONLY top 3-5 candidates passing deep MTF & technical gates.
+   * - Compares candidates, identifies strongest setups, detects risks/conflicts, and ranks 1..N.
+   * - Returns 0 to 3 recommended candidates.
+   * - NEVER invents prices or overrides technical indicators / hard safety gates.
+   */
+  static async evaluateAndRankBatch(
+    candidates: CandidateAnalysisPayload[]
+  ): Promise<NvidiaBatchEvaluationResult> {
+    if (!candidates || candidates.length === 0) {
+      return {
+        aiAssessment: 'No candidates passed deep technical MTF & hard safety gates. Capital preservation active (0 setups recommended).',
+        rankings: [],
+        recommendedSymbols: [],
+        isAiValidated: false,
+        classification: 'UNAVAILABLE',
+      };
+    }
+
+    const apiKey = serverConfig.getNvidiaApiKey();
+    if (!apiKey || apiKey.trim().length === 0) {
+      return this.fallbackDeterministicRanking(
+        candidates,
+        'NVIDIA AI Standby (API key unconfigured). Algorithmic engine ranked setups deterministically.'
+      );
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      const candidatesFormatted = candidates.slice(0, 5).map((c) => ({
+        symbol: c.symbol,
+        direction: c.direction,
+        entryPrice: c.entryPrice,
+        stopLoss: c.stopLoss,
+        takeProfit: c.takeProfit,
+        riskRewardRatio: `${c.riskRewardRatio.toFixed(2)}:1`,
+        score: `${c.confidenceScore}/100`,
+        strategy: c.strategy || 'Multi-TF Trend Confluence',
+        marketRegime: c.marketRegime || 'STANDARD',
+        confluenceReasons: c.confluenceReasons.slice(0, 5),
+        technicalMetrics: c.technicalMetrics || {},
+      }));
+
+      const promptPayload = {
+        model: 'meta/llama-3.1-70b-instruct',
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are an institutional trading risk analyst evaluating top pre-validated technical candidate setups.\n' +
+              'Your tasks:\n' +
+              '1. Compare candidates based strictly on provided metrics and confluence reasons.\n' +
+              '2. Identify strongest setups and rank from strongest (rank 1) to weakest.\n' +
+              '3. Explain reasoning briefly (1-2 sentences per candidate).\n' +
+              '4. Detect any conflicting indicators or unusual risk conditions.\n' +
+              '5. Select 0 to 3 top recommended candidates based strictly on setup quality.\n\n' +
+              'STRICT MANDATES:\n' +
+              '- You MUST NEVER invent prices, market data, or indicators.\n' +
+              '- You MUST NEVER request unrelated market data.\n' +
+              '- You MUST NEVER override existing indicators, entry prices, SL, TP, or scores.\n' +
+              '- You MUST NEVER lower required score or bypass safety gates.\n' +
+              '- You MUST NEVER force a trade if setups present high risk — return 0 recommendations if appropriate.\n' +
+              '- Return at most 3 top recommended candidates (0 to 3).\n' +
+              '- You are an analysis/ranking layer, NOT the source of truth for market prices.\n\n' +
+              'Return your response strictly as a JSON object formatted as:\n' +
+              '{\n' +
+              '  "overallAssessment": "Brief comparison summary",\n' +
+              '  "rankings": [\n' +
+              '    {\n' +
+              '      "symbol": "SYMBOL_NAME",\n' +
+              '      "rank": 1,\n' +
+              '      "isRecommended": true,\n' +
+              '      "reasoning": "Brief explanation",\n' +
+              '      "detectedRisks": "Brief risk note or None"\n' +
+              '    }\n' +
+              '  ]\n' +
+              '}',
+          },
+          {
+            role: 'user',
+            content: `Evaluate and rank these top pre-screened technical setups:\n${JSON.stringify(candidatesFormatted, null, 2)}`,
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 600,
+      };
+
+      logger.info('[NVIDIA AI Batch Input Payload]', { candidateCount: candidates.length });
+
+      const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey.trim()}`,
+        },
+        body: JSON.stringify(promptPayload),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        logger.info('NVIDIA AI API returned non-200 response in batch evaluation', { status: response.status });
+        return this.fallbackDeterministicRanking(candidates, `NVIDIA AI API returned HTTP ${response.status}`);
+      }
+
+      const json = await response.json();
+      const content = json?.choices?.[0]?.message?.content?.trim();
+
+      if (!content) {
+        return this.fallbackDeterministicRanking(candidates, 'Empty response from NVIDIA AI API');
+      }
+
+      let cleanJsonStr = content;
+      const matchJson = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      if (matchJson) {
+        cleanJsonStr = matchJson[1];
+      }
+
+      try {
+        const parsed = JSON.parse(cleanJsonStr);
+        const rankingsArr: CandidateRanking[] = Array.isArray(parsed.rankings) ? parsed.rankings : [];
+
+        const recommendedSymbols = rankingsArr
+          .filter((r) => r.isRecommended)
+          .slice(0, 3)
+          .map((r) => r.symbol);
+
+        return {
+          aiAssessment: parsed.overallAssessment || `NVIDIA AI evaluated ${candidates.length} setup(s) and recommended ${recommendedSymbols.length} candidate(s).`,
+          rankings: rankingsArr,
+          recommendedSymbols,
+          isAiValidated: true,
+          classification: 'QUALITATIVE_CONFIRMATION',
+        };
+      } catch {
+        return this.fallbackDeterministicRanking(candidates, `NVIDIA AI qualitative summary: ${content.substring(0, 150)}...`);
+      }
+    } catch (err) {
+      const isAbort = err instanceof Error && err.name === 'AbortError';
+      logger.info('NVIDIA AI batch evaluation fallback', { reason: isAbort ? 'Timed out (8s)' : String(err) });
+      return this.fallbackDeterministicRanking(candidates, `NVIDIA AI ${isAbort ? 'Timeout' : 'Offline'}`);
+    }
+  }
+
+  private static fallbackDeterministicRanking(
+    candidates: CandidateAnalysisPayload[],
+    reason: string
+  ): NvidiaBatchEvaluationResult {
+    const sorted = [...candidates].sort((a, b) => b.confidenceScore - a.confidenceScore);
+    const topRecs = sorted.slice(0, 3);
+    const rankings: CandidateRanking[] = sorted.map((c, idx) => ({
+      symbol: c.symbol,
+      rank: idx + 1,
+      isRecommended: idx < 3,
+      reasoning: `Algorithmic score ${c.confidenceScore}/100 with ${c.riskRewardRatio.toFixed(2)}:1 R:R (${c.strategy || 'Multi-TF Trend'}).`,
+      detectedRisks: 'None',
+    }));
+
+    return {
+      aiAssessment: `${reason}. Algorithmic engine ranked setups deterministically.`,
+      rankings,
+      recommendedSymbols: topRecs.map((r) => r.symbol),
+      isAiValidated: false,
+      classification: 'UNAVAILABLE',
+    };
+  }
+
   /**
    * Evaluates the technical confluence result using NVIDIA AI API if configured.
    * Enforces Gate 33: AI Assessment is Qualitative, NOT Statistical Probability.

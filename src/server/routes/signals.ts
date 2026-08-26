@@ -12,6 +12,8 @@ import { SignalAuditStore } from '../signals/SignalAuditStore.js';
 import { SignalOutcomeLogger } from '../signals/SignalOutcomeLogger.js';
 import { SignalLifecycleManager } from '../signals/SignalLifecycleManager.js';
 import { StrategyPerformanceTracker, PERFORMANCE_LEGAL_DISCLAIMER } from '../signals/StrategyPerformanceTracker.js';
+import { HistoricalPerformanceManager } from '../signals/HistoricalPerformanceManager.js';
+import { HistoricalPerformanceRange } from '../../types/index.js';
 import { WalkForwardEngine } from '../signals/WalkForwardEngine.js';
 import { OpportunityFunnelStore } from '../signals/Gate26OpportunityFunnel.js';
 import { Gate27RegimeThresholds } from '../signals/Gate27RegimeThresholds.js';
@@ -1041,6 +1043,31 @@ router.delete('/signals', async (_req: Request, res: Response) => {
     message: 'Active signals cache cleared successfully',
     timestamp: Date.now(),
   });
+});
+
+/**
+ * GET /api/signals/historical-performance
+ * Retrieves authoritative completed signal performance metrics and trends over time.
+ * Supports query parameter range: "7D" | "30D" | "90D" | "ALL" (default: "30D").
+ */
+router.get('/signals/historical-performance', async (req: Request, res: Response) => {
+  try {
+    const rawRange = (req.query?.range as string || '30D').toUpperCase().trim();
+    const validRange: HistoricalPerformanceRange =
+      rawRange === '7D' || rawRange === '90D' || rawRange === 'ALL' ? rawRange : '30D';
+
+    const result = await HistoricalPerformanceManager.getPerformance(validRange);
+    res.status(200).json(result);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error('[API] Failed to retrieve historical performance:', { error: msg });
+    res.status(500).json({
+      success: false,
+      message: 'Unable to load historical performance. Please try again.',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
 });
 
 /**

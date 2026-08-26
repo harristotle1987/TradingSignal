@@ -36,7 +36,7 @@ import { Gate21WalkForwardValidation } from './Gate21WalkForwardValidation.js';
 import { Gate32AdaptiveCandidateSelection, Stage2CandidateInput } from './Gate32AdaptiveCandidateSelection.js';
 import { TargetQualityEvaluator, calculateTargetRr } from './TargetQualityEvaluator.js';
 import { Gate22MonteCarloSimulation } from './Gate22MonteCarloSimulation.js';
-import { NvidiaAIService } from './NvidiaAIService.js';
+import { NvidiaAIService, CandidateAnalysisPayload } from './NvidiaAIService.js';
 import { SignalValidator } from './SignalValidator.js';
 import { TradeRankingEngine, ValidatedCandidate } from './TradeRankingEngine.js';
 import { SignalLogger } from './SignalLogger.js';
@@ -608,18 +608,6 @@ export async function runStagedPipeline(
         stopLoss: finalSL, takeProfit: finalTP, riskRewardRatio: finalRR, technicalMetrics: scoring.technicalMetrics,
       };
 
-      let aiResult: any = {
-        aiAssessment: 'AI Confirmation Disabled by Policy.',
-        classification: 'UNAVAILABLE' as const,
-        refinedConfidence: scoring.score,
-        documentedConfidence: undefined as number | undefined,
-        isAiValidated: false,
-      };
-
-      if (thresholds.AIConfirmationMode !== 'DISABLED') {
-        aiResult = await NvidiaAIService.evaluate(candidatePayloadForAI);
-      }
-
       const winRate = ScoringEngine.estimateWinRate(scoring.score, finalRR, scoring.agreeingStrategiesCount);
       const expectancy = ScoringEngine.calculateExpectancy(winRate, finalRR);
 
@@ -691,24 +679,6 @@ export async function runStagedPipeline(
         continue;
       }
 
-      let aiRejected = false;
-      let aiRejectionReason = '';
-
-      if (thresholds.AIConfirmationMode === 'REQUIRED') {
-        if (aiResult.classification === 'QUALITATIVE_CONTRADICTION' || aiResult.classification === 'UNAVAILABLE' || !aiResult.isAiValidated) {
-          aiRejected = true;
-          aiRejectionReason = `AI qualitative assessment returned ${aiResult.classification}`;
-        } else if (aiResult.documentedConfidence !== undefined && aiResult.documentedConfidence < thresholds.minimumAiConfidence) {
-          aiRejected = true;
-          aiRejectionReason = `AI confidence (${aiResult.documentedConfidence}% < ${thresholds.minimumAiConfidence}%)`;
-        }
-      }
-
-      if (aiRejected) {
-        logAuditHelper(asset, scoring, primaryStrategyName, crossCheck, fp, aiRejectionReason);
-        continue;
-      }
-
       const providerName = classification === 'CRYPTO' ? 'Bitget Live Feed' : (classification === 'FOREX' ? 'Twelve Data' : 'Finnhub');
       const precision = decimals(finalEntry, asset);
       const isForex = asset.includes('USD') && precision === 5;
@@ -754,7 +724,7 @@ export async function runStagedPipeline(
         targetQualityScore: tqResult.targetQualityScore, estimatedWinRate: winRate,
         modelEstimatedWinRate: winRate, empiricalCalibratedProbability: null,
         probabilitySourceUsed: serverConfig.getConfig().thresholds.probabilitySource,
-        isEmpiricallyCalibrated: false, isAiValidated: aiResult.isAiValidated, stopLoss: finalSL,
+        isEmpiricallyCalibrated: false, isAiValidated: false, stopLoss: finalSL,
         takeProfit: safeTakeProfit, tp1: safeTp1, tp2: safeTp2, tp3: safeTp3, tp1Rr, tp2Rr, tp3Rr,
         riskRewardRatio: exactPrimaryRr, grossRiskRewardRatio: scoring.estimatedFriction?.grossRiskRewardRatio ?? exactPrimaryRr,
         netRiskRewardRatio: scoring.estimatedFriction?.netRiskRewardRatio,
@@ -765,18 +735,68 @@ export async function runStagedPipeline(
         expiresAt: now + serverConfig.getConfig().signalExpirationMs, timestamp: now,
         validatedAt: validation.validatedAt, dataSource: `${providerName} with Live Price & Sentiment Cross-Validation`,
         status: 'WAITING_ENTRY', isActionableSignal: true, validationReason: 'VALID',
-        aiAssessment: aiResult.aiAssessment, score: gate8Eval.finalScore, coreScore: gate8Eval.finalScore,
+        aiAssessment: 'Pending NVIDIA AI comparative ranking...', score: gate8Eval.finalScore, coreScore: gate8Eval.finalScore,
         entryHitTimestamp: null, tp1Status: 'PENDING', tp2Status: 'PENDING', tp3Status: 'PENDING', slStatus: 'ACTIVE_FOR_ENTRY_ONLY',
       };
 
       candidates.push({
-        signal, scoring, validation, aiConfidence: aiResult.documentedConfidence,
+        signal, scoring, validation, aiConfidence: undefined,
         timeframesAligned: scoring.timeframesAligned,
         candles: candlesMap['1h'] || candlesMap['15m'] || candlesMap['5m'] || [],
       });
     }
 
     const filteredCandidates = [...candidates];
+
+    // -----------------------------------------------------------------
+    // GATE 3: NVIDIA AI BATCH CANDIDATE ANALYSIS & RANKING
+    // Send structured data of top 3-5 candidates to NVIDIA API.
+    // AI compares, detects risks, ranks strongest to weakest, returns 0-3 recommendations.
+    // -----------------------------------------------------------------
+    if (filteredCandidates.length > 0 && thresholds.AIConfirmationMode !== 'DISABLED') {
+      const candidatePayloads: CandidateAnalysisPayload[] = filteredCandidates.slice(0, 5).map((c) => ({
+        hasSetup: true,
+        symbol: c.signal.symbol,
+        entryPrice: c.signal.entryPrice,
+        direction: c.signal.direction,
+        timeframe: c.signal.timeframe,
+        strategy: c.signal.strategy,
+        confluenceReasons: c.signal.confluenceReasons,
+        confidenceScore: c.signal.score || c.signal.confidenceScore,
+        stopLoss: c.signal.stopLoss,
+        takeProfit: c.signal.takeProfit,
+        riskRewardRatio: c.signal.riskRewardRatio,
+        technicalMetrics: c.scoring.technicalMetrics,
+        marketRegime: c.signal.marketRegime,
+        winRateEstimate: c.signal.estimatedWinRate,
+      }));
+
+      const batchAiResult = await NvidiaAIService.evaluateAndRankBatch(candidatePayloads);
+      logger.info(`[NVIDIA AI Batch Analysis] ${batchAiResult.aiAssessment}`, {
+        recommendedCount: batchAiResult.recommendedSymbols.length,
+      });
+
+      for (const cand of filteredCandidates) {
+        const rankInfo = batchAiResult.rankings.find((r) => r.symbol === cand.signal.symbol);
+        if (rankInfo) {
+          cand.signal.aiAssessment = `NVIDIA AI Rank #${rankInfo.rank} [${rankInfo.isRecommended ? 'RECOMMENDED' : 'CAUTION'}]: ${rankInfo.reasoning}${rankInfo.detectedRisks && rankInfo.detectedRisks !== 'None' ? ` (Risks: ${rankInfo.detectedRisks})` : ''}`;
+          cand.signal.isAiValidated = rankInfo.isRecommended;
+          (cand.signal as any).aiRank = rankInfo.rank;
+          (cand.signal as any).aiRiskNote = rankInfo.detectedRisks;
+        } else {
+          cand.signal.aiAssessment = batchAiResult.aiAssessment;
+        }
+      }
+
+      if (batchAiResult.classification !== 'UNAVAILABLE' && batchAiResult.recommendedSymbols) {
+        const recSet = new Set(batchAiResult.recommendedSymbols);
+        const originalCount = filteredCandidates.length;
+        const kept = filteredCandidates.filter((c) => recSet.has(c.signal.symbol));
+        filteredCandidates.length = 0;
+        filteredCandidates.push(...kept);
+        logger.info(`[NVIDIA AI Candidate Filter] Retained ${filteredCandidates.length}/${originalCount} AI-recommended candidates.`);
+      }
+    }
 
     const rsInputs = filteredCandidates.map((c) => ({
       symbol: c.signal.symbol, direction: c.signal.direction, candles: c.candles || [],

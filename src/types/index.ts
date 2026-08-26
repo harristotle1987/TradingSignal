@@ -556,6 +556,32 @@ export interface PerformanceMetricsResponse {
   timestamp: number;
 }
 
+export type HistoricalPerformanceRange = '7D' | '30D' | '90D' | 'ALL';
+
+export interface HistoricalPerformanceSummary {
+  totalCompleted: number;
+  wins: number;
+  losses: number;
+  successRate: number | null;
+}
+
+export interface HistoricalPerformanceTrendPoint {
+  period: string;
+  completed: number;
+  wins: number;
+  losses: number;
+  successRate: number | null;
+}
+
+export interface HistoricalPerformanceResponse {
+  success: boolean;
+  message?: string;
+  range: HistoricalPerformanceRange;
+  summary: HistoricalPerformanceSummary;
+  trend: HistoricalPerformanceTrendPoint[];
+  timestamp: number;
+}
+
 /**
  * Gate 46: Evaluates whether a signal is actionable/qualified.
  *

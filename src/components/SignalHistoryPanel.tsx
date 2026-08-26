@@ -317,12 +317,12 @@ export function SignalHistoryPanel({
           }`}
         >
           <BarChart3 className="w-3.5 h-3.5 text-sky-400" />
-          30-Day Performance Trends
+          Historical Performance
         </button>
       </div>
 
       {activeTab === 'chart' ? (
-        <SignalPerformanceChart />
+        <SignalPerformanceChart refreshTrigger={history.length} />
       ) : filteredHistory.length > 0 ? (
         <div className="space-y-3">
           {/* Bulk Action Controls */}

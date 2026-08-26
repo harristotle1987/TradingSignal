@@ -11,6 +11,8 @@ import {
   SignalGenerationResponse,
   SignalsListResponse,
   PerformanceMetricsResponse,
+  HistoricalPerformanceResponse,
+  HistoricalPerformanceRange,
 } from '../types/index.js';
 
 class ApiClient {
@@ -327,6 +329,17 @@ class ApiClient {
    */
   async getPerformanceMetrics(): Promise<PerformanceMetricsResponse> {
     return this.fetchJson<PerformanceMetricsResponse>('/api/signals/performance');
+  }
+
+  /**
+   * Fetch authoritative historical signal performance summary and trend
+   */
+  async getHistoricalPerformance(
+    range: HistoricalPerformanceRange = '30D'
+  ): Promise<HistoricalPerformanceResponse> {
+    return this.fetchJson<HistoricalPerformanceResponse>(
+      `/api/signals/historical-performance?range=${encodeURIComponent(range)}`
+    );
   }
 
   /**

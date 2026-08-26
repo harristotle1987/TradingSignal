@@ -14,6 +14,7 @@ import { formatTimeWithZone, DisplayTimeZone, getLocalTimeZone } from '../utils/
 import { NotificationService, NotificationPermissionStatus } from '../utils/notification.js';
 import { SignalHistoryPanel } from './SignalHistoryPanel.js';
 import { AssetClassScanner } from './AssetClassScanner.js';
+import { AiMarketScannerWidget } from './AiMarketScannerWidget.js';
 import {
   formatLabel,
   formatStrategy,
@@ -733,6 +734,19 @@ export function SignalsPage({ health }: SignalsPageProps) {
           No representation is made that any signal will achieve guaranteed profits or avoid losses. All financial trading carries substantial risk of capital loss. Minimum qualification filters (win-rate estimate &gt; 30%, R:R &ge; 2:1, ATR noise protection hurdles) are algorithmic safeguards designed to reject weak or noise-vulnerable market setups.
         </p>
       </div>
+
+      {/* GATE 1: Floating AI Market Scanner Widget */}
+      <AiMarketScannerWidget
+        selectedSymbol={selectedSymbol}
+        onSelectSymbol={(sym) => {
+          setSelectedSymbol(sym);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onSignalsUpdated={async () => {
+          await loadActiveSignals();
+          await loadDedicatedSignalLogs();
+        }}
+      />
     </div>
   );
 }
