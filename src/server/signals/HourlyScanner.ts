@@ -83,6 +83,9 @@ export interface ManualScanResult {
   qualifiedSetups: TradingSignal[];
   rejectedCount: number;
   rejectionReasons: string[];
+  rejectionReasonsCounts?: Record<string, number>;
+  rejectionReasonsAggregated?: Record<string, number>;
+  candidateRejectionDetails?: any[];
   diagnosticsCount?: number;
   diagnostics?: string[];
   capState: DailyCapState;
@@ -262,6 +265,8 @@ export class HourlyScannerService {
       let totalCandidatesEvaluated = 0;
       let totalCandidatesRejectedFinal = 0;
       let totalSignalsGenerated = 0;
+      const aggregatedRejectionCounts: Record<string, number> = {};
+      const allCandidateRejectionDetails: any[] = [];
 
       for (const { category, result } of categoryScanResults) {
         const catUniverseSize = category === 'CRYPTO' ? 45 : category === 'FOREX' ? 20 : 48;
@@ -280,6 +285,16 @@ export class HourlyScannerService {
         totalCandidatesEvaluated += candidatesEvaluated;
         totalCandidatesRejectedFinal += candidatesRejectedFinal;
         totalSignalsGenerated += signalsGenerated;
+
+        // Aggregate granular rejection reasons and candidate logs
+        if (result.rejectionReasons) {
+          for (const [gate, count] of Object.entries(result.rejectionReasons)) {
+            aggregatedRejectionCounts[gate] = (aggregatedRejectionCounts[gate] || 0) + (count as number);
+          }
+        }
+        if (Array.isArray(result.candidateRejectionDetails)) {
+          allCandidateRejectionDetails.push(...result.candidateRejectionDetails);
+        }
 
         if (result.success && Array.isArray(result.signals)) {
           rawCandidates.push(...result.signals);
@@ -1061,6 +1076,9 @@ export class HourlyScannerService {
         qualifiedSetups: selectedSetups,
         rejectedCount: rejectedDuringScan.length,
         rejectionReasons: rejectionReasonStrings,
+        rejectionReasonsAggregated: aggregatedRejectionCounts,
+        rejectionReasonsCounts: aggregatedRejectionCounts,
+        candidateRejectionDetails: allCandidateRejectionDetails,
         diagnosticsCount: universeDiagnostics.length,
         diagnostics: diagnosticStrings,
         capState: finalCapState,

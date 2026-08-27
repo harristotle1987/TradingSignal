@@ -267,6 +267,8 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
       intervalMinutes,
       rejectedCount: result.rejectedCount ?? 0,
       rejectionReasons: result.rejectionReasons ?? [],
+      rejectionReasonsCounts: result.rejectionReasonsCounts ?? result.rejectionReasonsAggregated ?? {},
+      candidateRejectionDetails: result.candidateRejectionDetails ?? [],
       diagnosticsCount: result.diagnosticsCount ?? 0,
       diagnostics: result.diagnostics ?? [],
       scanDurationMs: durationMs,

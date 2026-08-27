@@ -324,7 +324,47 @@ export function AiMarketScannerWidget({
                         All candidates failed the existing validation criteria.
                       </p>
 
-                      {scanResult.rejectionReasons && scanResult.rejectionReasons.length > 0 && (
+                      {/* Granular Aggregate Rejection Reasons */}
+                      {scanResult.rejectionReasonsCounts && Object.keys(scanResult.rejectionReasonsCounts).length > 0 && (
+                        <div className="text-left bg-slate-950/90 p-2.5 rounded-lg border border-amber-900/40 text-[9px] font-mono space-y-1.5 mt-2">
+                          <span className="text-amber-400 font-bold block text-[10px] uppercase tracking-wider">
+                            Rejection Reasons Breakdown:
+                          </span>
+                          <div className="grid grid-cols-2 gap-1">
+                            {Object.entries(scanResult.rejectionReasonsCounts).map(([gate, count]) => (
+                              <div key={gate} className="flex items-center justify-between bg-slate-900/80 px-1.5 py-1 rounded border border-slate-800 text-slate-300">
+                                <span className="truncate pr-1 text-slate-400">{gate}</span>
+                                <span className="font-bold text-amber-400 bg-amber-950/60 px-1 rounded">{String(count)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Candidate Specific Audit Trail */}
+                      {scanResult.candidateRejectionDetails && scanResult.candidateRejectionDetails.length > 0 ? (
+                        <div className="text-left bg-slate-950/80 p-2 rounded-lg border border-slate-800/80 text-[9px] font-mono text-slate-400 max-h-32 overflow-y-auto space-y-1.5 mt-2">
+                          <span className="text-slate-300 font-semibold block">Candidate Rejection Telemetry:</span>
+                          {scanResult.candidateRejectionDetails.map((cand: any, i: number) => (
+                            <div key={i} className="border-b border-slate-800/60 pb-1 last:border-0">
+                              <div className="flex items-center justify-between text-slate-200">
+                                <span className="font-bold">{cand.symbol} {cand.direction ? `(${cand.direction})` : ''}</span>
+                                <span className="text-slate-400">Score: {cand.score}/100</span>
+                              </div>
+                              <p className="text-amber-400/90 truncate text-[8.5px]">• {cand.primaryRejectionReason}</p>
+                              {cand.failedGates && cand.failedGates.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-0.5">
+                                  {cand.failedGates.map((g: string, gi: number) => (
+                                    <span key={gi} className="px-1 py-0.2 bg-slate-900 text-[8px] text-slate-400 rounded border border-slate-800">
+                                      {g}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : scanResult.rejectionReasons && scanResult.rejectionReasons.length > 0 && (
                         <div className="text-left bg-slate-950/80 p-2 rounded-lg border border-slate-800/80 text-[9px] font-mono text-slate-400 max-h-24 overflow-y-auto space-y-1 mt-2">
                           <span className="text-amber-400 font-semibold block">Validation Audit:</span>
                           {scanResult.rejectionReasons.map((reason: string, i: number) => (

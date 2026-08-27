@@ -47,6 +47,7 @@ import { SignalAuditStore } from './SignalAuditStore.js';
 import { ScannerPersistence } from './ScannerPersistence.js';
 import { Gate35SignalFunnelAnalytics } from './Gate35SignalFunnelAnalytics.js';
 import { OpportunityFunnelStore } from './Gate26OpportunityFunnel.js';
+import { CandidateRejectionTracker, StandardFailedGate } from './CandidateRejectionTracker.js';
 import { logger } from '../logger.js';
 import { getDynamicPrecision } from '../../utils/formatters.js';
 
@@ -292,6 +293,8 @@ export async function runStagedPipeline(
     // Layer 1 (15m & 1h) early-terminates on disagreement without fetching 5m/4h.
     // Layer 2 (5m & 4h) validates ATR, S&R, and structure on survivors.
     // -----------------------------------------------------------------
+    const rejectionTracker = new CandidateRejectionTracker();
+
     const gate6Inputs = selectedDeepCandidates.map((cand) => ({
       asset: cand.asset,
       direction: cand.direction,
@@ -305,6 +308,29 @@ export async function runStagedPipeline(
     for (const rej of gate6Analysis.rejectedCandidates) {
       const reason = rej.rejectionReason || `Gate 6 Layer ${rej.stoppedAtLayer} MTF Analysis Rejected`;
       logger.info(`[Stage 2 Gate 6 Rejected] ${rej.asset}: ${reason}`);
+
+      const failedGates: StandardFailedGate[] = [StandardFailedGate.MTF_ALIGNMENT];
+      const lowerReason = reason.toLowerCase();
+      if (lowerReason.includes('atr') || lowerReason.includes('volatility')) {
+        failedGates.push(StandardFailedGate.VOLATILITY);
+      }
+      if (lowerReason.includes('structure') || lowerReason.includes('s&r') || lowerReason.includes('support')) {
+        failedGates.push(StandardFailedGate.MARKET_STRUCTURE);
+      }
+      if (rej.compositeMtfScore < 72) {
+        failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+      }
+
+      rejectionTracker.recordCandidate({
+        symbol: rej.asset,
+        direction: rej.direction,
+        score: rej.compositeMtfScore || 0,
+        primaryRejectionReason: `Gate 6 (MTF Layer ${rej.stoppedAtLayer}): ${reason}`,
+        failedGates,
+        finalDecision: 'REJECTED',
+        stage: 'GATE_6',
+      });
+
       Gate35SignalFunnelAnalytics.recordCandidate({
         symbol: rej.asset,
         direction: rej.direction,
@@ -495,6 +521,16 @@ export async function runStagedPipeline(
 
       if (!scoring.isValid) {
         logger.info(`[Stage 2 Scoring] ${asset} rejected: ${scoring.rejectionReason}`);
+        const failedGates = CandidateRejectionTracker.inferFailedGatesFromReason(scoring.rejectionReason || '', scoring.score);
+        rejectionTracker.recordCandidate({
+          symbol: asset,
+          direction: scoring.direction,
+          score: scoring.score || 0,
+          primaryRejectionReason: scoring.rejectionReason || 'Stage 2 Scoring Hurdle Failed',
+          failedGates,
+          finalDecision: 'REJECTED',
+          stage: 'STAGE_2_SCORING',
+        });
         Gate35SignalFunnelAnalytics.recordCandidate({
           symbol: asset, direction: scoring.direction, stage: 'GATE_3', score: scoring.score || 0,
           regime: scoring.marketRegime || 'UNKNOWN', strategy: primaryStrategyName,
@@ -557,6 +593,23 @@ export async function runStagedPipeline(
         gate7FailuresCount++;
         const rejectionMsg = gate7Validation.primaryRejectionReason || 'Failed Gate 7 Mandatory Hard Gates';
         logger.warn(`[Gate 7 Hard Gates Rejected] ${asset}: ${rejectionMsg} (Failed: ${gate7Validation.failedGateCodes.join(', ')})`);
+
+        const failedGates = CandidateRejectionTracker.mapGate7CodesToStandardGates(
+          gate7Validation.failedGateCodes,
+          rejectionMsg,
+          scoring.score
+        );
+
+        rejectionTracker.recordCandidate({
+          symbol: asset,
+          direction: scoring.direction,
+          score: scoring.score || 0,
+          primaryRejectionReason: rejectionMsg,
+          failedGates,
+          finalDecision: 'REJECTED',
+          stage: 'GATE_7',
+        });
+
         Gate35SignalFunnelAnalytics.recordCandidate({
           symbol: asset,
           direction: scoring.direction,
@@ -584,6 +637,16 @@ export async function runStagedPipeline(
 
       if (!validation.isValid) {
         logger.warn(`[Stage 3 Validation Rejected] ${asset}: [${validation.validationReason}] ${validation.detailedMessage}`);
+        const failedGates = CandidateRejectionTracker.inferFailedGatesFromReason(validation.detailedMessage || validation.validationReason, scoring.score);
+        rejectionTracker.recordCandidate({
+          symbol: asset,
+          direction: scoring.direction,
+          score: scoring.score || 0,
+          primaryRejectionReason: `Signal Validation: [${validation.validationReason}] ${validation.detailedMessage}`,
+          failedGates,
+          finalDecision: 'REJECTED',
+          stage: 'GATE_3_VALIDATION',
+        });
         Gate35SignalFunnelAnalytics.recordCandidate({
           symbol: asset, direction: scoring.direction, stage: 'GATE_9', score: scoring.score,
           regime: scoring.marketRegime, strategy: primaryStrategyName,
@@ -615,12 +678,32 @@ export async function runStagedPipeline(
       const effectiveMinWinProb = anyOptimizedPathPassed ? 35 : thresholds.minimumWinProbability;
 
       if (winRate <= effectiveMinWinProb) {
-        logAuditHelper(asset, scoring, primaryStrategyName, crossCheck, fp, `Estimated win rate (${winRate}% <= ${effectiveMinWinProb}% threshold)`);
+        const reason = `Estimated win rate (${winRate}% <= ${effectiveMinWinProb}% threshold)`;
+        rejectionTracker.recordCandidate({
+          symbol: asset,
+          direction: scoring.direction,
+          score: scoring.score || 0,
+          primaryRejectionReason: reason,
+          failedGates: [StandardFailedGate.FINAL_SCORE_BELOW_72, StandardFailedGate.RR_INVALID],
+          finalDecision: 'REJECTED',
+          stage: 'WIN_RATE_CHECK',
+        });
+        logAuditHelper(asset, scoring, primaryStrategyName, crossCheck, fp, reason);
         continue;
       }
 
       if (expectancy <= 0) {
-        logAuditHelper(asset, scoring, primaryStrategyName, crossCheck, fp, `Non-positive expectancy (${expectancy}R <= 0)`);
+        const reason = `Non-positive expectancy (${expectancy}R <= 0)`;
+        rejectionTracker.recordCandidate({
+          symbol: asset,
+          direction: scoring.direction,
+          score: scoring.score || 0,
+          primaryRejectionReason: reason,
+          failedGates: [StandardFailedGate.RR_INVALID],
+          finalDecision: 'REJECTED',
+          stage: 'EXPECTANCY_CHECK',
+        });
+        logAuditHelper(asset, scoring, primaryStrategyName, crossCheck, fp, reason);
         continue;
       }
 
@@ -660,6 +743,26 @@ export async function runStagedPipeline(
       });
 
       if (!gate8Eval.isTradeable) {
+        const failedGates: StandardFailedGate[] = [StandardFailedGate.FINAL_SCORE_BELOW_72];
+        if (gate8Eval.factors.trendAlignment < 14) failedGates.push(StandardFailedGate.TREND);
+        if (gate8Eval.factors.momentum < 7) failedGates.push(StandardFailedGate.MOMENTUM);
+        if (gate8Eval.factors.marketStructure < 10) failedGates.push(StandardFailedGate.MARKET_STRUCTURE);
+        if (gate8Eval.factors.mtfConfirmation < 10) failedGates.push(StandardFailedGate.MTF_ALIGNMENT);
+        if (gate8Eval.factors.volumeLiquidity < 6) failedGates.push(StandardFailedGate.VOLUME);
+        if (gate8Eval.factors.volatilityAtrQuality < 6) failedGates.push(StandardFailedGate.VOLATILITY);
+        if (gate8Eval.factors.entryQuality < 3.5) failedGates.push(StandardFailedGate.VALID_ENTRY);
+        if (gate8Eval.factors.rrQuality < 3.5) failedGates.push(StandardFailedGate.RR_INVALID);
+
+        rejectionTracker.recordCandidate({
+          symbol: asset,
+          direction: scoring.direction,
+          score: gate8Eval.finalScore,
+          primaryRejectionReason: gate8Eval.rejectionReason || `Gate 8 Score (${gate8Eval.finalScore}/100) below ${thresholds.signalThreshold}`,
+          failedGates,
+          finalDecision: 'REJECTED',
+          stage: 'GATE_8',
+        });
+
         if (gate8Eval.classification === 'NEAR_MISS_WATCHLIST') {
           OpportunityFunnelStore.addOrUpdate({
             id: `opp_${now}_${asset}_${Math.random().toString(36).substring(2, 6)}`,
@@ -909,6 +1012,32 @@ export async function runStagedPipeline(
     const finalSignals = gate9CapResult.publishedSignals;
     const finalSignalsOutputCount = finalSignals.length;
 
+    for (const rej of (gate9CapResult.spilloverCandidates || [])) {
+      rejectionTracker.recordCandidate({
+        symbol: rej.signal.symbol,
+        direction: rej.signal.direction,
+        score: rej.finalScore,
+        primaryRejectionReason: `Gate 9 Cap: Exceeded max allowed signals in scan`,
+        failedGates: [StandardFailedGate.SIGNAL_CAP_EXCEEDED],
+        finalDecision: 'REJECTED',
+        stage: 'GATE_9',
+      });
+    }
+
+    for (const sig of finalSignals) {
+      rejectionTracker.recordCandidate({
+        symbol: sig.symbol,
+        direction: sig.direction,
+        score: sig.score || 72,
+        primaryRejectionReason: 'All mandatory gates passed and qualified for dispatch',
+        failedGates: [],
+        finalDecision: 'DISPATCHED',
+        stage: 'FINAL_DISPATCH',
+      });
+    }
+
+    rejectionTracker.logScanSummary(assetCategory || cleanSymbol);
+
     // -----------------------------------------------------------------
     // GATE 10 — RATE-LIMIT SAFETY + SCANNER TELEMETRY
     // -----------------------------------------------------------------
@@ -995,6 +1124,9 @@ export async function runStagedPipeline(
     logger.info(`- Gate 8 (Tradeability Threshold >=${thresholds.signalThreshold}): Input ${finalValidationOutputCount}, Scored >=${thresholds.signalThreshold}: ${allCandidateScores.filter(s => s.passed).length}`);
     logger.info(`- Gate 9 (Signal Cap <=3): Published ${finalSignalsOutputCount} Signals`);
 
+    const aggregatedReasons = rejectionTracker.getAggregatedRejectionReasons();
+    const candidateAuditRecords = rejectionTracker.getAllRecords();
+
     const stageTelemetry = {
       stage0Input: universe.length, stage0Output: stage0OutputCount,
       stage1Input: stage0OutputCount, stage1Output: stage1OutputCount,
@@ -1005,6 +1137,8 @@ export async function runStagedPipeline(
       finalValidationInput: deepMtfOutputCount, finalValidationOutput: finalValidationOutputCount,
       finalScoreGateInput: finalValidationOutputCount, finalScoreGateOutput: finalSignalsOutputCount,
       gate10Telemetry: gate10Data,
+      rejectionReasons: aggregatedReasons,
+      candidateRejectionDetails: candidateAuditRecords,
     };
 
     if (finalSignals.length > 0) {
@@ -1075,6 +1209,8 @@ export async function runStagedPipeline(
         signals: finalSignals,
         bestTrade, secondBest, suggestions,
         timestamp: now,
+        rejectionReasons: aggregatedReasons,
+        candidateRejectionDetails: candidateAuditRecords,
         telemetry: {
           universeSymbolsScanned: universe.length,
           preliminaryCandidatesFound: stage1OutputCount,
@@ -1094,6 +1230,8 @@ export async function runStagedPipeline(
       symbol: cleanSymbol,
       reason: `Scan completed: No setups satisfied final validation or score hurdles.`,
       timestamp: now,
+      rejectionReasons: aggregatedReasons,
+      candidateRejectionDetails: candidateAuditRecords,
       telemetry: {
         universeSymbolsScanned: universe.length,
         preliminaryCandidatesFound: stage1OutputCount,

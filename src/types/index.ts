@@ -284,6 +284,8 @@ export interface ScannerFunnelCounters {
   finalValidationOutput?: number;
   finalScoreGateInput?: number;
   finalScoreGateOutput?: number;
+  rejectionReasons?: Record<string, number>;
+  candidateRejectionDetails?: Array<any>;
 }
 
 export interface SignalGenerationResponse {
@@ -299,6 +301,8 @@ export interface SignalGenerationResponse {
   reason?: string;
   timestamp: number;
   telemetry?: Partial<ScannerFunnelCounters>;
+  rejectionReasons?: Record<string, number>;
+  candidateRejectionDetails?: Array<any>;
 }
 
 export interface SignalsListResponse {
