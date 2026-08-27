@@ -75,6 +75,11 @@ export interface ManualScanResult {
   candidatesRejectedPreliminary?: number;
   candidatesEvaluated: number;
   candidatesRejectedFinal?: number;
+  candidatesRejectedBeforeMTF?: number;
+  candidatesRejectedByMTF?: number;
+  candidatesRejectedByScore?: number;
+  candidatesRejectedByRR?: number;
+  candidatesRejectedByStructure?: number;
   signalsGenerated?: number;
   signalsAccepted?: number;
   acceptedSignalsCount: number;

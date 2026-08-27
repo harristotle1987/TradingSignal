@@ -12,6 +12,7 @@
 
 import { useState, useMemo } from 'react';
 import { TargetTracker } from './TargetTracker.js';
+import { Rejected72PlusPanel } from './Rejected72PlusPanel.js';
 import {
   TradingSignal,
   NormalizedTicker,
@@ -749,6 +750,11 @@ export function AssetClassScanner({
           </div>
         </div>
       ) : null}
+
+      {/* 72+ HIGH-SCORE REJECTED SETUPS PANEL */}
+      {scanResult && scanResult.candidateRejectionDetails && scanResult.candidateRejectionDetails.length > 0 && (
+        <Rejected72PlusPanel candidates={scanResult.candidateRejectionDetails} />
+      )}
     </div>
   );
 }

@@ -5,6 +5,7 @@
 
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
@@ -53,15 +54,38 @@ export async function createServer() {
   // Global Express Error Handler
   app.use(globalErrorHandler);
 
+  // Serve static public assets (icons, manifest, sw.js)
+  const publicPath = path.join(process.cwd(), 'public');
+  if (fs.existsSync(publicPath)) {
+    app.use(express.static(publicPath));
+  }
+
   // Explicit route for Service Worker to prevent catch-all SPA fallback returning HTML
   app.get('/sw.js', (req, res) => {
-    const swPath = path.join(process.cwd(), 'public', 'sw.js');
-    res.setHeader('Content-Type', 'application/javascript');
-    res.sendFile(swPath, (err) => {
-      if (err) {
-        res.status(404).send('Service worker not found');
-      }
-    });
+    let swPath = path.join(process.cwd(), 'public', 'sw.js');
+    if (!fs.existsSync(swPath)) {
+      swPath = path.join(process.cwd(), 'dist', 'sw.js');
+    }
+    if (!fs.existsSync(swPath)) {
+      swPath = path.join(__dirname, 'public', 'sw.js');
+    }
+    if (!fs.existsSync(swPath)) {
+      swPath = path.join(__dirname, 'dist', 'sw.js');
+    }
+
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Service-Worker-Allowed', '/');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+    if (fs.existsSync(swPath)) {
+      return res.sendFile(swPath, (err) => {
+        if (err && !res.headersSent) {
+          res.status(500).send('// Error serving service worker\nconsole.error("[SW] Error serving service worker");');
+        }
+      });
+    }
+
+    return res.send('// Service worker placeholder\nconsole.log("[SW] Service worker placeholder");');
   });
 
   // Vite Middleware in Dev or Static Serve in Prod

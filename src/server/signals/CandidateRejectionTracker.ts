@@ -31,6 +31,7 @@
 import { logger } from '../logger.js';
 
 export enum StandardFailedGate {
+  FINAL_SCORE_UNREACHABLE = 'FINAL_SCORE_UNREACHABLE',
   FINAL_SCORE_BELOW_72 = 'FINAL_SCORE_BELOW_72',
   MTF_ALIGNMENT = 'MTF_ALIGNMENT',
   VALID_ENTRY = 'VALID_ENTRY',
@@ -65,27 +66,116 @@ export interface CandidateRejectionAudit {
   finalDecision: 'REJECTED' | 'DISPATCHED' | 'WATCHING' | 'QUALIFIED';
   details?: string;
   stage?: string;
+  scoreBeforeGate6?: number;
+  maximumPossibleScoreAfterRemainingAnalysis?: number;
+  scoreAfterGate6?: number;
+  finalScore?: number;
+  entryPrice?: number;
+  stopLoss?: number;
+  takeProfit?: number;
+  tp1?: number;
+  tp2?: number;
+  tp3?: number;
+  statusText?: string;
+  rejectionSummary?: string;
+  timestamp?: number;
+  is72PlusRejected?: boolean;
 }
 
 export class CandidateRejectionTracker {
   private records: Map<string, CandidateRejectionAudit> = new Map();
 
   /**
+   * Formats a short human-readable summary for rejection reasons.
+   */
+  public static formatHumanReadableSummary(
+    reason: string,
+    _failedGates: StandardFailedGate[] = [],
+    score: number = 0
+  ): string {
+    if (!reason) return 'Failed validation gate criteria.';
+    const clean = reason
+      .replace(/^REJECTED:\s*/i, '')
+      .replace(/^Gate \d+\s*(Validation|Hard Gates|Cap)?:?\s*/i, '')
+      .replace(/^Signal Validation:\s*/i, '')
+      .trim();
+
+    if (clean.includes('GROSS_RR_BELOW_THRESHOLD') || clean.includes('Gross R:R') || clean.includes('rrRatio') || clean.includes('R:R')) {
+      const match = clean.match(/R:R\s*\(([\d.]+)\)\s*below\s*([\d.]+)/i);
+      if (match) {
+        return `Risk/reward only ${match[1]}:1; minimum required is ${match[2]}:1.`;
+      }
+      return 'Risk/reward ratio below required minimum threshold (1.8:1).';
+    }
+
+    if (clean.includes('Entry too close to major resistance') || clean.includes('resistance')) {
+      return 'Entry too close to major resistance.';
+    }
+
+    if (clean.includes('SCORE_BELOW_THRESHOLD') || clean.includes('Composite signal score')) {
+      return `Signal score (${score}/100) is below the minimum tradeability threshold of 72.`;
+    }
+
+    if (clean.includes('Exceeded max allowed signals')) {
+      return 'Exceeded maximum allowed signal cap for current scan session.';
+    }
+
+    if (clean.includes('Estimated win rate')) {
+      const match = clean.match(/\(([\d.]+)%\s*<=\s*([\d.]+)%/);
+      if (match) {
+        return `Estimated win rate (${match[1]}%) below required threshold (${match[2]}%).`;
+      }
+      return 'Estimated win rate below required threshold.';
+    }
+
+    if (clean.includes('Non-positive expectancy')) {
+      return 'Expected return ratio is non-positive.';
+    }
+
+    return clean;
+  }
+
+  /**
    * Records or updates a candidate's evaluation and rejection audit.
    */
   public recordCandidate(audit: CandidateRejectionAudit): void {
+    const effectiveScore = audit.finalScore ?? audit.score ?? audit.scoreBeforeGate6 ?? 0;
+    const is72Plus = (effectiveScore >= 72 || (audit.scoreBeforeGate6 ?? 0) >= 72 || audit.is72PlusRejected === true) && audit.finalDecision === 'REJECTED';
+    const statusText = audit.finalDecision === 'REJECTED' ? 'REJECTED — NOT TRADEABLE' : (audit.statusText || 'TRADEABLE');
+    const rejectionSummary = audit.rejectionSummary || CandidateRejectionTracker.formatHumanReadableSummary(audit.primaryRejectionReason, audit.failedGates, effectiveScore);
+    const timestamp = audit.timestamp || Date.now();
+
     const existing = this.records.get(audit.symbol);
     if (existing) {
-      // Merge failed gates without duplicates
       const mergedGates = Array.from(new Set([...existing.failedGates, ...audit.failedGates]));
+      const maxScore = Math.max(existing.score, effectiveScore);
+      const isStill72Plus = (maxScore >= 72 || (existing.scoreBeforeGate6 ?? 0) >= 72 || is72Plus) && audit.finalDecision === 'REJECTED';
       this.records.set(audit.symbol, {
         ...existing,
         ...audit,
-        score: Math.max(existing.score, audit.score),
+        score: maxScore,
+        finalScore: audit.finalScore ?? existing.finalScore ?? maxScore,
+        entryPrice: audit.entryPrice ?? existing.entryPrice,
+        stopLoss: audit.stopLoss ?? existing.stopLoss,
+        takeProfit: audit.takeProfit ?? existing.takeProfit,
+        tp1: audit.tp1 ?? existing.tp1,
+        tp2: audit.tp2 ?? existing.tp2,
+        tp3: audit.tp3 ?? existing.tp3,
         failedGates: mergedGates,
+        is72PlusRejected: isStill72Plus,
+        statusText,
+        rejectionSummary,
+        timestamp,
       });
     } else {
-      this.records.set(audit.symbol, audit);
+      this.records.set(audit.symbol, {
+        ...audit,
+        score: effectiveScore,
+        is72PlusRejected: is72Plus,
+        statusText,
+        rejectionSummary,
+        timestamp,
+      });
     }
 
     // Output structured console log for candidate rejection audit
@@ -120,6 +210,82 @@ export class CandidateRejectionTracker {
    */
   public getAllRecords(): CandidateRejectionAudit[] {
     return Array.from(this.records.values());
+  }
+
+  /**
+   * Returns exact counts for the 5 mandated tracking categories:
+   * - candidatesRejectedBeforeMTF
+   * - candidatesRejectedByMTF
+   * - candidatesRejectedByScore
+   * - candidatesRejectedByRR
+   * - candidatesRejectedByStructure
+   */
+  public getCategorizedRejectionCounts(): {
+    candidatesRejectedBeforeMTF: number;
+    candidatesRejectedByMTF: number;
+    candidatesRejectedByScore: number;
+    candidatesRejectedByRR: number;
+    candidatesRejectedByStructure: number;
+  } {
+    let beforeMTF = 0;
+    let byMTF = 0;
+    let byScore = 0;
+    let byRR = 0;
+    let byStructure = 0;
+
+    for (const record of this.records.values()) {
+      if (record.finalDecision === 'REJECTED' || record.failedGates.length > 0) {
+        const lowerReason = (record.primaryRejectionReason || '').toLowerCase();
+
+        const isBeforeMTF =
+          record.failedGates.includes(StandardFailedGate.FINAL_SCORE_UNREACHABLE) ||
+          record.stage === 'Gate 6 Pre-Audit' ||
+          record.stage === 'Stage 0' ||
+          record.stage === 'Stage 1' ||
+          lowerReason.includes('final_score_unreachable') ||
+          lowerReason.includes('before mtf') ||
+          lowerReason.includes('halting mtf requests');
+
+        const isMTF =
+          !isBeforeMTF &&
+          (record.failedGates.includes(StandardFailedGate.MTF_ALIGNMENT) ||
+            lowerReason.includes('mtf') ||
+            lowerReason.includes('timeframe'));
+
+        const isScore =
+          record.failedGates.includes(StandardFailedGate.FINAL_SCORE_BELOW_72) ||
+          record.failedGates.includes(StandardFailedGate.FINAL_SCORE_UNREACHABLE) ||
+          lowerReason.includes('score') ||
+          (record.finalScore !== undefined && record.finalScore < 72) ||
+          (record.score > 0 && record.score < 72);
+
+        const isRR =
+          record.failedGates.includes(StandardFailedGate.RR) ||
+          record.failedGates.includes(StandardFailedGate.RR_INVALID) ||
+          lowerReason.includes('rr') ||
+          lowerReason.includes('risk/reward');
+
+        const isStructure =
+          record.failedGates.includes(StandardFailedGate.MARKET_STRUCTURE) ||
+          lowerReason.includes('structure') ||
+          lowerReason.includes('support') ||
+          lowerReason.includes('resistance');
+
+        if (isBeforeMTF) beforeMTF++;
+        if (isMTF) byMTF++;
+        if (isScore) byScore++;
+        if (isRR) byRR++;
+        if (isStructure) byStructure++;
+      }
+    }
+
+    return {
+      candidatesRejectedBeforeMTF: beforeMTF,
+      candidatesRejectedByMTF: byMTF,
+      candidatesRejectedByScore: byScore,
+      candidatesRejectedByRR: byRR,
+      candidatesRejectedByStructure: byStructure,
+    };
   }
 
   /**
