@@ -583,8 +583,10 @@ export class Gate6ProgressiveMTF {
 
   /**
    * Main progressive orchestration pipeline for Gate 6.
-   * Restricts processing to top 3–5 candidates, executes Layer 1, early-halts failing candidates,
-   * and runs Layer 2 only on surviving candidates.
+   * Progressively evaluates the 8–12 deep candidate pool:
+   * 1. Layer 1 (15m & 1h) early-halts failing candidates after only 1 cheap request.
+   * 2. Layer 2 (5m & 4h) runs ONLY on Layer-1 survivors.
+   * 3. Yields TOP 3–5 fully validated candidates for Stage 3 execution & hard gates.
    */
   public static async analyzeCandidates(
     candidates: Array<{
@@ -593,17 +595,25 @@ export class Gate6ProgressiveMTF {
       htf1h: NormalizedCandle[];
       preliminaryScore: number;
     }>,
-    maxToAnalyze = Gate6ProgressiveMTF.MAX_EXPENSIVE_CANDIDATES
+    targetSurvivors = Gate6ProgressiveMTF.MAX_EXPENSIVE_CANDIDATES
   ): Promise<Gate6ProgressiveAnalysisResult> {
-    const candidatesToAnalyze = candidates.slice(0, Math.min(candidates.length, maxToAnalyze));
     const survived: Gate6CandidateEvaluation[] = [];
     const rejected: Gate6CandidateEvaluation[] = [];
+    let layer2EvaluationsCount = 0;
+    const maxLayer2Allowed = targetSurvivors; // Max 5 expensive multi-timeframe candle fetches
 
     logger.info(
-      `[Gate 6 Progressive MTF] Analyzing top ${candidatesToAnalyze.length} candidates (from pool of ${candidates.length})...`
+      `[Gate 6 Progressive MTF] Progressively evaluating pool of ${candidates.length} deep candidates (Targeting TOP 3–5 fully validated setups)...`
     );
 
-    for (const cand of candidatesToAnalyze) {
+    let analyzedCount = 0;
+
+    for (const cand of candidates) {
+      if (survived.length >= targetSurvivors || layer2EvaluationsCount >= maxLayer2Allowed) {
+        break;
+      }
+
+      analyzedCount++;
       const asset = cand.asset;
       const direction = cand.direction;
       const sorted1h = [...cand.htf1h].sort((a, b) => a.timestamp - b.timestamp);
@@ -668,6 +678,7 @@ export class Gate6ProgressiveMTF {
       }
 
       auditTrail.push(`[Gate 6 Layer 1 PASSED] Score: ${l1Result.score}/100. Requesting Layer 2 (5m & 4h)...`);
+      layer2EvaluationsCount++;
 
       // 3. Surviving candidate -> Request Layer 2 (5m and 4h)
       let candles5m: NormalizedCandle[] = [];
@@ -735,11 +746,11 @@ export class Gate6ProgressiveMTF {
 
     return {
       totalInputCandidates: candidates.length,
-      analyzedCandidatesCount: candidatesToAnalyze.length,
+      analyzedCandidatesCount: analyzedCount,
       survivedCandidatesCount: survived.length,
       survivedCandidates: survived,
       rejectedCandidates: rejected,
-      summary: `Gate 6 analyzed top ${candidatesToAnalyze.length}/${candidates.length} candidates. ${survived.length} passed both Layer 1 & Layer 2.`,
+      summary: `Gate 6 analyzed ${analyzedCount}/${candidates.length} deep candidates. ${survived.length} passed both Layer 1 & Layer 2 (Target TOP 3–5).`,
     };
   }
 }

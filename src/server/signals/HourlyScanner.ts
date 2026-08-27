@@ -291,6 +291,14 @@ export class HourlyScannerService {
         }
       }
 
+      logger.info(`================================================================`);
+      logger.info(`[MULTI-ASSET FUNNEL AUDIT] (Total Scanned: ${totalUniverseSymbolsScanned})`);
+      logger.info(`- preliminaryCandidates: ${totalPreliminaryCandidatesFound}`);
+      logger.info(`- candidatesAfterQuota (deep budget sum): ${totalCandidatesEvaluated}`);
+      logger.info(`- candidatesSelectedForDeepAnalysis: ${totalCandidatesEvaluated}`);
+      logger.info(`- signalsSurvivingToStage3: ${totalSignalsGenerated}`);
+      logger.info(`================================================================`);
+
       const marketDataFetchDurationMs = Date.now() - marketDataFetchStart;
       logger.info(`[Scanner Telemetry] MARKET_DATA_FETCHING | duration: ${marketDataFetchDurationMs}ms | rawCandidatesFound: ${rawCandidates.length}`);
       logger.info(`[Scanner Telemetry] CANDIDATE_DISCOVERY | rawCandidatesCount: ${rawCandidates.length} | duration: ${marketDataFetchDurationMs}ms`);

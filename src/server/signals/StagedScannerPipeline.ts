@@ -231,10 +231,10 @@ export async function runStagedPipeline(
     // -----------------------------------------------------------------
     // GATE 4: PROVIDER QUOTA / REQUEST BUDGET GATE
     // Before any expensive analysis, evaluate provider request budgets.
-    // Dynamic deep budget: HIGH (12), NORMAL (8-10), LOW (5-6), CRITICAL (2-3), EXHAUSTED (0).
+    // Dynamic deep budget: HIGH (12), NORMAL (10), LOW (8), CRITICAL (4), EXHAUSTED (0).
     // Never consumes reserved quota; gracefully halts deeper analysis if exhausted.
     // -----------------------------------------------------------------
-    const gate4Budget = Gate4RequestBudget.evaluateBudget();
+    const gate4Budget = Gate4RequestBudget.evaluateBudget(assetCategory);
 
     if (!gate4Budget.passed || gate4Budget.maxDeepCandidates <= 0) {
       logger.warn(`[Gate 4 Budget Exhausted] ${gate4Budget.reason}`);
@@ -288,11 +288,11 @@ export async function runStagedPipeline(
 
     // -----------------------------------------------------------------
     // STAGE 2: Progressive Deep MTF Analysis (Gate 6)
-    // CRITICAL: Only top 3-5 candidates receive deep MTF.
+    // Progressively evaluates the 8–12 candidates to find the TOP 3–5 full analysis candidates.
     // Layer 1 (15m & 1h) early-terminates on disagreement without fetching 5m/4h.
-    // Layer 2 (5m & 4h) validates ATR, S&R, and structure.
+    // Layer 2 (5m & 4h) validates ATR, S&R, and structure on survivors.
     // -----------------------------------------------------------------
-    const gate6Inputs = selectedDeepCandidates.slice(0, 5).map((cand) => ({
+    const gate6Inputs = selectedDeepCandidates.map((cand) => ({
       asset: cand.asset,
       direction: cand.direction,
       htf1h: cand.htf1h,
@@ -955,6 +955,35 @@ export async function runStagedPipeline(
     };
 
     Gate10ScannerTelemetry.recordScan(gate10Data);
+
+    const rejStage0 = universe.length - stage0OutputCount;
+    const rejStage1 = stage0OutputCount - stage1OutputCount;
+    const rejGate5 = gate5Selection.rejectedCandidates.length;
+    const rejGate6L1 = gate6Analysis.rejectedCandidates.filter((r) => r.stoppedAtLayer === 1).length;
+    const rejGate6L2 = gate6Analysis.rejectedCandidates.filter((r) => r.stoppedAtLayer === 2).length;
+    const rejStage2 = deepMtfOutputCount - finalValidationOutputCount;
+    const rejGate7 = gate7FailuresCount;
+    const rejGate8 = allCandidateScores.filter((s) => !s.passed).length;
+    const rejGate9 = Math.max(0, allCandidateScores.filter((s) => s.passed).length - finalSignalsOutputCount);
+
+    logger.info(`================================================================`);
+    logger.info(`[CANDIDATE FUNNEL AUDIT] Category: ${assetCategory}`);
+    logger.info(`- preliminaryCandidates: ${stage1OutputCount}`);
+    logger.info(`- candidatesAfterQuota: ${gate4Budget.maxDeepCandidates} (Health: ${gate4Budget.overallBudgetHealth})`);
+    logger.info(`- candidatesAfterRanking: ${gate5Selection.candidatesAfterRankingCount}`);
+    logger.info(`- candidatesAfterCorrelation: ${gate5Selection.candidatesAfterCorrelationCount}`);
+    logger.info(`- candidatesSelectedForDeepAnalysis: ${gate5OutputCount}`);
+    logger.info(`- candidatesRejectedAtEachStage:`);
+    logger.info(`  * Stage 0 (Session Closed / Invalid): ${rejStage0}`);
+    logger.info(`  * Stage 1 Preliminary (<60 score): ${rejStage1}`);
+    logger.info(`  * Gate 5 Deep Selection (Rank / Cluster Cap): ${rejGate5}`);
+    logger.info(`  * Gate 6 Layer 1 MTF (15m/1h Disagreement): ${rejGate6L1}`);
+    logger.info(`  * Gate 6 Layer 2 MTF (5m/4h Structure / ATR): ${rejGate6L2}`);
+    logger.info(`  * Stage 2 Scoring (<72 Score or Setup Mismatch): ${rejStage2}`);
+    logger.info(`  * Stage 3 Gate 7 (13 Mandatory Hard Gates): ${rejGate7}`);
+    logger.info(`  * Gate 8 Final Score Threshold (<${thresholds.signalThreshold}): ${rejGate8}`);
+    logger.info(`  * Gate 9 Signal Cap (Excess over max 3): ${rejGate9}`);
+    logger.info(`================================================================`);
 
     logger.info(`[STAGED PIPELINE REPORT]`);
     logger.info(`- Stage 0 (Session Screening): Input ${universe.length}, Output ${stage0OutputCount}`);
