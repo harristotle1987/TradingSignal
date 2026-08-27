@@ -215,9 +215,16 @@ export class CandidateRejectionTracker {
       gates.add(CandidateRejectionTracker.mapGate7Code(code));
     }
 
-    const inferred = CandidateRejectionTracker.inferFailedGatesFromReason(rejectionReason, score);
-    for (const g of inferred) {
-      gates.add(g);
+    // A candidate scoring >= 72 MUST NOT receive FINAL_SCORE_BELOW_72
+    if (score < 72 && (score > 0 || rejectionReason.toLowerCase().includes('score'))) {
+      gates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
+    }
+
+    if (gates.size === 0) {
+      const inferred = CandidateRejectionTracker.inferFailedGatesFromReason(rejectionReason, score);
+      for (const g of inferred) {
+        gates.add(g);
+      }
     }
 
     return Array.from(gates);
@@ -230,9 +237,13 @@ export class CandidateRejectionTracker {
     const failedGates = new Set<StandardFailedGate>();
     const lower = (reason || '').toLowerCase();
 
-    if (score < 72 || lower.includes('below') || lower.includes('threshold') || lower.includes('final_score')) {
+    // The authoritative rule:
+    // score < 72 → FINAL_SCORE_BELOW_72
+    // score >= 72 → score gate PASSED. MUST NOT receive FINAL_SCORE_BELOW_72.
+    if (score < 72 && (score > 0 || lower.includes('score') || lower.includes('final_score') || lower.includes('hurdle') || lower.includes('tradeability threshold') || lower.includes('scoring criteria'))) {
       failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
     }
+
     if (lower.includes('mtf') || lower.includes('timeframe') || lower.includes('alignment')) {
       failedGates.add(StandardFailedGate.MTF_ALIGNMENT);
     }
@@ -263,17 +274,20 @@ export class CandidateRejectionTracker {
     if (lower.includes('structure') || lower.includes('support') || lower.includes('resistance') || lower.includes('breakout')) {
       failedGates.add(StandardFailedGate.MARKET_STRUCTURE);
     }
-    if (lower.includes('rr') || lower.includes('risk') || lower.includes('reward')) {
+    if (lower.includes('rr') || lower.includes('risk') || lower.includes('reward') || lower.includes('r:r')) {
       failedGates.add(StandardFailedGate.RR);
     }
-    if (lower.includes('sl') || lower.includes('tp') || lower.includes('stop loss') || lower.includes('take profit') || lower.includes('distance')) {
+    if (lower.includes('sl') || lower.includes('tp') || lower.includes('stop loss') || lower.includes('take profit') || lower.includes('stop-loss') || lower.includes('distance')) {
       failedGates.add(StandardFailedGate.SL_TP_VALIDITY);
     }
-    if (lower.includes('duplicate') || lower.includes('active signal') || lower.includes('existing')) {
+    if (lower.includes('duplicate') || lower.includes('active signal') || lower.includes('existing') || lower.includes('fingerprint')) {
       failedGates.add(StandardFailedGate.DUPLICATE_OR_EXISTING_SIGNAL);
     }
     if (lower.includes('cooldown') || lower.includes('cool down')) {
       failedGates.add(StandardFailedGate.COOLDOWN);
+    }
+    if (lower.includes('session') || lower.includes('market closed') || lower.includes('weekend')) {
+      failedGates.add(StandardFailedGate.MARKET_SESSION_STATUS);
     }
     if (lower.includes('win rate') || lower.includes('winrate') || lower.includes('probability')) {
       failedGates.add(StandardFailedGate.WIN_RATE_BELOW_THRESHOLD);
@@ -286,7 +300,11 @@ export class CandidateRejectionTracker {
     }
 
     if (failedGates.size === 0) {
-      failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
+      if (score < 72) {
+        failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
+      } else {
+        failedGates.add(StandardFailedGate.DATA_INTEGRITY);
+      }
     }
 
     return Array.from(failedGates);
@@ -356,8 +374,9 @@ export class CandidateRejectionTracker {
     const failedGates: Set<StandardFailedGate> = new Set();
     const reason = scoring.rejectionReason || '';
     const reasonLower = reason.toLowerCase();
+    const targetScoreThreshold = thresholds.signalThreshold || 72;
 
-    if (scoring.score < thresholds.signalThreshold || scoring.score < 72) {
+    if (scoring.score < targetScoreThreshold || scoring.score < 72) {
       failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
     }
     if (reasonLower.includes('directional') || reasonLower.includes('trend') || (scoring.factors?.higherTfTrendScore && scoring.factors.higherTfTrendScore < 14)) {
@@ -386,7 +405,11 @@ export class CandidateRejectionTracker {
     }
 
     if (failedGates.size === 0) {
-      failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
+      if (scoring.score < 72) {
+        failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
+      } else {
+        failedGates.add(StandardFailedGate.DATA_INTEGRITY);
+      }
     }
 
     return {
@@ -434,8 +457,18 @@ export class CandidateRejectionTracker {
       failedGates.add(StandardFailedGate.RR);
     }
 
+    if (failedGates.size === 0) {
+      if (gate8Eval.finalScore < threshold) {
+        failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
+      } else {
+        failedGates.add(StandardFailedGate.DATA_INTEGRITY);
+      }
+    }
+
     return {
-      primaryReason: gate8Eval.rejectionReason || `FINAL_SCORE_BELOW_72: Core score (${gate8Eval.finalScore}/100) below required threshold of ${threshold}`,
+      primaryReason: gate8Eval.rejectionReason || (gate8Eval.finalScore < threshold
+        ? `FINAL_SCORE_BELOW_72: Core score (${gate8Eval.finalScore}/100) below required threshold of ${threshold}`
+        : `Gate 8 Tradeability Criteria Not Satisfied`),
       failedGates: Array.from(failedGates),
     };
   }

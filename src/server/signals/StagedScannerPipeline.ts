@@ -302,7 +302,7 @@ export async function runStagedPipeline(
       preliminaryScore: cand.preliminaryScore,
     }));
 
-    const gate6Analysis = await Gate6ProgressiveMTF.analyzeCandidates(gate6Inputs, 5);
+    const gate6Analysis = await Gate6ProgressiveMTF.analyzeCandidates(gate6Inputs, 5, scanStartTime);
 
     // Record Gate 6 rejections in Funnel Analytics and Audit Store
     for (const rej of gate6Analysis.rejectedCandidates) {
@@ -369,6 +369,10 @@ export async function runStagedPipeline(
     const thresholds = serverConfig.getConfig().thresholds;
 
     for (const gate6Cand of gate6Analysis.survivedCandidates) {
+      if (Date.now() - scanStartTime >= 24000) {
+        logger.warn(`[Stage 3 Time Budget Exceeded] Scan duration (${Date.now() - scanStartTime}ms) reached threshold (24000ms). Returning candidates evaluated so far.`);
+        break;
+      }
       const asset = gate6Cand.asset;
       const candlesMap = gate6Cand.candlesMap;
       const sorted1h = candlesMap['1h'] || [];
@@ -679,12 +683,19 @@ export async function runStagedPipeline(
 
       if (winRate <= effectiveMinWinProb) {
         const reason = `Estimated win rate (${winRate}% <= ${effectiveMinWinProb}% threshold)`;
+        const failedGates: StandardFailedGate[] = [StandardFailedGate.WIN_RATE_BELOW_THRESHOLD];
+        if ((scoring.score || 0) < 72) {
+          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+        }
+        if (finalRR < thresholds.minimumRR) {
+          failedGates.push(StandardFailedGate.RR);
+        }
         rejectionTracker.recordCandidate({
           symbol: asset,
           direction: scoring.direction,
           score: scoring.score || 0,
           primaryRejectionReason: reason,
-          failedGates: [StandardFailedGate.FINAL_SCORE_BELOW_72, StandardFailedGate.RR_INVALID],
+          failedGates,
           finalDecision: 'REJECTED',
           stage: 'WIN_RATE_CHECK',
         });
@@ -694,12 +705,19 @@ export async function runStagedPipeline(
 
       if (expectancy <= 0) {
         const reason = `Non-positive expectancy (${expectancy}R <= 0)`;
+        const failedGates: StandardFailedGate[] = [StandardFailedGate.NEGATIVE_EXPECTANCY];
+        if ((scoring.score || 0) < 72) {
+          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+        }
+        if (finalRR < thresholds.minimumRR) {
+          failedGates.push(StandardFailedGate.RR);
+        }
         rejectionTracker.recordCandidate({
           symbol: asset,
           direction: scoring.direction,
           score: scoring.score || 0,
           primaryRejectionReason: reason,
-          failedGates: [StandardFailedGate.RR_INVALID],
+          failedGates,
           finalDecision: 'REJECTED',
           stage: 'EXPECTANCY_CHECK',
         });
@@ -743,7 +761,10 @@ export async function runStagedPipeline(
       });
 
       if (!gate8Eval.isTradeable) {
-        const failedGates: StandardFailedGate[] = [StandardFailedGate.FINAL_SCORE_BELOW_72];
+        const failedGates: StandardFailedGate[] = [];
+        if (gate8Eval.finalScore < (thresholds.signalThreshold || 72) || gate8Eval.finalScore < 72) {
+          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+        }
         if (gate8Eval.factors.trendAlignment < 14) failedGates.push(StandardFailedGate.TREND);
         if (gate8Eval.factors.momentum < 7) failedGates.push(StandardFailedGate.MOMENTUM);
         if (gate8Eval.factors.marketStructure < 10) failedGates.push(StandardFailedGate.MARKET_STRUCTURE);
@@ -751,7 +772,15 @@ export async function runStagedPipeline(
         if (gate8Eval.factors.volumeLiquidity < 6) failedGates.push(StandardFailedGate.VOLUME);
         if (gate8Eval.factors.volatilityAtrQuality < 6) failedGates.push(StandardFailedGate.VOLATILITY);
         if (gate8Eval.factors.entryQuality < 3.5) failedGates.push(StandardFailedGate.VALID_ENTRY);
-        if (gate8Eval.factors.rrQuality < 3.5) failedGates.push(StandardFailedGate.RR_INVALID);
+        if (gate8Eval.factors.rrQuality < 3.5) failedGates.push(StandardFailedGate.RR);
+
+        if (failedGates.length === 0) {
+          if (gate8Eval.finalScore < 72) {
+            failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+          } else {
+            failedGates.push(StandardFailedGate.DATA_INTEGRITY);
+          }
+        }
 
         rejectionTracker.recordCandidate({
           symbol: asset,
