@@ -270,6 +270,14 @@ export interface ScannerFunnelCounters {
   providerErrors?: number;
   providerTimeouts?: number;
   scanDuration?: number;
+  globalScanStartMs?: number;
+  globalScanDeadlineMs?: number;
+  currentElapsedMs?: number;
+  remainingBudgetMs?: number;
+  gate6ElapsedMs?: number;
+  stage3ElapsedMs?: number;
+  timeBudgetExceeded?: boolean;
+  providerRequestsStoppedByBudget?: boolean;
   stage0Input?: number;
   stage0Output?: number;
   stage1Input?: number;

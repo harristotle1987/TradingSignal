@@ -78,11 +78,19 @@ export async function runStagedPipeline(
   engine: any,
   symbol: string,
   category?: string,
-  persistAndActivate: boolean = true
+  persistAndActivate: boolean = true,
+  options?: { scanStartedAt?: number; globalScanBudgetMs?: number }
 ): Promise<SignalGenerationResponse> {
   const cleanSymbol = symbol.trim().toUpperCase();
   const now = Date.now();
-  const scanStartTime = Date.now();
+  const globalScanStartMs = options?.scanStartedAt ?? Date.now();
+  const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 24000;
+  const globalScanDeadlineMs = globalScanStartMs + GLOBAL_SCAN_BUDGET_MS;
+  const scanStartTime = globalScanStartMs;
+  let timeBudgetExceeded = false;
+  let providerRequestsStoppedByBudget = false;
+  let gate6ElapsedMs = 0;
+  let stage3ElapsedMs = 0;
   const initialSessionRequests = quotaManager.getTotalSessionRequestsAll();
   const initialErrors = quotaManager.getTotalRecentErrors();
   const initialTimeouts = quotaManager.getTotalRecentTimeouts();
@@ -167,6 +175,12 @@ export async function runStagedPipeline(
 
     const BATCH_SIZE = 8;
     for (let i = 0; i < openAssets.length; i += BATCH_SIZE) {
+      if (globalScanDeadlineMs - Date.now() <= 0) {
+        timeBudgetExceeded = true;
+        providerRequestsStoppedByBudget = true;
+        logger.warn(`[Gate 3 Time Budget Exceeded] Global scan deadline reached (${Date.now() - globalScanStartMs}ms elapsed). Halting further preliminary screening.`);
+        break;
+      }
       const batch = openAssets.slice(i, i + BATCH_SIZE);
       const batchResults = await Promise.all(
         batch.map(async (asset) => {
@@ -302,7 +316,16 @@ export async function runStagedPipeline(
       preliminaryScore: cand.preliminaryScore,
     }));
 
-    const gate6Analysis = await Gate6ProgressiveMTF.analyzeCandidates(gate6Inputs, 5, scanStartTime);
+    const gate6Analysis = await Gate6ProgressiveMTF.analyzeCandidates(
+      gate6Inputs,
+      5,
+      globalScanStartMs,
+      globalScanDeadlineMs
+    );
+
+    gate6ElapsedMs = gate6Analysis.gate6ElapsedMs;
+    if (gate6Analysis.timeBudgetExceeded) timeBudgetExceeded = true;
+    if (gate6Analysis.providerRequestsStoppedByBudget) providerRequestsStoppedByBudget = true;
 
     // Record Gate 6 rejections in Funnel Analytics and Audit Store
     for (const rej of gate6Analysis.rejectedCandidates) {
@@ -365,12 +388,22 @@ export async function runStagedPipeline(
     }
 
     const deepAnalyzedCandidates: any[] = [];
-    const generalNews = await engine.fetchGeneralNews();
+    const stage3StartMs = Date.now();
+    let generalNews: any[] = [];
+    if (globalScanDeadlineMs - Date.now() > 0) {
+      generalNews = await engine.fetchGeneralNews();
+    } else {
+      timeBudgetExceeded = true;
+      providerRequestsStoppedByBudget = true;
+    }
     const thresholds = serverConfig.getConfig().thresholds;
 
     for (const gate6Cand of gate6Analysis.survivedCandidates) {
-      if (Date.now() - scanStartTime >= 24000) {
-        logger.warn(`[Stage 3 Time Budget Exceeded] Scan duration (${Date.now() - scanStartTime}ms) reached threshold (24000ms). Returning candidates evaluated so far.`);
+      const remainingMs = globalScanDeadlineMs - Date.now();
+      if (remainingMs <= 0) {
+        timeBudgetExceeded = true;
+        providerRequestsStoppedByBudget = true;
+        logger.warn(`[Stage 3 Time Budget Exceeded] Global scan deadline reached (${Date.now() - globalScanStartMs}ms elapsed). Returning candidates evaluated so far.`);
         break;
       }
       const asset = gate6Cand.asset;
@@ -381,6 +414,11 @@ export async function runStagedPipeline(
 
       let liveTicker: NormalizedTicker | null = null;
       try {
+        if (globalScanDeadlineMs - Date.now() <= 0) {
+          timeBudgetExceeded = true;
+          providerRequestsStoppedByBudget = true;
+          break;
+        }
         liveTicker = await marketDataManager.getPrice(asset, undefined, true, 'AUTOMATED_SCANNER');
       } catch (err) { continue; }
 
@@ -388,6 +426,12 @@ export async function runStagedPipeline(
 
       const baselinePrice = liveTicker.price;
       const newsSentiment = engine.evaluateNewsSentiment(asset, generalNews);
+
+      if (globalScanDeadlineMs - Date.now() <= 0) {
+        timeBudgetExceeded = true;
+        providerRequestsStoppedByBudget = true;
+        break;
+      }
       const crossCheck = await engine.verifyCrossSourcePrice(asset, baselinePrice);
 
       let allDataValid = true;
@@ -551,6 +595,7 @@ export async function runStagedPipeline(
       });
     }
 
+    stage3ElapsedMs = Date.now() - stage3StartMs;
     const deepMtfOutputCount = deepAnalyzedCandidates.length;
     logger.info(`[Progressive deep MTF analysis] Input: ${gate6Inputs.length} candidates, Output: ${deepMtfOutputCount} passed deep analysis`);
 
@@ -1070,7 +1115,12 @@ export async function runStagedPipeline(
     // -----------------------------------------------------------------
     // GATE 10 — RATE-LIMIT SAFETY + SCANNER TELEMETRY
     // -----------------------------------------------------------------
-    const scanDuration = Date.now() - scanStartTime;
+    const currentElapsedMs = Date.now() - globalScanStartMs;
+    const remainingBudgetMs = Math.max(0, globalScanDeadlineMs - Date.now());
+    const scanDuration = currentElapsedMs;
+    if (remainingBudgetMs <= 0) {
+      timeBudgetExceeded = true;
+    }
     const cacheStats = marketCache.getStats();
     const assetsCached = marketCache.getCachedSymbolsCount(universe);
     const providerRequests = quotaManager.getTotalSessionRequestsAll() - initialSessionRequests;
@@ -1099,6 +1149,14 @@ export async function runStagedPipeline(
       providerErrors: Math.max(0, providerErrors),
       providerTimeouts: Math.max(0, providerTimeouts),
       scanDuration,
+      globalScanStartMs,
+      globalScanDeadlineMs,
+      currentElapsedMs,
+      remainingBudgetMs,
+      gate6ElapsedMs,
+      stage3ElapsedMs,
+      timeBudgetExceeded,
+      providerRequestsStoppedByBudget,
       stageBreakdown: {
         stage0Screening: { input: universe.length, output: stage0OutputCount },
         stage1Preliminary: { input: stage0OutputCount, output: stage1OutputCount },
@@ -1165,6 +1223,14 @@ export async function runStagedPipeline(
       deepMtfInput: gate5OutputCount, deepMtfOutput: deepMtfOutputCount,
       finalValidationInput: deepMtfOutputCount, finalValidationOutput: finalValidationOutputCount,
       finalScoreGateInput: finalValidationOutputCount, finalScoreGateOutput: finalSignalsOutputCount,
+      globalScanStartMs,
+      globalScanDeadlineMs,
+      currentElapsedMs,
+      remainingBudgetMs,
+      gate6ElapsedMs,
+      stage3ElapsedMs,
+      timeBudgetExceeded,
+      providerRequestsStoppedByBudget,
       gate10Telemetry: gate10Data,
       rejectionReasons: aggregatedReasons,
       candidateRejectionDetails: candidateAuditRecords,

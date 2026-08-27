@@ -596,13 +596,20 @@ export class Gate6ProgressiveMTF {
       preliminaryScore: number;
     }>,
     targetSurvivors = Gate6ProgressiveMTF.MAX_EXPENSIVE_CANDIDATES,
-    scanStartTime?: number
+    globalScanStartMs?: number,
+    globalScanDeadlineMs?: number
   ): Promise<Gate6ProgressiveAnalysisResult> {
+    const startMs = globalScanStartMs ?? Date.now();
+    const deadlineMs = globalScanDeadlineMs ?? (startMs + 24000);
+    const gate6StartMs = Date.now();
+
+    let timeBudgetExceeded = false;
+    let providerRequestsStoppedByBudget = false;
+
     const survived: Gate6CandidateEvaluation[] = [];
     const rejected: Gate6CandidateEvaluation[] = [];
     let layer2EvaluationsCount = 0;
     const maxLayer2Allowed = targetSurvivors; // Max 5 expensive multi-timeframe candle fetches
-    const MAX_SCAN_TIME_MS = 22500; // 22.5s time budget limit for starting new candidate analysis
 
     logger.info(
       `[Gate 6 Progressive MTF] Progressively evaluating pool of ${candidates.length} deep candidates with bounded parallelism (Targeting TOP 3–5 fully validated setups)...`
@@ -614,10 +621,15 @@ export class Gate6ProgressiveMTF {
     const CONCURRENCY_LIMIT = 4;
 
     for (let i = 0; i < candidates.length; i += CONCURRENCY_LIMIT) {
-      // Time budget check before initiating new candidate batch
-      if (scanStartTime && (Date.now() - scanStartTime) >= MAX_SCAN_TIME_MS) {
+      const remainingMs = deadlineMs - Date.now();
+      const currentElapsedMs = Date.now() - startMs;
+
+      // Rule 2: Gate 6 must stop starting expensive work when remainingMs <= 1500ms OR currentElapsedMs >= 22500ms
+      if (remainingMs <= 1500 || currentElapsedMs >= 22500) {
+        timeBudgetExceeded = true;
+        providerRequestsStoppedByBudget = true;
         logger.warn(
-          `[Gate 6 Time Budget Exceeded] Elapsed scan time (${Date.now() - scanStartTime}ms) reached budget threshold (${MAX_SCAN_TIME_MS}ms). Halting further candidate processing to guarantee response within 25s target.`
+          `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (22500ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 1 candidate processing.`
         );
         break;
       }
@@ -727,10 +739,15 @@ export class Gate6ProgressiveMTF {
           break;
         }
 
-        // Time budget check before initiating Layer 2 expensive analysis
-        if (scanStartTime && (Date.now() - scanStartTime) >= MAX_SCAN_TIME_MS) {
+        const remainingMs = deadlineMs - Date.now();
+        const currentElapsedMs = Date.now() - startMs;
+
+        // Rule 2: Gate 6 must stop starting expensive work when remainingMs <= 1500ms OR currentElapsedMs >= 22500ms
+        if (remainingMs <= 1500 || currentElapsedMs >= 22500) {
+          timeBudgetExceeded = true;
+          providerRequestsStoppedByBudget = true;
           logger.warn(
-            `[Gate 6 Time Budget Exceeded] Elapsed scan time (${Date.now() - scanStartTime}ms) reached threshold (${MAX_SCAN_TIME_MS}ms). Halting further Layer 2 evaluations.`
+            `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (22500ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 2 candidate processing.`
           );
           break;
         }
@@ -805,6 +822,8 @@ export class Gate6ProgressiveMTF {
       }
     }
 
+    const gate6ElapsedMs = Date.now() - gate6StartMs;
+
     return {
       totalInputCandidates: candidates.length,
       analyzedCandidatesCount: analyzedCount,
@@ -812,6 +831,9 @@ export class Gate6ProgressiveMTF {
       survivedCandidates: survived,
       rejectedCandidates: rejected,
       summary: `Gate 6 analyzed ${analyzedCount}/${candidates.length} deep candidates. ${survived.length} passed both Layer 1 & Layer 2 (Target TOP 3–5).`,
+      gate6ElapsedMs,
+      timeBudgetExceeded,
+      providerRequestsStoppedByBudget,
     };
   }
 }

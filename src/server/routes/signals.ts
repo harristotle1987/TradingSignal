@@ -205,7 +205,7 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
     // Directly invoke Market Scan Engine as the single automated scan trigger
     logger.info(`[Scanner Trigger] MARKET_SCAN_ENGINE_START | triggerTime: ${Date.now()}`);
     const scanEngineStartTime = Date.now();
-    const result = await hourlyScanner.triggerAutomatedScan(true);
+    const result = await hourlyScanner.triggerAutomatedScan(true, requestStartTime);
     const scanEngineDurationMs = Date.now() - scanEngineStartTime;
     logger.info(`[Scanner Trigger] MARKET_SCAN_ENGINE_END | duration: ${scanEngineDurationMs}ms | status: ${result.status} | candidates: ${result.candidatesEvaluated} | accepted: ${result.acceptedSignalsCount}`);
 
@@ -274,6 +274,15 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
       scanDurationMs: durationMs,
       scanDuration: `${(durationMs / 1000).toFixed(2)}s`,
       totalDurationMs: totalRequestDurationMs,
+      globalScanStartMs: result.globalScanStartMs ?? requestStartTime,
+      globalScanDeadlineMs: result.globalScanDeadlineMs ?? (requestStartTime + 24000),
+      currentElapsedMs: result.currentElapsedMs ?? (Date.now() - requestStartTime),
+      remainingBudgetMs: result.remainingBudgetMs ?? Math.max(0, (requestStartTime + 24000) - Date.now()),
+      gate6ElapsedMs: result.gate6ElapsedMs ?? 0,
+      stage3ElapsedMs: result.stage3ElapsedMs ?? 0,
+      timeBudgetExceeded: result.timeBudgetExceeded ?? false,
+      providerRequestsStoppedByBudget: result.providerRequestsStoppedByBudget ?? false,
+      timingTelemetry: result.timingTelemetry,
       external_hourly_scan_status: statusLog
     });
   } catch (err: unknown) {

@@ -148,9 +148,14 @@ export class SignalEngine {
    * Stage 3: Deep multi-timeframe analysis on top candidates only (strictly conserves API calls).
    * Stage 4: Ranking qualified setups (at most 5 returned, top 2 marked as BEST TRADE, rest as suggestions).
    */
-  async generateSignal(symbol = 'EURUSD', category?: string, persistAndActivate: boolean = true): Promise<SignalGenerationResponse> {
+  async generateSignal(
+    symbol = 'EURUSD',
+    category?: string,
+    persistAndActivate: boolean = true,
+    options?: { scanStartedAt?: number; globalScanBudgetMs?: number }
+  ): Promise<SignalGenerationResponse> {
     const { runStagedPipeline } = await import('./StagedScannerPipeline.js');
-    return runStagedPipeline(this, symbol, category, persistAndActivate);
+    return runStagedPipeline(this, symbol, category, persistAndActivate, options);
   }
 
   /**

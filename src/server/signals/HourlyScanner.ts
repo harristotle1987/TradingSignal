@@ -90,6 +90,24 @@ export interface ManualScanResult {
   diagnostics?: string[];
   capState: DailyCapState;
   scanDurationMs?: number;
+  timingTelemetry?: {
+    globalScanStartMs: number;
+    globalScanDeadlineMs: number;
+    currentElapsedMs: number;
+    remainingBudgetMs: number;
+    gate6ElapsedMs: number;
+    stage3ElapsedMs: number;
+    timeBudgetExceeded: boolean;
+    providerRequestsStoppedByBudget: boolean;
+  };
+  globalScanStartMs?: number;
+  globalScanDeadlineMs?: number;
+  currentElapsedMs?: number;
+  remainingBudgetMs?: number;
+  gate6ElapsedMs?: number;
+  stage3ElapsedMs?: number;
+  timeBudgetExceeded?: boolean;
+  providerRequestsStoppedByBudget?: boolean;
 }
 
 export class HourlyScannerService {
@@ -119,8 +137,8 @@ export class HourlyScannerService {
   /**
    * Manually triggers a scan execution (e.g. from UI admin actions).
    */
-  async triggerManualScan(isExternal = false): Promise<ManualScanResult> {
-    return await this.executeIntelligentScan(isExternal);
+  async triggerManualScan(isExternal = false, scanStartTime?: number): Promise<ManualScanResult> {
+    return await this.executeIntelligentScan(isExternal, scanStartTime ? { scanStartedAt: scanStartTime } : undefined);
   }
 
   /**
@@ -128,7 +146,7 @@ export class HourlyScannerService {
    * A cron execution means: "SCAN THE MARKET NOW."
    * It does NOT check whether an internal timer or setting says it is due.
    */
-  async triggerAutomatedScan(isExternal = true): Promise<ManualScanResult> {
+  async triggerAutomatedScan(isExternal = true, scanStartTime?: number): Promise<ManualScanResult> {
     const now = Date.now();
     const configuredTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     logger.info(`[Hourly Scanner] CRON_TRIGGER_EXECUTING | Date.now(): ${now} | ISO UTC: ${new Date(now).toISOString()} | Runtime TZ: ${configuredTz}`);
@@ -137,15 +155,21 @@ export class HourlyScannerService {
     const { marketCache } = await import('../market/CacheStore.js');
     marketCache.clearExpired();
     marketCache.clearTickers();
-    return await this.executeIntelligentScan(isExternal);
+    return await this.executeIntelligentScan(isExternal, scanStartTime ? { scanStartedAt: scanStartTime } : undefined);
   }
 
   /**
    * Main Intelligent Multi-Asset Scan & Signal Selection Pipeline.
    */
-  private async executeIntelligentScan(isExternal = false): Promise<ManualScanResult> {
-    const scanStartTime = Date.now();
-    logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime}`);
+  private async executeIntelligentScan(
+    isExternal = false,
+    options?: { scanStartedAt?: number; globalScanBudgetMs?: number }
+  ): Promise<ManualScanResult> {
+    const scanStartTime = options?.scanStartedAt ?? Date.now();
+    const globalScanStartMs = scanStartTime;
+    const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 24000;
+    const globalScanDeadlineMs = globalScanStartMs + GLOBAL_SCAN_BUDGET_MS;
+    logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime} | deadline: ${globalScanDeadlineMs}`);
 
     if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
       logger.error('[Hourly Scanner] AUTOMATED SCANNER DISPATCH DISABLED: Production persistence is unavailable (FIREBASE_SERVICE_ACCOUNT required).');
@@ -246,11 +270,19 @@ export class HourlyScannerService {
       const universeDiagnostics: Array<{ symbol: string; reason: string }> = [];
       const rejectedDuringScan: Array<{ symbol: string; direction?: string; score?: number; reason: string }> = [];
 
+      let maxGate6ElapsedMs = 0;
+      let maxStage3ElapsedMs = 0;
+      let aggregatedTimeBudgetExceeded = false;
+      let aggregatedProviderRequestsStoppedByBudget = false;
+
       const categoryScanResults = await Promise.all(
         categories.map(async (category) => {
           try {
             logger.info(`[Hourly Scanner] Scanning universe: [${category}]...`);
-            const result = await signalEngine.generateSignal(category, category, false);
+            const result = await signalEngine.generateSignal(category, category, false, {
+              scanStartedAt: globalScanStartMs,
+              globalScanBudgetMs: GLOBAL_SCAN_BUDGET_MS,
+            });
             return { category, result };
           } catch (catErr) {
             logger.error(`[Hourly Scanner] Scan error for ${category}:`, { error: String(catErr) });
@@ -278,6 +310,17 @@ export class HourlyScannerService {
         const candidatesEvaluated = tel?.candidatesEvaluated ?? preliminaryCandidatesFound;
         const candidatesRejectedFinal = tel?.candidatesRejectedFinal ?? (candidatesEvaluated - (result.success && Array.isArray(result.signals) ? result.signals.length : 0));
         const signalsGenerated = tel?.signalsGenerated ?? (result.success && Array.isArray(result.signals) ? result.signals.length : 0);
+
+        if (tel) {
+          if (typeof tel.gate6ElapsedMs === 'number' && tel.gate6ElapsedMs > maxGate6ElapsedMs) {
+            maxGate6ElapsedMs = tel.gate6ElapsedMs;
+          }
+          if (typeof tel.stage3ElapsedMs === 'number' && tel.stage3ElapsedMs > maxStage3ElapsedMs) {
+            maxStage3ElapsedMs = tel.stage3ElapsedMs;
+          }
+          if (tel.timeBudgetExceeded) aggregatedTimeBudgetExceeded = true;
+          if (tel.providerRequestsStoppedByBudget) aggregatedProviderRequestsStoppedByBudget = true;
+        }
 
         totalUniverseSymbolsScanned += universeSymbolsScanned;
         totalPreliminaryCandidatesFound += preliminaryCandidatesFound;
@@ -1054,6 +1097,23 @@ export class HourlyScannerService {
         (d) => `${d.symbol}: ${d.reason}`
       );
 
+      const currentElapsedMs = Date.now() - globalScanStartMs;
+      const remainingBudgetMs = Math.max(0, globalScanDeadlineMs - Date.now());
+      if (remainingBudgetMs <= 0) {
+        aggregatedTimeBudgetExceeded = true;
+      }
+
+      const timingTelemetry = {
+        globalScanStartMs,
+        globalScanDeadlineMs,
+        currentElapsedMs,
+        remainingBudgetMs,
+        gate6ElapsedMs: maxGate6ElapsedMs,
+        stage3ElapsedMs: maxStage3ElapsedMs,
+        timeBudgetExceeded: aggregatedTimeBudgetExceeded,
+        providerRequestsStoppedByBudget: aggregatedProviderRequestsStoppedByBudget,
+      };
+
       return {
         success: true,
         status: 'COMPLETED',
@@ -1083,6 +1143,15 @@ export class HourlyScannerService {
         diagnostics: diagnosticStrings,
         capState: finalCapState,
         scanDurationMs,
+        timingTelemetry,
+        globalScanStartMs,
+        globalScanDeadlineMs,
+        currentElapsedMs,
+        remainingBudgetMs,
+        gate6ElapsedMs: maxGate6ElapsedMs,
+        stage3ElapsedMs: maxStage3ElapsedMs,
+        timeBudgetExceeded: aggregatedTimeBudgetExceeded,
+        providerRequestsStoppedByBudget: aggregatedProviderRequestsStoppedByBudget,
       };
     } catch (err) {
       logger.error('[Hourly Scanner] Critical failure during scan execution:', { error: String(err) });

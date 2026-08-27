@@ -61,6 +61,14 @@ export interface Gate10ScanTelemetryData {
   providerErrors: number;
   providerTimeouts: number;
   scanDuration: number;
+  globalScanStartMs: number;
+  globalScanDeadlineMs: number;
+  currentElapsedMs: number;
+  remainingBudgetMs: number;
+  gate6ElapsedMs: number;
+  stage3ElapsedMs: number;
+  timeBudgetExceeded: boolean;
+  providerRequestsStoppedByBudget: boolean;
   stageBreakdown: {
     stage0Screening: { input: number; output: number };
     stage1Preliminary: { input: number; output: number };
@@ -126,6 +134,7 @@ export class Gate10ScannerTelemetry {
       `↓`,
       `${data.signalsGenerated} signal(s) published (Gate 9 Signal Cap: ${data.signalsGenerated}/3)`,
       `----------------------------------------------------------------`,
+      `Global Scan Clock: Elapsed: ${data.currentElapsedMs}ms / ${data.scanDuration}ms | Deadline: ${data.globalScanDeadlineMs} | Remaining Budget: ${data.remainingBudgetMs}ms | Gate 6 Elapsed: ${data.gate6ElapsedMs}ms | Stage 3 Elapsed: ${data.stage3ElapsedMs}ms | Budget Exceeded: ${data.timeBudgetExceeded} | Requests Stopped: ${data.providerRequestsStoppedByBudget}`,
       `Performance: ${data.scanDuration}ms duration | Provider Requests: ${data.providerRequests} (Errors: ${data.providerErrors}, Timeouts: ${data.providerTimeouts})`,
       `================================================================`,
     ].join('\n');
