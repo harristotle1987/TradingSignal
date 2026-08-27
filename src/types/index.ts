@@ -563,6 +563,9 @@ export interface HistoricalPerformanceSummary {
   wins: number;
   losses: number;
   successRate: number | null;
+  activeCount?: number;
+  expiredCount?: number;
+  totalSignals?: number;
 }
 
 export interface HistoricalPerformanceTrendPoint {
@@ -573,12 +576,33 @@ export interface HistoricalPerformanceTrendPoint {
   successRate: number | null;
 }
 
+export interface HistoricalSignalOutcomeItem {
+  id: string;
+  symbol: string;
+  direction: 'BUY' | 'SELL';
+  timestamp: number;
+  resolvedAt?: number;
+  status: 'WIN' | 'LOSS' | 'ACTIVE' | 'EXPIRED' | 'CANCELLED' | 'INVALID';
+  entryPrice?: number;
+  stopLoss?: number;
+  takeProfit?: number;
+  tp1?: number;
+  tp2?: number;
+  tp3?: number;
+  strategy?: string;
+  provider?: string;
+  riskRewardRatio?: number;
+  realizedRR?: number;
+  finalOutcome?: string;
+}
+
 export interface HistoricalPerformanceResponse {
   success: boolean;
   message?: string;
   range: HistoricalPerformanceRange;
   summary: HistoricalPerformanceSummary;
   trend: HistoricalPerformanceTrendPoint[];
+  recentOutcomes?: HistoricalSignalOutcomeItem[];
   timestamp: number;
 }
 

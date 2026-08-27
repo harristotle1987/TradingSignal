@@ -10,11 +10,11 @@
  *
  * INITIAL CONFIGURABLE POLICY:
  * - STRONG_TREND: 75
- * - NORMAL_TREND: 78
- * - RANGE_REVERSAL: 78
- * - BREAKOUT: 78
- * - HIGH_VOLATILITY: 82
- * - TRANSITION: 85
+ * - NORMAL_TREND: 72
+ * - RANGE_REVERSAL: 72
+ * - BREAKOUT: 72
+ * - HIGH_VOLATILITY: 76
+ * - TRANSITION: 79
  * - UNKNOWN: NO SIGNAL (Execution Blocked)
  *
  * STRICT DISCIPLINE:
@@ -74,11 +74,11 @@ export class Gate27RegimeThresholds {
   private static policy: RegimeThresholdPolicyConfig = {
     regimeThresholds: {
       STRONG_TREND: 75,
-      NORMAL_TREND: 78,
-      RANGE_REVERSAL: 78,
-      BREAKOUT: 78,
-      HIGH_VOLATILITY: 82,
-      TRANSITION: 85,
+      NORMAL_TREND: 72,
+      RANGE_REVERSAL: 72,
+      BREAKOUT: 72,
+      HIGH_VOLATILITY: 76,
+      TRANSITION: 79,
       UNKNOWN: null, // NO SIGNAL
     },
     strategyModifiers: {

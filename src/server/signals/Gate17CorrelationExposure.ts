@@ -243,8 +243,8 @@ export class Gate17CorrelationExposure {
 
       // Rank group candidates descending by score + relativeStrengthScore
       const rankedInCluster = [...groupCandidates].sort((a, b) => {
-        const scoreA = (a.score || 80) + (a.relativeStrengthScore ? (a.relativeStrengthScore - 50) * 0.1 : 0);
-        const scoreB = (b.score || 80) + (b.relativeStrengthScore ? (b.relativeStrengthScore - 50) * 0.1 : 0);
+        const scoreA = (a.score || 72) + (a.relativeStrengthScore ? (a.relativeStrengthScore - 50) * 0.1 : 0);
+        const scoreB = (b.score || 72) + (b.relativeStrengthScore ? (b.relativeStrengthScore - 50) * 0.1 : 0);
         return scoreB - scoreA;
       });
 

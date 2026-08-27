@@ -850,6 +850,7 @@ router.delete('/signals/log/:id', async (req: Request, res: Response) => {
 
     // Deletions propagate errors from Firestore if they fail.
     const loggerSuccess = await SignalLogger.deleteLog(id);
+    await SignalOutcomeLogger.deleteOutcome(id);
     
     // Also remove from active signals cache and persistent sent signals
     signalEngine.removeActiveSignal(id);
@@ -904,6 +905,7 @@ router.post('/signals/log/bulk-delete', async (req: Request, res: Response) => {
 
       // Deletions propagate errors from Firestore if they fail.
       const loggerSuccess = await SignalLogger.deleteLog(id);
+      await SignalOutcomeLogger.deleteOutcome(id);
       signalEngine.removeActiveSignal(id);
       const sentSignalSuccess = await ScannerPersistence.deleteSentSignal(id);
       const notificationSuccess = await ScannerPersistence.deleteNotification(id);
@@ -936,6 +938,7 @@ router.post('/signals/log/bulk-delete', async (req: Request, res: Response) => {
 router.delete('/signals/log', async (_req: Request, res: Response) => {
   try {
     await SignalLogger.clearLogs();
+    await SignalOutcomeLogger.clearLogs();
     signalEngine.clearSignals();
     await ScannerPersistence.clearSentSignals();
     res.status(200).json({
@@ -1003,6 +1006,7 @@ router.delete('/signals/:id', async (req: Request, res: Response) => {
     const sentSignalSuccess = await ScannerPersistence.deleteSentSignal(id);
     const notificationSuccess = await ScannerPersistence.deleteNotification(id);
     const loggerSuccess = await SignalLogger.deleteLog(id);
+    await SignalOutcomeLogger.deleteOutcome(id);
 
     const success = removedFromMemory || sentSignalSuccess || notificationSuccess || loggerSuccess;
 

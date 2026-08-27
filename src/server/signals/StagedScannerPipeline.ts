@@ -317,7 +317,7 @@ export async function runStagedPipeline(
         initialScore: rej.compositeMtfScore || 0,
         watchingThreshold: 68,
         qualifiedCandidateThreshold: 72,
-        signalThreshold: 75,
+        signalThreshold: serverConfig.getConfig().thresholds.signalThreshold,
         strategyAgreementRatio: 0,
         timeframeAlignmentRatio: 0,
         grossRR: 0,
@@ -517,7 +517,7 @@ export async function runStagedPipeline(
     // -----------------------------------------------------------------
     // STAGE 3: Final Trade Validation (Gate 7 - 13 Mandatory Hard Gates)
     // Strict Policy: If ANY hard gate fails -> NOT tradeable -> No signal.
-    // Score never overrides hard gates. Acceptance: FINAL_SCORE >= 75 AND ALL HARD GATES = PASS
+    // Score never overrides hard gates. Acceptance: FINAL_SCORE >= thresholds.signalThreshold (72) AND ALL HARD GATES = PASS
     // -----------------------------------------------------------------
     const candidates: ValidatedCandidate[] = [];
 
@@ -550,7 +550,7 @@ export async function runStagedPipeline(
         marketRegime: scoring.marketRegime,
         activeSignals: engine.activeSignals,
         minimumRRThreshold: thresholds.minimumRR,
-        minimumScoreThreshold: 75,
+        minimumScoreThreshold: thresholds.signalThreshold,
       });
 
       if (!gate7Validation.isTradeable) {
@@ -628,7 +628,7 @@ export async function runStagedPipeline(
 
       // -----------------------------------------------------------------
       // STAGE 4: Gate 8 — Final Tradeability Threshold (10-Factor Rubric)
-      // Strict 75-point threshold.
+      // Configured tradeability threshold: >= thresholds.signalThreshold (72).
       // Factors: Trend 20, MTF 15, Momentum 10, Structure 15,
       // Volume 10, Volatility/ATR 10, Entry 5, R:R 5, Execution 5, Direction 5 = 100.
       // -----------------------------------------------------------------
@@ -668,14 +668,14 @@ export async function runStagedPipeline(
             riskRewardRatio: finalRR, score: gate8Eval.finalScore, confidenceScore: gate8Eval.finalScore,
             stage: 'WATCHING', status: 'WATCHING',
             hardGatesPassed: true, passedSoftConditions: gate8Eval.confluenceHighlights,
-            missingSoftConditions: [`Requires >= 75 score (Current: ${gate8Eval.finalScore}/100)`],
-            rejectionReason: gate8Eval.rejectionReason || 'Placed on Watchlist (Score 70–74)',
+            missingSoftConditions: [`Requires >= ${thresholds.signalThreshold} score (Current: ${gate8Eval.finalScore}/100)`],
+            rejectionReason: gate8Eval.rejectionReason || `Placed on Watchlist (Score ${thresholds.watchingThreshold}–${thresholds.signalThreshold - 1})`,
             marketRegime: scoring.marketRegime,
             strategy: primaryStrategyName, createdAt: now, updatedAt: now, expiresAt: now + serverConfig.getConfig().signalExpirationMs,
           });
         }
 
-        logAuditHelper(asset, scoring, primaryStrategyName, crossCheck, fp, gate8Eval.rejectionReason || `Score (${gate8Eval.finalScore}/100) below Gate 8 threshold (75)`);
+        logAuditHelper(asset, scoring, primaryStrategyName, crossCheck, fp, gate8Eval.rejectionReason || `Score (${gate8Eval.finalScore}/100) below Gate 8 threshold (${thresholds.signalThreshold})`);
         continue;
       }
 
@@ -949,7 +949,7 @@ export async function runStagedPipeline(
         gate6Layer1Mtf: { input: gate6Inputs.length, output: gate6Analysis.survivedCandidates.length },
         gate6Layer2Mtf: { input: gate6Analysis.survivedCandidates.length, output: deepMtfOutputCount },
         gate7HardGates: { input: deepMtfOutputCount, output: finalValidationOutputCount, failures: gate7FailuresCount },
-        gate8ScoreThreshold: { input: finalValidationOutputCount, output: allCandidateScores.filter((s) => s.passed).length, threshold: 75 },
+        gate8ScoreThreshold: { input: finalValidationOutputCount, output: allCandidateScores.filter((s) => s.passed).length, threshold: thresholds.signalThreshold },
         gate9SignalCap: { input: allCandidateScores.filter((s) => s.passed).length, output: finalSignals.length, cap: 3 },
       },
     };
@@ -963,7 +963,7 @@ export async function runStagedPipeline(
     logger.info(`- Gate 5 (Deep Candidate Selection): Input ${stage1OutputCount}, Output ${gate5OutputCount}`);
     logger.info(`- Gate 6 (Progressive Deep MTF): Layer 1 Evaluated: ${gate6Inputs.length}, Layer 2 Evaluated: ${gate6Analysis.survivedCandidates.length}, Output ${deepMtfOutputCount}`);
     logger.info(`- Gate 7 (Final Trade Hard Gates): Input ${deepMtfOutputCount}, Failures: ${gate7FailuresCount}, Output ${finalValidationOutputCount}`);
-    logger.info(`- Gate 8 (Tradeability Threshold >=75): Input ${finalValidationOutputCount}, Scored >=75: ${allCandidateScores.filter(s => s.passed).length}`);
+    logger.info(`- Gate 8 (Tradeability Threshold >=${thresholds.signalThreshold}): Input ${finalValidationOutputCount}, Scored >=${thresholds.signalThreshold}: ${allCandidateScores.filter(s => s.passed).length}`);
     logger.info(`- Gate 9 (Signal Cap <=3): Published ${finalSignalsOutputCount} Signals`);
 
     const stageTelemetry = {

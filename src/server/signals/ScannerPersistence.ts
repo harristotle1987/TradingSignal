@@ -696,7 +696,7 @@ export class ScannerPersistence {
       tp3Rr: signal.tp3Rr,
       riskRewardRatio: signal.riskRewardRatio,
       targetQualityScore: signal.targetQualityScore,
-      score: signal.score || signal.confidenceScore || 80,
+      score: signal.score || signal.confidenceScore || 72,
       rankTier: signal.rankTier || (signal.isBestTrade ? 'BEST_TRADE' : signal.isSecondBest ? 'SECOND_BEST' : 'SUGGESTION'),
       strategy: signal.strategy,
       timeframe: signal.timeframe,

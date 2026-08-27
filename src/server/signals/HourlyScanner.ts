@@ -327,7 +327,7 @@ export class HourlyScannerService {
           initialScore: score,
           watchingThreshold: thresholds.watchingThreshold || 70,
           qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-          signalThreshold: thresholds.signalThreshold || 80,
+          signalThreshold: thresholds.signalThreshold || 72,
           strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
           timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
           grossRR,
@@ -364,7 +364,7 @@ export class HourlyScannerService {
           initialScore: coreScore,
           watchingThreshold: thresholds.watchingThreshold || 70,
           qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-          signalThreshold: thresholds.signalThreshold || 80,
+          signalThreshold: thresholds.signalThreshold || 72,
           strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
           timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
           grossRR,
@@ -672,7 +672,7 @@ export class HourlyScannerService {
             initialScore: score,
             watchingThreshold: thresholds.watchingThreshold || 70,
             qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-            signalThreshold: thresholds.signalThreshold || 80,
+            signalThreshold: thresholds.signalThreshold || 72,
             strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
             timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
             grossRR,
@@ -764,7 +764,7 @@ export class HourlyScannerService {
             initialScore: scoreVal,
             watchingThreshold: thresholds.watchingThreshold || 70,
             qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-            signalThreshold: thresholds.signalThreshold || 80,
+            signalThreshold: thresholds.signalThreshold || 72,
             strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
             timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
             grossRR,
@@ -852,7 +852,7 @@ export class HourlyScannerService {
         Gate36ConfigurableSignalFrequency.recordNotificationCount(1);
 
         // Record Funnel Analytics Final Signal
-        const finalScore = sig.score ?? sig.confidenceScore ?? 80;
+        const finalScore = sig.score ?? sig.confidenceScore ?? 72;
         const grossRR = (sig as any).grossRiskRewardRatio ?? sig.riskRewardRatio ?? 0;
         const netRR = (sig as any).netRiskRewardRatio ?? sig.estimatedFriction?.netRiskRewardRatio ?? 0;
         const adverseNetRR = (sig as any).adverseNetRiskRewardRatio ?? (sig.estimatedFriction as any)?.adverseNetRiskRewardRatio ?? 0;
@@ -870,7 +870,7 @@ export class HourlyScannerService {
           initialScore: finalScore,
           watchingThreshold: thresholds.watchingThreshold || 70,
           qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-          signalThreshold: thresholds.signalThreshold || 80,
+          signalThreshold: thresholds.signalThreshold || 72,
           strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
           timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
           grossRR,
@@ -911,7 +911,7 @@ export class HourlyScannerService {
           dataFreshnessSeconds: 0,
           providerAgreement: true,
           expectedRR: sig.riskRewardRatio,
-          score: sig.score || 80,
+          score: sig.score || 72,
           status: 'ACCEPTED',
           rejectionReason: null,
           fingerprint: fp,
@@ -949,7 +949,7 @@ export class HourlyScannerService {
 
       // 8. If NO setups qualified
       if (dispatchedCount === 0) {
-        logger.info(`[Hourly Scanner] No setups met the strict ${thresholds.signalThreshold}+ quality and diversification criteria. Dispatched 0 signals (0-${dailyCap} is completely valid).`);
+        logger.info(`[Hourly Scanner] No setups met the ${thresholds.signalThreshold}+ quality and diversification criteria. Dispatched 0 signals (0-${dailyCap} is completely valid).`);
         const settings = ScannerPersistence.getSettings();
         if (settings.notifyOnNoTrade && !isExternal) {
           await ScannerPersistence.recordNotification({
@@ -1037,7 +1037,7 @@ export class HourlyScannerService {
         message:
           dispatchedCount > 0
             ? `Scan complete: Dispatched ${dispatchedCount} qualified automated setup(s). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`
-            : `Scan complete: 0 setups met strict ${finalCapState.dailySignalCap > 0 ? `${thresholds.signalThreshold}+` : ''} criteria (0-${finalCapState.dailySignalCap} is valid; no trades forced). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`,
+            : `Scan complete: 0 setups met ${finalCapState.dailySignalCap > 0 ? `${thresholds.signalThreshold}+` : ''} criteria (0-${finalCapState.dailySignalCap} is valid; no trades forced). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`,
         timestamp: Date.now(),
         lastScanTime: finalCapState.lastAutomatedScan || finalCapState.lastScanTime || scanStartTime,
         universeSymbolsScanned: totalUniverseSymbolsScanned,
