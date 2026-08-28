@@ -173,28 +173,6 @@ export class SignalOutcomeLogger {
   }
 
   /**
-   * Deletes an outcome log entry by ID
-   */
-  public static async deleteOutcome(id: string): Promise<boolean> {
-    this.init();
-    const hadLocal = this.localLogs.delete(id);
-    if (hadLocal) {
-      this.saveLocal();
-    }
-
-    const firestore = getFirestoreAdmin();
-    if (firestore) {
-      try {
-        await firestore.collection(FIRESTORE_OUTCOME_COL).doc(id).delete();
-        return true;
-      } catch (err) {
-        logger.warn('[SignalOutcomeLogger] Firestore failed to delete record:', { id, error: String(err) });
-      }
-    }
-    return hadLocal;
-  }
-
-  /**
    * Clears outcome logs
    */
   public static async clearLogs(): Promise<void> {

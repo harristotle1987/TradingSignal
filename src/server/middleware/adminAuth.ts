@@ -38,6 +38,37 @@ export function extractAuthToken(req: Request): string | null {
  * Express middleware to enforce admin authentication.
  */
 export function adminAuthMiddleware(req: Request, res: Response, next: NextFunction) {
-  logger.info(`[AdminAuth] Transparently permitting action for ${req.method} ${req.path} without authentication.`);
+  const token = extractAuthToken(req);
+
+  // Collect primary admin secrets from server environment
+  const adminSecrets = [
+    process.env.ADMIN_API_KEY,
+    process.env.ADMIN_SECRET,
+    process.env.SCANNER_CRON_SECRET,
+  ]
+    .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+    .map((s) => s.trim());
+
+  let isAuthorized = false;
+
+  if (adminSecrets.length > 0) {
+    if (token && adminSecrets.includes(token)) {
+      isAuthorized = true;
+    }
+  } else {
+    // If no server-side secrets are configured in environment at all, allow access
+    isAuthorized = true;
+  }
+
+  if (!isAuthorized) {
+    logger.warn(`[AdminAuth] Unauthorized access attempt blocked on ${req.method} ${req.path}`);
+    return res.status(401).json({
+      success: false,
+      status: 'UNAUTHORIZED',
+      message: 'Unauthorized: Missing or invalid admin authentication token.',
+      timestamp: Date.now(),
+    });
+  }
+
   next();
 }

@@ -4,7 +4,6 @@
  * Serves as a reliable fallback provider when primary Twelve Data API hits rate limits.
  */
 
-import { fetchWithTimeout } from '../../utils/fetchWithTimeout.js';
 import { IMarketDataProvider } from './IMarketDataProvider.js';
 import { NormalizedTicker, ProviderHealth } from '../types.js';
 import { SymbolNormalizer } from '../SymbolNormalizer.js';
@@ -21,7 +20,7 @@ export class ExchangeRateAdapter implements IMarketDataProvider {
   readonly id = 'exchangerate';
   readonly name = 'Open Exchange Rates (Forex Fallback)';
 
-  async fetchPrice(appSymbol: string, globalScanDeadlineMs?: number): Promise<NormalizedTicker> {
+  async fetchPrice(appSymbol: string): Promise<NormalizedTicker> {
     const receivedAt = Date.now();
     let providerSymbol = appSymbol;
 
@@ -35,17 +34,7 @@ export class ExchangeRateAdapter implements IMarketDataProvider {
       const quote = norm.slice(3, 6);
       providerSymbol = `${base}/${quote}`;
 
-      const configTimeout = serverConfig.getConfig().marketDataTimeoutMs;
-      let timeoutMs = configTimeout;
-      const safetyMargin = 100;
-      if (globalScanDeadlineMs) {
-        const remainingMs = globalScanDeadlineMs - Date.now();
-        if (remainingMs <= safetyMargin) {
-          throw new Error('TIMEOUT: Global scanner deadline reached before starting request');
-        }
-        timeoutMs = Math.min(configTimeout, remainingMs - safetyMargin);
-      }
-
+      const timeoutMs = serverConfig.getConfig().marketDataTimeoutMs;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -89,9 +78,6 @@ export class ExchangeRateAdapter implements IMarketDataProvider {
       };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('TIMEOUT') || msg.includes('AbortError')) {
-        throw err;
-      }
       return this.createErrorTicker(appSymbol, providerSymbol, `ExchangeRate fetch failed: ${msg}`);
     }
   }

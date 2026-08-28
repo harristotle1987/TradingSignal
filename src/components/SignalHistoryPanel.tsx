@@ -43,7 +43,6 @@ import { SignalPerformanceChart } from './SignalPerformanceChart.js';
 
 interface SignalHistoryPanelProps {
   history: SignalHistoryItem[];
-  rejected72PlusCandidates?: any[];
   onClearHistory: () => void;
   onDeleteHistoryItem?: (id: string, symbol: string) => void;
   onDeleteMultipleHistoryItems?: (ids: string[]) => Promise<void>;
@@ -56,7 +55,6 @@ interface SignalHistoryPanelProps {
 
 export function SignalHistoryPanel({
   history,
-  rejected72PlusCandidates = [],
   onClearHistory,
   onDeleteHistoryItem,
   onDeleteMultipleHistoryItems,
@@ -66,7 +64,7 @@ export function SignalHistoryPanel({
   onTimeZoneChange,
   onSignalRefreshed,
 }: SignalHistoryPanelProps) {
-  const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'TOP_TRADE' | 'SUGGESTION' | '72PLUS_REJECTED'>('ALL');
+  const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'TOP_TRADE' | 'SUGGESTION'>('ALL');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'list' | 'chart'>('list');
 
@@ -279,17 +277,6 @@ export function SignalHistoryPanel({
             >
               Suggestions ({suggestionCount})
             </button>
-            <button
-              type="button"
-              onClick={() => setFilter('72PLUS_REJECTED')}
-              className={`px-2 py-0.5 rounded transition cursor-pointer ${
-                filter === '72PLUS_REJECTED'
-                  ? 'bg-rose-950 text-rose-300 font-semibold border border-rose-800'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              72+ Rejected ({rejected72PlusCandidates.length})
-            </button>
           </div>
 
           {/* Clear History Button */}
@@ -336,103 +323,6 @@ export function SignalHistoryPanel({
 
       {activeTab === 'chart' ? (
         <SignalPerformanceChart refreshTrigger={history.length} />
-      ) : filter === '72PLUS_REJECTED' ? (
-        rejected72PlusCandidates.length > 0 ? (
-          <div className="space-y-3 font-mono">
-            {rejected72PlusCandidates.map((cand: any, idx: number) => (
-              <div
-                key={idx}
-                className="bg-slate-950/90 border border-rose-900/60 hover:border-rose-800 rounded-xl p-4 transition shadow-md space-y-2.5"
-              >
-                {/* Header Row: Symbol, Direction, Status & Score */}
-                <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-lg font-bold text-white">{cand.symbol}</span>
-                    {cand.direction && (
-                      <span
-                        className={`px-2 py-0.5 rounded text-xs font-bold ${
-                          cand.direction === 'BUY'
-                            ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                            : 'bg-rose-950 text-rose-400 border border-rose-800'
-                        }`}
-                      >
-                        {cand.direction}
-                      </span>
-                    )}
-                    <span className="px-2 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800 text-xs font-bold tracking-wide">
-                      STATUS: {cand.statusText || 'REJECTED — NOT TRADEABLE'}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <span className="text-amber-300 font-bold bg-amber-950 px-2 py-0.5 rounded text-xs border border-amber-800/80">
-                      Score: {cand.score || cand.finalScore}/100
-                    </span>
-                    {cand.timestamp && (
-                      <span className="text-xs text-slate-400">
-                        {formatTimeWithZone(cand.timestamp, preferredTimeZone)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Setup Prices */}
-                {(cand.entryPrice || cand.stopLoss || cand.takeProfit || cand.tp1) && (
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 bg-slate-900/80 p-2 rounded-lg border border-slate-800 text-xs">
-                    <div>
-                      <span className="text-slate-500 block text-[10px]">ENTRY</span>
-                      <span className="text-slate-200 font-semibold">{cand.entryPrice ?? 'N/A'}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-500 block text-[10px]">STOP LOSS</span>
-                      <span className="text-rose-400 font-semibold">{cand.stopLoss ?? 'N/A'}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-500 block text-[10px]">TP1</span>
-                      <span className="text-emerald-400 font-semibold">{cand.tp1 ?? cand.takeProfit ?? 'N/A'}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-500 block text-[10px]">TP2</span>
-                      <span className="text-emerald-400 font-semibold">{cand.tp2 ?? 'N/A'}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-500 block text-[10px]">TP3</span>
-                      <span className="text-emerald-400 font-semibold">{cand.tp3 ?? 'N/A'}</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Rejection Reason & Human-Readable Summary */}
-                <div className="bg-slate-900/60 p-2.5 rounded-lg border border-slate-800/80 text-xs space-y-1">
-                  <div className="text-rose-300 font-semibold">
-                    Primary Reason: <span className="text-slate-200 font-normal">{cand.primaryRejectionReason}</span>
-                  </div>
-                  {cand.rejectionSummary && (
-                    <div className="text-amber-300/90 text-xs font-sans italic">
-                      Summary: {cand.rejectionSummary}
-                    </div>
-                  )}
-                </div>
-
-                {/* Failed Gates */}
-                {cand.failedGates && cand.failedGates.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                    <span className="text-xs text-slate-400">Failed Gates:</span>
-                    {cand.failedGates.map((g: string, gi: number) => (
-                      <span key={gi} className="px-2 py-0.5 bg-rose-950/80 text-rose-300 text-xs rounded border border-rose-800/60">
-                        {g}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-8 bg-slate-950/60 rounded-xl border border-slate-800 text-slate-400 text-xs font-mono">
-            No 72+ candidates have been rejected in recent scans.
-          </div>
-        )
       ) : filteredHistory.length > 0 ? (
         <div className="space-y-3">
           {/* Bulk Action Controls */}
@@ -646,7 +536,7 @@ export function SignalHistoryPanel({
                     )}
 
                     <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                      Target Quality: <strong className="text-emerald-400 font-bold">{item.targetQualityScore !== undefined ? `${item.targetQualityScore}/100` : `${item.score || 72}/100`}</strong>
+                      Target Quality: <strong className="text-emerald-400 font-bold">{item.targetQualityScore !== undefined ? `${item.targetQualityScore}/100` : `${item.score || 75}/100`}</strong>
                     </span>
 
                     {(item.estimatedWinRate !== undefined || item.modelEstimatedWinRate !== undefined) && (

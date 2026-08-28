@@ -55,7 +55,7 @@ export class Gate9FinalSignalCap {
     const totalPassed = qualifiedCandidates.length;
 
     if (totalPassed === 0) {
-      logger.info(`[Gate 9 Signal Cap] 0 candidates satisfied Gate 7 hard gates & Gate 8 score >= 72. Publishing 0 signals.`);
+      logger.info(`[Gate 9 Signal Cap] 0 candidates satisfied Gate 7 hard gates & Gate 8 score >= 75. Publishing 0 signals.`);
       return {
         totalPassedCandidates: 0,
         maxCapAllowed: this.MAX_SIGNALS_PER_SCAN,
@@ -63,7 +63,7 @@ export class Gate9FinalSignalCap {
         publishedSignals: [],
         publishedCandidates: [],
         spilloverCandidates: [],
-        zeroSignalsReason: 'Zero candidates satisfied both Gate 7 hard gates and Gate 8 score hurdle (>=72). No signals forced.',
+        zeroSignalsReason: 'Zero candidates satisfied both Gate 7 hard gates and Gate 8 score hurdle (>=75). No signals forced.',
       };
     }
 

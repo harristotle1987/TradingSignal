@@ -19,12 +19,11 @@
  * STRICT EXECUTION POLICY:
  * - If ANY hard gate fails -> candidate is NOT tradeable -> DO NOT generate a signal.
  * - Numerical score NEVER overrides hard gates. (A score of 95 with invalid entry data is strictly rejected).
- * - ACCEPTANCE CRITERIA: FINAL_SCORE >= 72 AND ALL HARD_GATES = PASS.
+ * - ACCEPTANCE CRITERIA: FINAL_SCORE >= 75 AND ALL HARD_GATES = PASS.
  * - Only then classify the candidate as TRADEABLE.
  */
 
 import { NormalizedCandle, NormalizedTicker, SignalDirection } from '../../types/index.js';
-import { serverConfig } from '../config.js';
 import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 import { CooldownManager } from './CooldownManager.js';
 import { SignalFingerprint } from './SignalFingerprint.js';
@@ -82,9 +81,7 @@ export interface Gate7ValidationResult {
 }
 
 export class Gate7FinalTradeValidation {
-  public static get REQUIRED_MIN_SCORE(): number {
-    return serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 72;
-  }
+  public static readonly REQUIRED_MIN_SCORE = 75;
   public static readonly DEFAULT_MIN_RR = 1.3;
   public static readonly MAX_DATA_AGE_SECONDS = 180; // 3 minutes
 

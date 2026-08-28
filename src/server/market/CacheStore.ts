@@ -6,7 +6,6 @@
 import { NormalizedTicker, NormalizedCandle } from './types.js';
 import { serverConfig } from '../config.js';
 import { logger } from '../logger.js';
-import { getActiveProfiler } from '../signals/ScanPerformanceProfiler.js';
 
 const getEnvInt = (key: string, defaultValue: number): number => {
   const val = process.env[key];

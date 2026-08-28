@@ -16,20 +16,13 @@ import {
 } from '../types/index.js';
 
 class ApiClient {
-  private adminToken: string | null = typeof window !== 'undefined' ? localStorage.getItem('trading_signal_admin_token') : null;
+  private adminToken: string | null = null;
 
   /**
    * Dynamically sets admin authentication token in memory for administrative requests
    */
   public setAdminToken(token: string | null): void {
     this.adminToken = token;
-    if (typeof window !== 'undefined') {
-      if (token) {
-        localStorage.setItem('trading_signal_admin_token', token);
-      } else {
-        localStorage.removeItem('trading_signal_admin_token');
-      }
-    }
   }
 
   /**

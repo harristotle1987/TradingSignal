@@ -46,9 +46,9 @@ export class Gate4RequestBudget {
    * Evaluates the current API request budget state across all providers and
    * calculates the dynamic candidate allowance for deep MTF scanning.
    */
-  public static evaluateBudget(category?: string): Gate4BudgetEvaluation {
+  public static evaluateBudget(): Gate4BudgetEvaluation {
     const now = Date.now();
-    const budget = quotaManager.getDynamicDeepBudget(category);
+    const budget = quotaManager.getDynamicDeepBudget();
     const passed = budget.maxDeepCandidates > 0;
 
     let reason = '';
@@ -63,7 +63,7 @@ export class Gate4RequestBudget {
         reason = `Gate 4 LOW Budget: Constrained capacity (${budget.maxDeepCandidates} deep candidates permitted). Rate-limit pacing applied.`;
         break;
       case 'CRITICAL':
-        reason = `Gate 4 CRITICAL Budget: Severe quota pressure (${budget.maxDeepCandidates} deep candidates permitted). Prioritizing top setups.`;
+        reason = `Gate 4 CRITICAL Budget: Severe quota pressure (${budget.maxDeepCandidates} deep candidates permitted). Prioritizing top 2-3 setups.`;
         break;
       case 'EXHAUSTED':
         reason = `Gate 4 EXHAUSTED Budget: Zero deep candidates permitted. Cooldown/limit lock active. Deep analysis gracefully bypassed.`;

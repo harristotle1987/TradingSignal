@@ -1050,38 +1050,20 @@ export class ScoringEngine {
    */
   static classifyScore(score: number, customThresholds?: { signalThreshold: number; qualifiedCandidateThreshold: number; watchingThreshold: number }) {
     const thresholds = customThresholds || serverConfig.getConfig().thresholds;
-    if (score >= 90) {
+    if (score >= thresholds.signalThreshold) {
       return {
-        tier: 'EXCEPTIONAL' as const,
-        label: `Exceptional (90-100)`,
+        tier: 'ACTIONABLE_SIGNAL' as const,
+        label: `ACTIONABLE SIGNAL (${thresholds.signalThreshold}+)`,
         isActionable: true,
         isQualifiedCandidate: true,
         isWatching: true,
       };
     }
-    if (score >= 80) {
+    if (score >= thresholds.qualifiedCandidateThreshold) {
       return {
-        tier: 'VERY_STRONG' as const,
-        label: `Very Strong setup (80-89)`,
-        isActionable: true,
-        isQualifiedCandidate: true,
-        isWatching: true,
-      };
-    }
-    if (score >= 75) {
-      return {
-        tier: 'STRONG' as const,
-        label: `Strong setup (75-79)`,
-        isActionable: true,
-        isQualifiedCandidate: true,
-        isWatching: true,
-      };
-    }
-    if (score >= (thresholds.signalThreshold || 72)) {
-      return {
-        tier: 'MODERATE_VALID' as const,
-        label: `Valid / Moderate setup (72-74)`,
-        isActionable: true,
+        tier: 'QUALIFIED_CANDIDATE' as const,
+        label: `QUALIFIED CANDIDATE (${thresholds.qualifiedCandidateThreshold}-${thresholds.signalThreshold - 1})`,
+        isActionable: false,
         isQualifiedCandidate: true,
         isWatching: true,
       };
@@ -1089,7 +1071,7 @@ export class ScoringEngine {
     if (score >= thresholds.watchingThreshold) {
       return {
         tier: 'WATCHING' as const,
-        label: `WATCHING (${thresholds.watchingThreshold}-${(thresholds.signalThreshold || 72) - 1})`,
+        label: `WATCHING (${thresholds.watchingThreshold}-${thresholds.qualifiedCandidateThreshold - 1})`,
         isActionable: false,
         isQualifiedCandidate: false,
         isWatching: true,
