@@ -165,6 +165,12 @@ export class HistoricalPerformanceManager {
       if (!log || !log.id || deletedIds.has(log.id)) continue;
       if (!isTradeableLogRecord(log)) continue;
 
+      const provenance = (log as any).provenance ? String((log as any).provenance).toUpperCase() : 'LIVE';
+      const isSynthetic = Boolean((log as any).isSynthetic);
+      if (provenance === 'BACKTEST' || provenance === 'SIMULATION' || provenance === 'TEST' || isSynthetic) {
+        continue;
+      }
+
       const ts = sanitizeTimestamp(log.timestamp || log.updatedAt);
       if (!ts) continue;
 
@@ -197,6 +203,12 @@ export class HistoricalPerformanceManager {
     // 2. Process Outcome Logs (higher precedence on terminal status resolution)
     for (const outcome of outcomeLogs) {
       if (!outcome || !outcome.id || deletedIds.has(outcome.id)) continue;
+
+      const provenance = (outcome as any).provenance ? String((outcome as any).provenance).toUpperCase() : 'LIVE';
+      const isSynthetic = Boolean((outcome as any).isSynthetic);
+      if (provenance === 'BACKTEST' || provenance === 'SIMULATION' || provenance === 'TEST' || isSynthetic) {
+        continue;
+      }
 
       const ts = sanitizeTimestamp(outcome.timestamp || outcome.detectedAt || outcome.updatedAt);
       if (!ts) continue;
@@ -260,6 +272,12 @@ export class HistoricalPerformanceManager {
       if (!sent || !sent.id || deletedIds.has(sent.id)) continue;
       // Filter out non-tradeable or internal items
       if (sent.isTradeableSignal === false || (sent.direction as string) === 'NO_TRADE') continue;
+
+      const provenance = (sent as any).provenance ? String((sent as any).provenance).toUpperCase() : 'LIVE';
+      const isSynthetic = Boolean((sent as any).isSynthetic);
+      if (provenance === 'BACKTEST' || provenance === 'SIMULATION' || provenance === 'TEST' || isSynthetic) {
+        continue;
+      }
 
       const ts = sanitizeTimestamp(sent.timestamp || (sent as any).validatedAt);
       if (!ts) continue;

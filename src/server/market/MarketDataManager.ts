@@ -37,19 +37,37 @@ class ProviderRequestQueue {
     exchangerate: 100,
   };
 
-  async enqueue<T>(providerId: string, fn: () => Promise<T>): Promise<T> {
+  async enqueue<T>(providerId: string, fn: () => Promise<T>, globalScanDeadlineMs?: number): Promise<T> {
     const cleanId = providerId.toLowerCase();
     const hasTwelveDataKey = Boolean(process.env.TWELVE_DATA_API_KEY && process.env.TWELVE_DATA_API_KEY.trim().length > 0);
     const spacing = cleanId === 'twelvedata' && !hasTwelveDataKey ? 0 : (this.minSpacingMs[cleanId] || 100);
+
+    const safetyMargin = 100;
+    if (globalScanDeadlineMs) {
+      const remaining = globalScanDeadlineMs - Date.now();
+      if (remaining <= safetyMargin) {
+        throw new Error(`TIMEOUT: Global scanner deadline reached during queue wait for ${providerId}`);
+      }
+    }
 
     const previousPromise = this.providerQueues.get(cleanId) || Promise.resolve();
 
     const currentPromise = previousPromise
       .then(async () => {
+        if (globalScanDeadlineMs) {
+          const remaining = globalScanDeadlineMs - Date.now();
+          if (remaining <= safetyMargin) {
+            throw new Error(`TIMEOUT: Global scanner deadline reached during queue wait for ${providerId}`);
+          }
+        }
         const last = this.lastCallTime.get(cleanId) || 0;
         const elapsed = Date.now() - last;
         if (elapsed < spacing) {
-          await new Promise((res) => setTimeout(res, spacing - elapsed));
+          const sleepTime = spacing - elapsed;
+          if (globalScanDeadlineMs && (Date.now() + sleepTime > globalScanDeadlineMs - safetyMargin)) {
+            throw new Error(`TIMEOUT: Global scanner deadline would be reached during pacing delay for ${providerId}`);
+          }
+          await new Promise((res) => setTimeout(res, sleepTime));
         }
         this.lastCallTime.set(cleanId, Date.now());
         return fn();
@@ -363,7 +381,8 @@ export class MarketDataManager {
     providerId: string,
     cleanSymbol: string,
     assetClass: 'CRYPTO' | 'STOCK' | 'FOREX' | 'INDEX' | 'UNKNOWN',
-    isCritical: boolean
+    isCritical: boolean,
+    globalScanDeadlineMs?: number
   ): Promise<NormalizedTicker> {
     const adapter = this.getProvider(providerId);
     if (!adapter) {
@@ -391,7 +410,7 @@ export class MarketDataManager {
       quotaManager.recordRequest(providerId);
       requestRegistry.record(providerId, 'fetchPrice', cleanSymbol, isCritical ? 'Critical Price Fetch' : 'Standard Price Fetch');
       try {
-        const result = await adapter.fetchPrice(cleanSymbol);
+        const result = await adapter.fetchPrice(cleanSymbol, globalScanDeadlineMs);
         const latency = Date.now() - startTime;
         const success = result.status === 'OK' && result.price > 0;
         const is429 = result.errorMessage?.includes('429') || false;
@@ -424,7 +443,7 @@ export class MarketDataManager {
           `Provider '${providerId}' call failed: ${errMsg}`
         );
       }
-    });
+    }, globalScanDeadlineMs);
   }
 
   /**
@@ -436,7 +455,8 @@ export class MarketDataManager {
     appSymbol: string,
     requestedProvider?: string,
     forceFresh = false,
-    reason: 'USER_CLICK' | 'AUTOMATED_SCANNER' = 'USER_CLICK'
+    reason: 'USER_CLICK' | 'AUTOMATED_SCANNER' = 'USER_CLICK',
+    globalScanDeadlineMs?: number
   ): Promise<NormalizedTicker> {
     const cleanSymbol = SymbolNormalizer.normalizeAppSymbol(appSymbol);
     if (!cleanSymbol) {
@@ -513,13 +533,13 @@ export class MarketDataManager {
     let primaryResult: NormalizedTicker;
 
     if (forceFresh) {
-      primaryResult = await this.fetchPriceFromProviderDirect(primaryProvider, cleanSymbol, assetClass, true);
+      primaryResult = await this.fetchPriceFromProviderDirect(primaryProvider, cleanSymbol, assetClass, true, globalScanDeadlineMs);
       if (primaryResult.status === 'OK' && primaryResult.price > 0) {
         marketCache.set(primaryProvider, cleanSymbol, primaryResult, cacheTtlMs);
       }
     } else {
       primaryResult = await marketCache.getOrFetch(primaryProvider, cleanSymbol, cacheTtlMs, async () => {
-        return this.fetchPriceFromProviderDirect(primaryProvider, cleanSymbol, assetClass, true);
+        return this.fetchPriceFromProviderDirect(primaryProvider, cleanSymbol, assetClass, true, globalScanDeadlineMs);
       });
     }
 
@@ -550,13 +570,13 @@ export class MarketDataManager {
         let fallbackResult: NormalizedTicker;
 
         if (forceFresh) {
-          fallbackResult = await this.fetchPriceFromProviderDirect(fbId, cleanSymbol, assetClass, true);
+          fallbackResult = await this.fetchPriceFromProviderDirect(fbId, cleanSymbol, assetClass, true, globalScanDeadlineMs);
           if (fallbackResult.status === 'OK' && fallbackResult.price > 0) {
             marketCache.set(fbId, cleanSymbol, fallbackResult, cacheTtlMs);
           }
         } else {
           fallbackResult = await marketCache.getOrFetch(fbId, cleanSymbol, cacheTtlMs, async () => {
-            return this.fetchPriceFromProviderDirect(fbId, cleanSymbol, assetClass, true);
+            return this.fetchPriceFromProviderDirect(fbId, cleanSymbol, assetClass, true, globalScanDeadlineMs);
           });
         }
 
@@ -656,7 +676,7 @@ export class MarketDataManager {
   /**
    * Fetches candles if supported by the specified provider with caching, rate-limit check, and fallback.
    */
-  async getCandles(appSymbol: string, requestedProvider?: string, timeframe = '1m', limit = 50, critical = false): Promise<NormalizedCandle[]> {
+  async getCandles(appSymbol: string, requestedProvider?: string, timeframe = '1m', limit = 50, critical = false, globalScanDeadlineMs?: number): Promise<NormalizedCandle[]> {
     const cleanSymbol = SymbolNormalizer.normalizeAppSymbol(appSymbol);
     const routing = this.getRoutingForSymbol(cleanSymbol, requestedProvider);
     let primaryProviderId = (requestedProvider || routing.primaryProvider).toLowerCase();
@@ -677,7 +697,7 @@ export class MarketDataManager {
             quotaManager.recordRequest(primaryProviderId);
             requestRegistry.record(primaryProviderId, `fetchCandles:${timeframe}`, cleanSymbol, critical ? 'Critical Candle Fetch' : 'Candle Fetch');
             try {
-              const res = await adapter.fetchCandles!(cleanSymbol, timeframe, limit);
+              const res = await adapter.fetchCandles!(cleanSymbol, timeframe, limit, globalScanDeadlineMs);
               const latency = Date.now() - startTime;
               if (res && res.length > 0) {
                 quotaManager.recordResponse(primaryProviderId, 200, latency);
@@ -692,7 +712,7 @@ export class MarketDataManager {
               logger.info(`Primary provider '${primaryProviderId}' candle fetch unavailable for ${cleanSymbol} (${timeframe}): ${errMsg}`);
               return [];
             }
-          });
+          }, globalScanDeadlineMs);
         }
       }
 
@@ -710,7 +730,7 @@ export class MarketDataManager {
               quotaManager.recordRequest(fallbackId);
               requestRegistry.record(fallbackId, `fetchCandles:${timeframe}`, cleanSymbol, critical ? 'Critical Fallback Candle Fetch' : 'Fallback Candle Fetch');
               try {
-                const res = await fallbackAdapter.fetchCandles!(cleanSymbol, timeframe, limit);
+                const res = await fallbackAdapter.fetchCandles!(cleanSymbol, timeframe, limit, globalScanDeadlineMs);
                 const latency = Date.now() - startTime;
                 if (res && res.length > 0) {
                   quotaManager.recordResponse(fallbackId, 200, latency);
@@ -726,7 +746,7 @@ export class MarketDataManager {
                 logger.info(`Fallback provider '${fallbackId}' candle fetch unavailable for ${cleanSymbol} (${timeframe}): ${errMsg}`);
                 return [];
               }
-            });
+            }, globalScanDeadlineMs);
             if (candles && candles.length > 0) {
               return candles;
             }

@@ -46,6 +46,7 @@ import { MarketStructureDetector } from './MarketStructureDetector.js';
 import { SignalAuditStore } from './SignalAuditStore.js';
 import { ScannerPersistence } from './ScannerPersistence.js';
 import { Gate35SignalFunnelAnalytics } from './Gate35SignalFunnelAnalytics.js';
+import { Gate31NewsRiskClassification } from './Gate31NewsRiskClassification.js';
 import { OpportunityFunnelStore } from './Gate26OpportunityFunnel.js';
 import { CandidateRejectionTracker, StandardFailedGate } from './CandidateRejectionTracker.js';
 import { logger } from '../logger.js';
@@ -421,6 +422,9 @@ export async function runStagedPipeline(
         if (!lastCandle || lastCandle.close <= 0) return null;
 
         try {
+          // Sync verified news from Twelve Data for this candidate before evaluating news risk
+          await Gate31NewsRiskClassification.syncVerifiedNews(asset);
+
           const liveTicker = await marketDataManager.getPrice(asset, undefined, true, 'AUTOMATED_SCANNER');
           if (!liveTicker || liveTicker.price <= 0) return null;
           const baselinePrice = liveTicker.price;

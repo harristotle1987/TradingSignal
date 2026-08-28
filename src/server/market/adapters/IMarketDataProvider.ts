@@ -11,12 +11,12 @@ export interface IMarketDataProvider {
   /**
    * Fetches the current ticker price for a given normalized application symbol.
    */
-  fetchPrice(appSymbol: string): Promise<NormalizedTicker>;
+  fetchPrice(appSymbol: string, globalScanDeadlineMs?: number): Promise<NormalizedTicker>;
 
   /**
    * Fetches candles/OHLCV data if supported by provider.
    */
-  fetchCandles?(appSymbol: string, timeframe: string, limit: number): Promise<NormalizedCandle[]>;
+  fetchCandles?(appSymbol: string, timeframe: string, limit: number, globalScanDeadlineMs?: number): Promise<NormalizedCandle[]>;
 
   /**
    * Checks if provider is configured and responding to real API requests.
