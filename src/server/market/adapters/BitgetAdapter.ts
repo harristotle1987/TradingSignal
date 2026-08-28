@@ -29,12 +29,22 @@ export class BitgetAdapter implements IMarketDataProvider {
   readonly id = 'bitget';
   readonly name = 'Bitget Exchange';
 
-  async fetchPrice(appSymbol: string): Promise<NormalizedTicker> {
+  async fetchPrice(appSymbol: string, globalScanDeadlineMs?: number): Promise<NormalizedTicker> {
     const receivedAt = Date.now();
     let providerSymbol = appSymbol;
     let assetType: 'CRYPTO' | 'STOCK' | 'FOREX' | 'INDEX' | 'UNKNOWN' = 'CRYPTO';
 
-    const timeoutMs = serverConfig.getConfig().marketDataTimeoutMs;
+    const configTimeout = serverConfig.getConfig().marketDataTimeoutMs;
+    let timeoutMs = configTimeout;
+    const safetyMargin = 100;
+    if (globalScanDeadlineMs) {
+      const remainingMs = globalScanDeadlineMs - Date.now();
+      if (remainingMs <= safetyMargin) {
+        throw new Error('TIMEOUT: Global scanner deadline reached before starting request');
+      }
+      timeoutMs = Math.min(configTimeout, remainingMs - safetyMargin);
+    }
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -126,9 +136,20 @@ export class BitgetAdapter implements IMarketDataProvider {
     providerSymbol: string,
     requestedTimeframe: string,
     granularity: string,
-    limit: number
+    limit: number,
+    globalScanDeadlineMs?: number
   ): Promise<NormalizedCandle[]> {
-    const timeoutMs = serverConfig.getConfig().marketDataTimeoutMs;
+    const configTimeout = serverConfig.getConfig().marketDataTimeoutMs;
+    let timeoutMs = configTimeout;
+    const safetyMargin = 100;
+    if (globalScanDeadlineMs) {
+      const remainingMs = globalScanDeadlineMs - Date.now();
+      if (remainingMs <= safetyMargin) {
+        throw new Error('TIMEOUT: Global scanner deadline reached before starting request');
+      }
+      timeoutMs = Math.min(configTimeout, remainingMs - safetyMargin);
+    }
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -179,7 +200,7 @@ export class BitgetAdapter implements IMarketDataProvider {
     }
   }
 
-  async fetchCandles(appSymbol: string, timeframe: string = '1m', limit: number = 50): Promise<NormalizedCandle[]> {
+  async fetchCandles(appSymbol: string, timeframe: string = '1m', limit: number = 50, globalScanDeadlineMs?: number): Promise<NormalizedCandle[]> {
     const mapping = SymbolNormalizer.toProviderSymbol(appSymbol, this.id);
     const { providerSymbol } = mapping;
 
@@ -188,7 +209,7 @@ export class BitgetAdapter implements IMarketDataProvider {
     // 1. Direct fetch if granularity mapped
     if (granularity) {
       try {
-        const direct = await this.fetchDirectCandles(appSymbol, providerSymbol, timeframe, granularity, limit);
+        const direct = await this.fetchDirectCandles(appSymbol, providerSymbol, timeframe, granularity, limit, globalScanDeadlineMs);
         if (direct && direct.length > 0) return direct;
       } catch (err) {
         logger.warn(`Bitget direct fetch failed for '${timeframe}' (${granularity})`, { appSymbol, error: String(err) });
@@ -198,7 +219,7 @@ export class BitgetAdapter implements IMarketDataProvider {
     // 2. Aggregate lower timeframe if unmapped or direct failed
     const lowerGranularity = '1min';
     try {
-      const lowerCandles = await this.fetchDirectCandles(appSymbol, providerSymbol, '1m', lowerGranularity, limit * 60);
+      const lowerCandles = await this.fetchDirectCandles(appSymbol, providerSymbol, '1m', lowerGranularity, limit * 60, globalScanDeadlineMs);
       if (lowerCandles && lowerCandles.length > 0) {
         const aggregated = aggregateOHLCCandles(lowerCandles, timeframe, limit);
         if (aggregated && aggregated.length > 0) return aggregated;

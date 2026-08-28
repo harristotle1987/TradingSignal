@@ -148,9 +148,14 @@ export class SignalEngine {
    * Stage 3: Deep multi-timeframe analysis on top candidates only (strictly conserves API calls).
    * Stage 4: Ranking qualified setups (at most 5 returned, top 2 marked as BEST TRADE, rest as suggestions).
    */
-  async generateSignal(symbol = 'EURUSD', category?: string, persistAndActivate: boolean = true): Promise<SignalGenerationResponse> {
+  async generateSignal(
+    symbol = 'EURUSD',
+    category?: string,
+    persistAndActivate: boolean = true,
+    options?: { scanStartedAt?: number; globalScanBudgetMs?: number }
+  ): Promise<SignalGenerationResponse> {
     const { runStagedPipeline } = await import('./StagedScannerPipeline.js');
-    return runStagedPipeline(this, symbol, category, persistAndActivate);
+    return runStagedPipeline(this, symbol, category, persistAndActivate, options);
   }
 
   /**
@@ -286,17 +291,18 @@ export class SignalEngine {
     scoring: ScoringResult,
     validation: ValidationResult
   ): void {
+    const thresholds = serverConfig.getConfig().thresholds;
     logger.info(`================================================================`);
     logger.info(`[GATE 8 VALIDATION TRACE] Symbol: ${symbol} | Snapshot: ${validation.snapshotId}`);
     logger.info(`================================================================`);
     logger.info(`- Validated Live Price: ${entryPrice}`);
     logger.info(`- Cross-Source Agreement: ${crossCheck.agreementPct}% (Valid: ${crossCheck.isValid})`);
     logger.info(`- Finnhub News Sentiment: ${newsSentiment.sentiment} (${newsSentiment.reason})`);
-    logger.info(`- Deterministic Total Score: ${scoring.score} / 100`);
+    logger.info(`- Deterministic Total Score: ${scoring.score} / 100 (Configured Threshold: >= ${thresholds.signalThreshold})`);
     logger.info(`- Signal Direction: ${scoring.direction}`);
     logger.info(`- Calculated stopLoss: ${scoring.stopLoss} | takeProfit: ${scoring.takeProfit}`);
-    logger.info(`- Net R:R: ${scoring.estimatedFriction.netRiskRewardRatio}:1`);
-    logger.info(`- Gate 8 Pipeline Status: [${validation.validationReason}] ${validation.detailedMessage}`);
+    logger.info(`- Net R:R: ${scoring.estimatedFriction.netRiskRewardRatio}:1 (Min Gross: ${thresholds.minimumRR}:1, Min Net: ${thresholds.minimumNetRR}:1)`);
+    logger.info(`- Hard Gate Status: [${validation.validationReason}] ${validation.detailedMessage}`);
     logger.info(`================================================================`);
   }
 

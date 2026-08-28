@@ -20,7 +20,7 @@ export class ExchangeRateAdapter implements IMarketDataProvider {
   readonly id = 'exchangerate';
   readonly name = 'Open Exchange Rates (Forex Fallback)';
 
-  async fetchPrice(appSymbol: string): Promise<NormalizedTicker> {
+  async fetchPrice(appSymbol: string, globalScanDeadlineMs?: number): Promise<NormalizedTicker> {
     const receivedAt = Date.now();
     let providerSymbol = appSymbol;
 
@@ -34,7 +34,17 @@ export class ExchangeRateAdapter implements IMarketDataProvider {
       const quote = norm.slice(3, 6);
       providerSymbol = `${base}/${quote}`;
 
-      const timeoutMs = serverConfig.getConfig().marketDataTimeoutMs;
+      const configTimeout = serverConfig.getConfig().marketDataTimeoutMs;
+      let timeoutMs = configTimeout;
+      const safetyMargin = 100;
+      if (globalScanDeadlineMs) {
+        const remainingMs = globalScanDeadlineMs - Date.now();
+        if (remainingMs <= safetyMargin) {
+          throw new Error('TIMEOUT: Global scanner deadline reached before starting request');
+        }
+        timeoutMs = Math.min(configTimeout, remainingMs - safetyMargin);
+      }
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -78,6 +88,9 @@ export class ExchangeRateAdapter implements IMarketDataProvider {
       };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('TIMEOUT') || msg.includes('AbortError')) {
+        throw err;
+      }
       return this.createErrorTicker(appSymbol, providerSymbol, `ExchangeRate fetch failed: ${msg}`);
     }
   }

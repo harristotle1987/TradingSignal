@@ -75,7 +75,7 @@ router.get('/cron/status', async (req: Request, res: Response) => {
  * POST /api/scanner/settings
  * Updates automated hourly scanner configurations (enabled, notifications, notifyOnNoTrade).
  */
-router.post('/scanner/settings', async (req: Request, res: Response) => {
+router.post('/scanner/settings', adminAuthMiddleware, async (req: Request, res: Response) => {
   const { enabled, notificationsEnabled, notifyOnNoTrade, intervalMinutes } = req.body || {};
   hourlyScanner.updateSettings({ enabled, notificationsEnabled, notifyOnNoTrade, intervalMinutes });
   const settings = await hourlyScanner.getSettingsAsync();
@@ -205,7 +205,7 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
     // Directly invoke Market Scan Engine as the single automated scan trigger
     logger.info(`[Scanner Trigger] MARKET_SCAN_ENGINE_START | triggerTime: ${Date.now()}`);
     const scanEngineStartTime = Date.now();
-    const result = await hourlyScanner.triggerAutomatedScan(true);
+    const result = await hourlyScanner.triggerAutomatedScan(true, requestStartTime);
     const scanEngineDurationMs = Date.now() - scanEngineStartTime;
     logger.info(`[Scanner Trigger] MARKET_SCAN_ENGINE_END | duration: ${scanEngineDurationMs}ms | status: ${result.status} | candidates: ${result.candidatesEvaluated} | accepted: ${result.acceptedSignalsCount}`);
 
@@ -228,9 +228,13 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
       : 30;
     const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || 0;
     
-    // Refresh cron status to get authoritative next execution from cron-job.org
-    const cronStatus = await CronJobOrgService.getJobStatus(true);
-    const nextCronExecution = cronStatus.nextExecution?.timestamp || 0;
+    // Refresh cron status completely in the background without blocking the scanner trigger API
+    CronJobOrgService.getJobStatus(false).catch((err) => {
+      logger.debug('[Scanner Route] Background cron status update deferred', { error: String(err) });
+    });
+
+    const cachedCron = CronJobOrgService.getCachedStatus();
+    const nextCronExecution = cachedCron?.nextExecution?.timestamp || (lastAutomatedScan + intervalMinutes * 60 * 1000);
     const nextScanTime = nextCronExecution;
 
     const httpCode = result.status === 'ERROR' ? 500 : 200;
@@ -266,12 +270,28 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
       nextScanTime,
       intervalMinutes,
       rejectedCount: result.rejectedCount ?? 0,
+      candidatesRejectedBeforeMTF: result.candidatesRejectedBeforeMTF ?? 0,
+      candidatesRejectedByMTF: result.candidatesRejectedByMTF ?? 0,
+      candidatesRejectedByScore: result.candidatesRejectedByScore ?? 0,
+      candidatesRejectedByRR: result.candidatesRejectedByRR ?? 0,
+      candidatesRejectedByStructure: result.candidatesRejectedByStructure ?? 0,
       rejectionReasons: result.rejectionReasons ?? [],
+      rejectionReasonsCounts: result.rejectionReasonsCounts ?? result.rejectionReasonsAggregated ?? {},
+      candidateRejectionDetails: result.candidateRejectionDetails ?? [],
       diagnosticsCount: result.diagnosticsCount ?? 0,
       diagnostics: result.diagnostics ?? [],
       scanDurationMs: durationMs,
       scanDuration: `${(durationMs / 1000).toFixed(2)}s`,
       totalDurationMs: totalRequestDurationMs,
+      globalScanStartMs: result.globalScanStartMs ?? requestStartTime,
+      globalScanDeadlineMs: result.globalScanDeadlineMs ?? (requestStartTime + 24000),
+      currentElapsedMs: result.currentElapsedMs ?? (Date.now() - requestStartTime),
+      remainingBudgetMs: result.remainingBudgetMs ?? Math.max(0, (requestStartTime + 24000) - Date.now()),
+      gate6ElapsedMs: result.gate6ElapsedMs ?? 0,
+      stage3ElapsedMs: result.stage3ElapsedMs ?? 0,
+      timeBudgetExceeded: result.timeBudgetExceeded ?? false,
+      providerRequestsStoppedByBudget: result.providerRequestsStoppedByBudget ?? false,
+      timingTelemetry: result.timingTelemetry,
       external_hourly_scan_status: statusLog
     });
   } catch (err: unknown) {
@@ -305,7 +325,7 @@ router.get('/scanner/trigger', handleScannerTrigger);
  * POST /api/scanner/manual-trigger
  * Separate endpoint for in-app UI manual/admin scanner execution.
  */
-router.post('/scanner/manual-trigger', async (_req: Request, res: Response) => {
+router.post('/scanner/manual-trigger', adminAuthMiddleware, async (_req: Request, res: Response) => {
   try {
     const result = await hourlyScanner.triggerManualScan();
     const httpCode = result.status === 'ERROR' ? 500 : 200;
@@ -841,7 +861,7 @@ router.get('/signals/log', async (_req: Request, res: Response) => {
  * DELETE /api/signals/log/:id
  * Deletes an individual dedicated signal log entry by ID.
  */
-router.delete('/signals/log/:id', async (req: Request, res: Response) => {
+router.delete('/signals/log/:id', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
     
@@ -850,6 +870,7 @@ router.delete('/signals/log/:id', async (req: Request, res: Response) => {
 
     // Deletions propagate errors from Firestore if they fail.
     const loggerSuccess = await SignalLogger.deleteLog(id);
+    await SignalOutcomeLogger.deleteOutcome(id);
     
     // Also remove from active signals cache and persistent sent signals
     signalEngine.removeActiveSignal(id);
@@ -886,7 +907,7 @@ router.delete('/signals/log/:id', async (req: Request, res: Response) => {
  * POST /api/signals/log/bulk-delete
  * Deletes multiple signal log entries by IDs.
  */
-router.post('/signals/log/bulk-delete', async (req: Request, res: Response) => {
+router.post('/signals/log/bulk-delete', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const { ids } = req.body || {};
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -904,6 +925,7 @@ router.post('/signals/log/bulk-delete', async (req: Request, res: Response) => {
 
       // Deletions propagate errors from Firestore if they fail.
       const loggerSuccess = await SignalLogger.deleteLog(id);
+      await SignalOutcomeLogger.deleteOutcome(id);
       signalEngine.removeActiveSignal(id);
       const sentSignalSuccess = await ScannerPersistence.deleteSentSignal(id);
       const notificationSuccess = await ScannerPersistence.deleteNotification(id);
@@ -933,9 +955,10 @@ router.post('/signals/log/bulk-delete', async (req: Request, res: Response) => {
  * DELETE /api/signals/log
  * Clears dedicated signal log records.
  */
-router.delete('/signals/log', async (_req: Request, res: Response) => {
+router.delete('/signals/log', adminAuthMiddleware, async (_req: Request, res: Response) => {
   try {
     await SignalLogger.clearLogs();
+    await SignalOutcomeLogger.clearLogs();
     signalEngine.clearSignals();
     await ScannerPersistence.clearSentSignals();
     res.status(200).json({
@@ -972,7 +995,7 @@ router.get('/signals', async (_req: Request, res: Response) => {
  * POST /api/signals/generate
  * Triggers on-demand multi-timeframe signal analysis using the unified scan engine.
  */
-router.post('/signals/generate', async (req: Request, res: Response) => {
+router.post('/signals/generate', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const requestedSymbol = (req.body?.symbol as string) || 'EURUSD';
     const generationResult = await signalEngine.generateSignal(requestedSymbol, undefined, true);
@@ -992,7 +1015,7 @@ router.post('/signals/generate', async (req: Request, res: Response) => {
  * DELETE /api/signals/:id
  * Deletes a specific active signal by ID.
  */
-router.delete('/signals/:id', async (req: Request, res: Response) => {
+router.delete('/signals/:id', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
     // Record that this signal has been deleted first
@@ -1003,6 +1026,7 @@ router.delete('/signals/:id', async (req: Request, res: Response) => {
     const sentSignalSuccess = await ScannerPersistence.deleteSentSignal(id);
     const notificationSuccess = await ScannerPersistence.deleteNotification(id);
     const loggerSuccess = await SignalLogger.deleteLog(id);
+    await SignalOutcomeLogger.deleteOutcome(id);
 
     const success = removedFromMemory || sentSignalSuccess || notificationSuccess || loggerSuccess;
 
@@ -1035,7 +1059,7 @@ router.delete('/signals/:id', async (req: Request, res: Response) => {
  * DELETE /api/signals
  * Resets/clears active signals cache.
  */
-router.delete('/signals', async (_req: Request, res: Response) => {
+router.delete('/signals', adminAuthMiddleware, async (_req: Request, res: Response) => {
   signalEngine.clearSignals();
   await ScannerPersistence.clearSentSignals();
   res.status(200).json({

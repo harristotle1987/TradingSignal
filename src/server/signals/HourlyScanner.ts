@@ -75,6 +75,11 @@ export interface ManualScanResult {
   candidatesRejectedPreliminary?: number;
   candidatesEvaluated: number;
   candidatesRejectedFinal?: number;
+  candidatesRejectedBeforeMTF?: number;
+  candidatesRejectedByMTF?: number;
+  candidatesRejectedByScore?: number;
+  candidatesRejectedByRR?: number;
+  candidatesRejectedByStructure?: number;
   signalsGenerated?: number;
   signalsAccepted?: number;
   acceptedSignalsCount: number;
@@ -83,10 +88,31 @@ export interface ManualScanResult {
   qualifiedSetups: TradingSignal[];
   rejectedCount: number;
   rejectionReasons: string[];
+  rejectionReasonsCounts?: Record<string, number>;
+  rejectionReasonsAggregated?: Record<string, number>;
+  candidateRejectionDetails?: any[];
   diagnosticsCount?: number;
   diagnostics?: string[];
   capState: DailyCapState;
   scanDurationMs?: number;
+  timingTelemetry?: {
+    globalScanStartMs: number;
+    globalScanDeadlineMs: number;
+    currentElapsedMs: number;
+    remainingBudgetMs: number;
+    gate6ElapsedMs: number;
+    stage3ElapsedMs: number;
+    timeBudgetExceeded: boolean;
+    providerRequestsStoppedByBudget: boolean;
+  };
+  globalScanStartMs?: number;
+  globalScanDeadlineMs?: number;
+  currentElapsedMs?: number;
+  remainingBudgetMs?: number;
+  gate6ElapsedMs?: number;
+  stage3ElapsedMs?: number;
+  timeBudgetExceeded?: boolean;
+  providerRequestsStoppedByBudget?: boolean;
 }
 
 export class HourlyScannerService {
@@ -116,8 +142,8 @@ export class HourlyScannerService {
   /**
    * Manually triggers a scan execution (e.g. from UI admin actions).
    */
-  async triggerManualScan(isExternal = false): Promise<ManualScanResult> {
-    return await this.executeIntelligentScan(isExternal);
+  async triggerManualScan(isExternal = false, scanStartTime?: number): Promise<ManualScanResult> {
+    return await this.executeIntelligentScan(isExternal, scanStartTime ? { scanStartedAt: scanStartTime } : undefined);
   }
 
   /**
@@ -125,7 +151,7 @@ export class HourlyScannerService {
    * A cron execution means: "SCAN THE MARKET NOW."
    * It does NOT check whether an internal timer or setting says it is due.
    */
-  async triggerAutomatedScan(isExternal = true): Promise<ManualScanResult> {
+  async triggerAutomatedScan(isExternal = true, scanStartTime?: number): Promise<ManualScanResult> {
     const now = Date.now();
     const configuredTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     logger.info(`[Hourly Scanner] CRON_TRIGGER_EXECUTING | Date.now(): ${now} | ISO UTC: ${new Date(now).toISOString()} | Runtime TZ: ${configuredTz}`);
@@ -134,15 +160,21 @@ export class HourlyScannerService {
     const { marketCache } = await import('../market/CacheStore.js');
     marketCache.clearExpired();
     marketCache.clearTickers();
-    return await this.executeIntelligentScan(isExternal);
+    return await this.executeIntelligentScan(isExternal, scanStartTime ? { scanStartedAt: scanStartTime } : undefined);
   }
 
   /**
    * Main Intelligent Multi-Asset Scan & Signal Selection Pipeline.
    */
-  private async executeIntelligentScan(isExternal = false): Promise<ManualScanResult> {
-    const scanStartTime = Date.now();
-    logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime}`);
+  private async executeIntelligentScan(
+    isExternal = false,
+    options?: { scanStartedAt?: number; globalScanBudgetMs?: number }
+  ): Promise<ManualScanResult> {
+    const scanStartTime = options?.scanStartedAt ?? Date.now();
+    const globalScanStartMs = scanStartTime;
+    const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 24000;
+    const globalScanDeadlineMs = globalScanStartMs + GLOBAL_SCAN_BUDGET_MS;
+    logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime} | deadline: ${globalScanDeadlineMs}`);
 
     if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
       logger.error('[Hourly Scanner] AUTOMATED SCANNER DISPATCH DISABLED: Production persistence is unavailable (FIREBASE_SERVICE_ACCOUNT required).');
@@ -243,11 +275,19 @@ export class HourlyScannerService {
       const universeDiagnostics: Array<{ symbol: string; reason: string }> = [];
       const rejectedDuringScan: Array<{ symbol: string; direction?: string; score?: number; reason: string }> = [];
 
+      let maxGate6ElapsedMs = 0;
+      let maxStage3ElapsedMs = 0;
+      let aggregatedTimeBudgetExceeded = false;
+      let aggregatedProviderRequestsStoppedByBudget = false;
+
       const categoryScanResults = await Promise.all(
         categories.map(async (category) => {
           try {
             logger.info(`[Hourly Scanner] Scanning universe: [${category}]...`);
-            const result = await signalEngine.generateSignal(category, category, false);
+            const result = await signalEngine.generateSignal(category, category, false, {
+              scanStartedAt: globalScanStartMs,
+              globalScanBudgetMs: GLOBAL_SCAN_BUDGET_MS,
+            });
             return { category, result };
           } catch (catErr) {
             logger.error(`[Hourly Scanner] Scan error for ${category}:`, { error: String(catErr) });
@@ -262,6 +302,8 @@ export class HourlyScannerService {
       let totalCandidatesEvaluated = 0;
       let totalCandidatesRejectedFinal = 0;
       let totalSignalsGenerated = 0;
+      const aggregatedRejectionCounts: Record<string, number> = {};
+      const allCandidateRejectionDetails: any[] = [];
 
       for (const { category, result } of categoryScanResults) {
         const catUniverseSize = category === 'CRYPTO' ? 45 : category === 'FOREX' ? 20 : 48;
@@ -274,12 +316,33 @@ export class HourlyScannerService {
         const candidatesRejectedFinal = tel?.candidatesRejectedFinal ?? (candidatesEvaluated - (result.success && Array.isArray(result.signals) ? result.signals.length : 0));
         const signalsGenerated = tel?.signalsGenerated ?? (result.success && Array.isArray(result.signals) ? result.signals.length : 0);
 
+        if (tel) {
+          if (typeof tel.gate6ElapsedMs === 'number' && tel.gate6ElapsedMs > maxGate6ElapsedMs) {
+            maxGate6ElapsedMs = tel.gate6ElapsedMs;
+          }
+          if (typeof tel.stage3ElapsedMs === 'number' && tel.stage3ElapsedMs > maxStage3ElapsedMs) {
+            maxStage3ElapsedMs = tel.stage3ElapsedMs;
+          }
+          if (tel.timeBudgetExceeded) aggregatedTimeBudgetExceeded = true;
+          if (tel.providerRequestsStoppedByBudget) aggregatedProviderRequestsStoppedByBudget = true;
+        }
+
         totalUniverseSymbolsScanned += universeSymbolsScanned;
         totalPreliminaryCandidatesFound += preliminaryCandidatesFound;
         totalCandidatesRejectedPreliminary += candidatesRejectedPreliminary;
         totalCandidatesEvaluated += candidatesEvaluated;
         totalCandidatesRejectedFinal += candidatesRejectedFinal;
         totalSignalsGenerated += signalsGenerated;
+
+        // Aggregate granular rejection reasons and candidate logs
+        if (result.rejectionReasons) {
+          for (const [gate, count] of Object.entries(result.rejectionReasons)) {
+            aggregatedRejectionCounts[gate] = (aggregatedRejectionCounts[gate] || 0) + (count as number);
+          }
+        }
+        if (Array.isArray(result.candidateRejectionDetails)) {
+          allCandidateRejectionDetails.push(...result.candidateRejectionDetails);
+        }
 
         if (result.success && Array.isArray(result.signals)) {
           rawCandidates.push(...result.signals);
@@ -290,6 +353,14 @@ export class HourlyScannerService {
           });
         }
       }
+
+      logger.info(`================================================================`);
+      logger.info(`[MULTI-ASSET FUNNEL AUDIT] (Total Scanned: ${totalUniverseSymbolsScanned})`);
+      logger.info(`- preliminaryCandidates: ${totalPreliminaryCandidatesFound}`);
+      logger.info(`- candidatesAfterQuota (deep budget sum): ${totalCandidatesEvaluated}`);
+      logger.info(`- candidatesSelectedForDeepAnalysis: ${totalCandidatesEvaluated}`);
+      logger.info(`- signalsSurvivingToStage3: ${totalSignalsGenerated}`);
+      logger.info(`================================================================`);
 
       const marketDataFetchDurationMs = Date.now() - marketDataFetchStart;
       logger.info(`[Scanner Telemetry] MARKET_DATA_FETCHING | duration: ${marketDataFetchDurationMs}ms | rawCandidatesFound: ${rawCandidates.length}`);
@@ -327,7 +398,7 @@ export class HourlyScannerService {
           initialScore: score,
           watchingThreshold: thresholds.watchingThreshold || 70,
           qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-          signalThreshold: thresholds.signalThreshold || 80,
+          signalThreshold: thresholds.signalThreshold || 72,
           strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
           timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
           grossRR,
@@ -364,7 +435,7 @@ export class HourlyScannerService {
           initialScore: coreScore,
           watchingThreshold: thresholds.watchingThreshold || 70,
           qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-          signalThreshold: thresholds.signalThreshold || 80,
+          signalThreshold: thresholds.signalThreshold || 72,
           strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
           timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
           grossRR,
@@ -672,7 +743,7 @@ export class HourlyScannerService {
             initialScore: score,
             watchingThreshold: thresholds.watchingThreshold || 70,
             qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-            signalThreshold: thresholds.signalThreshold || 80,
+            signalThreshold: thresholds.signalThreshold || 72,
             strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
             timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
             grossRR,
@@ -764,7 +835,7 @@ export class HourlyScannerService {
             initialScore: scoreVal,
             watchingThreshold: thresholds.watchingThreshold || 70,
             qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-            signalThreshold: thresholds.signalThreshold || 80,
+            signalThreshold: thresholds.signalThreshold || 72,
             strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
             timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
             grossRR,
@@ -852,7 +923,7 @@ export class HourlyScannerService {
         Gate36ConfigurableSignalFrequency.recordNotificationCount(1);
 
         // Record Funnel Analytics Final Signal
-        const finalScore = sig.score ?? sig.confidenceScore ?? 80;
+        const finalScore = sig.score ?? sig.confidenceScore ?? 72;
         const grossRR = (sig as any).grossRiskRewardRatio ?? sig.riskRewardRatio ?? 0;
         const netRR = (sig as any).netRiskRewardRatio ?? sig.estimatedFriction?.netRiskRewardRatio ?? 0;
         const adverseNetRR = (sig as any).adverseNetRiskRewardRatio ?? (sig.estimatedFriction as any)?.adverseNetRiskRewardRatio ?? 0;
@@ -870,7 +941,7 @@ export class HourlyScannerService {
           initialScore: finalScore,
           watchingThreshold: thresholds.watchingThreshold || 70,
           qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-          signalThreshold: thresholds.signalThreshold || 80,
+          signalThreshold: thresholds.signalThreshold || 72,
           strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
           timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
           grossRR,
@@ -911,7 +982,7 @@ export class HourlyScannerService {
           dataFreshnessSeconds: 0,
           providerAgreement: true,
           expectedRR: sig.riskRewardRatio,
-          score: sig.score || 80,
+          score: sig.score || 72,
           status: 'ACCEPTED',
           rejectionReason: null,
           fingerprint: fp,
@@ -949,7 +1020,7 @@ export class HourlyScannerService {
 
       // 8. If NO setups qualified
       if (dispatchedCount === 0) {
-        logger.info(`[Hourly Scanner] No setups met the strict ${thresholds.signalThreshold}+ quality and diversification criteria. Dispatched 0 signals (0-${dailyCap} is completely valid).`);
+        logger.info(`[Hourly Scanner] No setups met the ${thresholds.signalThreshold}+ quality and diversification criteria. Dispatched 0 signals (0-${dailyCap} is completely valid).`);
         const settings = ScannerPersistence.getSettings();
         if (settings.notifyOnNoTrade && !isExternal) {
           await ScannerPersistence.recordNotification({
@@ -1031,13 +1102,30 @@ export class HourlyScannerService {
         (d) => `${d.symbol}: ${d.reason}`
       );
 
+      const currentElapsedMs = Date.now() - globalScanStartMs;
+      const remainingBudgetMs = Math.max(0, globalScanDeadlineMs - Date.now());
+      if (remainingBudgetMs <= 0) {
+        aggregatedTimeBudgetExceeded = true;
+      }
+
+      const timingTelemetry = {
+        globalScanStartMs,
+        globalScanDeadlineMs,
+        currentElapsedMs,
+        remainingBudgetMs,
+        gate6ElapsedMs: maxGate6ElapsedMs,
+        stage3ElapsedMs: maxStage3ElapsedMs,
+        timeBudgetExceeded: aggregatedTimeBudgetExceeded,
+        providerRequestsStoppedByBudget: aggregatedProviderRequestsStoppedByBudget,
+      };
+
       return {
         success: true,
         status: 'COMPLETED',
         message:
           dispatchedCount > 0
             ? `Scan complete: Dispatched ${dispatchedCount} qualified automated setup(s). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`
-            : `Scan complete: 0 setups met strict ${finalCapState.dailySignalCap > 0 ? `${thresholds.signalThreshold}+` : ''} criteria (0-${finalCapState.dailySignalCap} is valid; no trades forced). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`,
+            : `Scan complete: 0 setups met ${finalCapState.dailySignalCap > 0 ? `${thresholds.signalThreshold}+` : ''} criteria (0-${finalCapState.dailySignalCap} is valid; no trades forced). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`,
         timestamp: Date.now(),
         lastScanTime: finalCapState.lastAutomatedScan || finalCapState.lastScanTime || scanStartTime,
         universeSymbolsScanned: totalUniverseSymbolsScanned,
@@ -1053,10 +1141,22 @@ export class HourlyScannerService {
         qualifiedSetups: selectedSetups,
         rejectedCount: rejectedDuringScan.length,
         rejectionReasons: rejectionReasonStrings,
+        rejectionReasonsAggregated: aggregatedRejectionCounts,
+        rejectionReasonsCounts: aggregatedRejectionCounts,
+        candidateRejectionDetails: allCandidateRejectionDetails,
         diagnosticsCount: universeDiagnostics.length,
         diagnostics: diagnosticStrings,
         capState: finalCapState,
         scanDurationMs,
+        timingTelemetry,
+        globalScanStartMs,
+        globalScanDeadlineMs,
+        currentElapsedMs,
+        remainingBudgetMs,
+        gate6ElapsedMs: maxGate6ElapsedMs,
+        stage3ElapsedMs: maxStage3ElapsedMs,
+        timeBudgetExceeded: aggregatedTimeBudgetExceeded,
+        providerRequestsStoppedByBudget: aggregatedProviderRequestsStoppedByBudget,
       };
     } catch (err) {
       logger.error('[Hourly Scanner] Critical failure during scan execution:', { error: String(err) });

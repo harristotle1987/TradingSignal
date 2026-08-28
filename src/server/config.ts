@@ -105,14 +105,15 @@ class ConfigService {
     );
     const twelvedataConfigured = Boolean(process.env.TWELVE_DATA_API_KEY && process.env.TWELVE_DATA_API_KEY.trim().length > 0);
 
+    const authoritativeMinScore = parseInt(process.env.THRESHOLD_MIN_SCORE || process.env.THRESHOLD_SIGNAL_SCORE || '72', 10);
     const rawWinProb = parseFloat(process.env.THRESHOLD_MIN_WIN_PROB || '55');
     const rawAiConf = parseFloat(process.env.THRESHOLD_MIN_AI_CONFIDENCE || '55');
 
     const thresholds: SignalThresholds = {
-      minimumScore: parseInt(process.env.THRESHOLD_MIN_SCORE || '50', 10),
+      minimumScore: authoritativeMinScore,
       watchingThreshold: parseInt(process.env.THRESHOLD_WATCHING_SCORE || '70', 10),
       qualifiedCandidateThreshold: parseInt(process.env.THRESHOLD_QUALIFIED_CANDIDATE_SCORE || '75', 10),
-      signalThreshold: parseInt(process.env.THRESHOLD_SIGNAL_SCORE || '78', 10),
+      signalThreshold: authoritativeMinScore,
       minimumRR: parseFloat(process.env.THRESHOLD_MIN_RR || '1.8'),
       minimumNetRR: parseFloat(process.env.THRESHOLD_MIN_NET_RR || '1.5'),
       minimumAdverseNetRR: process.env.THRESHOLD_MIN_ADVERSE_NET_RR ? parseFloat(process.env.THRESHOLD_MIN_ADVERSE_NET_RR) : 1.0,
