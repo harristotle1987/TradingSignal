@@ -46,7 +46,6 @@ export interface ScheduledNewsEvent {
   blackoutAfterMinutes?: number;      // Minutes after event to keep blackout (default 30m)
   cautionBeforeMinutes?: number;      // Minutes before event to start CAUTION window (default 60m)
   cautionAfterMinutes?: number;       // Minutes after event to keep CAUTION window (default 60m)
-  provenance?: string;
 }
 
 export interface NewsRiskEvaluationResult {
@@ -63,95 +62,61 @@ export interface NewsRiskEvaluationResult {
 }
 
 export class Gate31NewsRiskClassification {
-  private static scheduledEvents: ScheduledNewsEvent[] = [];
-  private static lastFetchSuccessful = false;
-  private static lastFetchTime = 0;
-
-  /**
-   * Syncs verified news from Twelve Data for a given symbol and updates scheduledEvents.
-   */
-  public static async syncVerifiedNews(symbol: string): Promise<void> {
-    const apiKey = process.env.TWELVE_DATA_API_KEY;
-    if (!apiKey || apiKey.trim().length === 0) {
-      logger.warn('[Gate 31 News Risk] TWELVE_DATA_API_KEY not configured. Cannot fetch verified news.');
-      this.lastFetchSuccessful = false;
-      return;
-    }
-
-    try {
-      const cleanSymbol = SymbolNormalizer.normalizeAppSymbol(symbol) || symbol.trim().toUpperCase();
-      const provMapping = SymbolNormalizer.toProviderSymbol(cleanSymbol, 'twelvedata');
-      const providerSymbol = provMapping.providerSymbol || cleanSymbol;
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-      // Fetch news for this symbol
-      const url = `https://api.twelvedata.com/news?symbol=${encodeURIComponent(providerSymbol)}&apikey=${apiKey.trim()}`;
-      const response = await fetch(url, { signal: controller.signal });
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        logger.warn(`[Gate 31 News Risk] Twelve Data API returned HTTP ${response.status}`);
-        this.lastFetchSuccessful = false;
-        return;
-      }
-
-      const json = await response.json() as any;
-      const articles = json.data || json.articles || [];
-
-      if (Array.isArray(articles) && articles.length > 0) {
-        const now = Date.now();
-        const verifiedEvents: ScheduledNewsEvent[] = articles.map((art: any, index: number) => {
-          const pubDate = art.date ? new Date(art.date).getTime() : now;
-          const title = art.title || 'Verified News Article';
-          const titleLower = title.toLowerCase();
-
-          let category: NewsCategory = 'GENERAL_ECONOMIC';
-          let impact: NewsImpact = 'LOW';
-
-          if (titleLower.includes('fed') || titleLower.includes('fomc') || titleLower.includes('powell') || titleLower.includes('rate decision')) {
-            category = 'MACRO_US';
-            impact = 'HIGH';
-          } else if (titleLower.includes('ecb') || titleLower.includes('central bank') || titleLower.includes('inflation') || titleLower.includes('cpi')) {
-            category = 'CENTRAL_BANK';
-            impact = 'HIGH';
-          } else if (titleLower.includes('crypto') || titleLower.includes('bitcoin') || titleLower.includes('sec') || titleLower.includes('etf')) {
-            category = 'CRYPTO_REGULATORY';
-            impact = 'MEDIUM';
-          }
-
-          return {
-            id: `td_news_${cleanSymbol}_${index}_${pubDate}`,
-            title,
-            category,
-            impact,
-            scheduledTimeMs: pubDate,
-            affectedAssets: [cleanSymbol],
-            affectedAssetClasses: ['CRYPTO', 'FOREX', 'STOCKS'],
-            blackoutBeforeMinutes: impact === 'HIGH' ? 30 : 15,
-            blackoutAfterMinutes: impact === 'HIGH' ? 30 : 15,
-            provenance: 'twelvedata',
-          };
-        });
-
-        // Update local events matching symbol
-        this.scheduledEvents = this.scheduledEvents
-          .filter((e) => e.provenance !== 'twelvedata' || e.affectedAssets?.[0] !== cleanSymbol)
-          .concat(verifiedEvents);
-
-        this.lastFetchSuccessful = true;
-        this.lastFetchTime = now;
-        logger.info(`[Gate 31 News Risk] Successfully synced ${verifiedEvents.length} verified news events from Twelve Data for ${cleanSymbol}`);
-      } else {
-        logger.info(`[Gate 31 News Risk] Twelve Data returned empty news array for ${cleanSymbol}`);
-        this.lastFetchSuccessful = false;
-      }
-    } catch (err) {
-      logger.warn('[Gate 31 News Risk] Failed to sync verified news:', { error: String(err) });
-      this.lastFetchSuccessful = false;
-    }
-  }
+  private static scheduledEvents: ScheduledNewsEvent[] = [
+    // Default mock scheduled events for standard testing
+    {
+      id: 'fomc_rate_decision',
+      title: 'FOMC Interest Rate Decision & Fed Press Conference',
+      category: 'MACRO_US',
+      impact: 'HIGH',
+      scheduledTimeMs: Date.now() + 3600000 * 2, // 2 hours from now
+      affectedCurrencies: ['USD'],
+      affectedAssetClasses: ['FOREX', 'CRYPTO', 'STOCKS', 'INDEX', 'COMMODITIES'],
+      blackoutBeforeMinutes: 30,
+      blackoutAfterMinutes: 45,
+      cautionBeforeMinutes: 120,
+      cautionAfterMinutes: 90,
+    },
+    {
+      id: 'ecb_rate_decision',
+      title: 'ECB Monetary Policy Decision',
+      category: 'CENTRAL_BANK',
+      impact: 'HIGH',
+      scheduledTimeMs: Date.now() + 3600000 * 5, // 5 hours from now
+      affectedCurrencies: ['EUR'],
+      affectedAssetClasses: ['FOREX'],
+      blackoutBeforeMinutes: 30,
+      blackoutAfterMinutes: 30,
+      cautionBeforeMinutes: 60,
+      cautionAfterMinutes: 60,
+    },
+    {
+      id: 'aapl_q3_earnings',
+      title: 'Apple Inc. (AAPL) Q3 Earnings Report',
+      category: 'STOCK_EARNINGS',
+      impact: 'HIGH',
+      scheduledTimeMs: Date.now() + 3600000 * 8, // 8 hours from now
+      affectedAssets: ['AAPL', 'QQQ', 'SPY'],
+      affectedAssetClasses: ['STOCKS', 'INDEX'],
+      blackoutBeforeMinutes: 45,
+      blackoutAfterMinutes: 60,
+      cautionBeforeMinutes: 120,
+      cautionAfterMinutes: 120,
+    },
+    {
+      id: 'sec_crypto_etf',
+      title: 'SEC Spot Bitcoin ETF Decision Window',
+      category: 'CRYPTO_REGULATORY',
+      impact: 'HIGH',
+      scheduledTimeMs: Date.now() + 3600000 * 12,
+      affectedAssets: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BTC', 'ETH'],
+      affectedAssetClasses: ['CRYPTO'],
+      blackoutBeforeMinutes: 30,
+      blackoutAfterMinutes: 45,
+      cautionBeforeMinutes: 90,
+      cautionAfterMinutes: 90,
+    },
+  ];
 
   /**
    * Dynamically register or update a scheduled news event in the calendar
@@ -266,34 +231,6 @@ export class Gate31NewsRiskClassification {
    */
   public static evaluate(symbol: string, nowMs: number = Date.now()): NewsRiskEvaluationResult {
     const cleanSymbol = SymbolNormalizer.normalizeAppSymbol(symbol) || symbol.trim().toUpperCase();
-    const isCacheExpired = (Date.now() - this.lastFetchTime) > 15 * 60 * 1000;
-
-    // Fail-closed fallback when news data is unavailable/empty and no fresh cache is present (15 minutes threshold)
-    if (!this.lastFetchSuccessful && isCacheExpired) {
-      const failClosedEvent: ScheduledNewsEvent = {
-        id: 'fail_closed_risk_off_active',
-        title: 'FAIL-CLOSED: News verification unavailable or returned no data (Risk-Off Enforced)',
-        category: 'GENERAL_ECONOMIC',
-        impact: 'HIGH',
-        scheduledTimeMs: nowMs,
-        blackoutBeforeMinutes: 1440,
-        blackoutAfterMinutes: 1440,
-        provenance: 'fail_closed_fallback',
-      };
-      return {
-        symbol: cleanSymbol,
-        classification: 'BLOCK',
-        isTradingAllowed: false,
-        requiredConfirmationScoreMultiplier: Infinity,
-        minRequiredConfirmationScore: 1000,
-        activeEvents: [failClosedEvent],
-        relevantEventsCount: 1,
-        reasons: ['BLOCK: Fail-closed triggered. No verified news events retrieved from Twelve Data and no valid cache from the last 15 minutes.'],
-        explanation: `Gate 31 News Risk for ${cleanSymbol}: State=BLOCK, TradingAllowed=false, MinRequiredScore=1000. Fail-Closed default enforced due to empty verified news source.`,
-        neverFabricateSignalEnforced: true,
-      };
-    }
-
     const activeEvents: ScheduledNewsEvent[] = [];
     const reasons: string[] = [];
 

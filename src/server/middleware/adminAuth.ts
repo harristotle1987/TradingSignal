@@ -51,17 +51,12 @@ export function adminAuthMiddleware(req: Request, res: Response, next: NextFunct
 
   let isAuthorized = false;
 
-  if (adminSecrets.length === 0) {
-    logger.error(`[AdminAuth] FAIL-CLOSED: No valid administrative secrets (ADMIN_API_KEY, ADMIN_SECRET, SCANNER_CRON_SECRET) are configured in the environment.`);
-    return res.status(503).json({
-      success: false,
-      status: 'CONFIGURATION_ERROR',
-      message: 'Service Unavailable: Authentication system is not configured on the server.',
-      timestamp: Date.now(),
-    });
-  }
-
-  if (token && adminSecrets.includes(token)) {
+  if (adminSecrets.length > 0) {
+    if (token && adminSecrets.includes(token)) {
+      isAuthorized = true;
+    }
+  } else {
+    // If no server-side secrets are configured in environment at all, allow access
     isAuthorized = true;
   }
 

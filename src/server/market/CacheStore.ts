@@ -126,6 +126,7 @@ export class MarketDataCache {
 
     if (!entry) {
       this.missesCount++;
+      getActiveProfiler()?.recordCacheMiss();
       logger.info(`[Cache MISS] Ticker key: ${key}`);
       return null;
     }
@@ -133,6 +134,7 @@ export class MarketDataCache {
     const now = Date.now();
     if (now > entry.expiresAt) {
       this.missesCount++;
+      getActiveProfiler()?.recordCacheMiss();
       logger.info(`[Cache STALE/MISS] Ticker key: ${key}`);
       this.cache.delete(key);
       return null;
@@ -144,12 +146,14 @@ export class MarketDataCache {
 
     if (!isFresh) {
       this.missesCount++;
+      getActiveProfiler()?.recordCacheMiss();
       logger.info(`[Cache STALE/MISS] Ticker key: ${key} (Not fresh)`);
       this.cache.delete(key);
       return null;
     }
 
     this.hitsCount++;
+    getActiveProfiler()?.recordCacheHit();
     logger.info(`[Cache HIT] Ticker key: ${key}`);
     return {
       ...entry.ticker,
@@ -222,16 +226,19 @@ export class MarketDataCache {
     const entry = this.candleCache.get(key);
 
     if (!entry) {
+      getActiveProfiler()?.recordCacheMiss();
       logger.info(`[Cache MISS] Candles key: ${key}`);
       return null;
     }
 
     if (Date.now() > entry.expiresAt) {
+      getActiveProfiler()?.recordCacheMiss();
       logger.info(`[Cache STALE/MISS] Candles key: ${key}`);
       this.candleCache.delete(key);
       return null;
     }
 
+    getActiveProfiler()?.recordCacheHit();
     logger.info(`[Cache HIT] Candles key: ${key}`);
     return entry.candles;
   }
