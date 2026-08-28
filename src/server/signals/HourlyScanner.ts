@@ -29,6 +29,7 @@
  *    - Sends NO TRADE notification only if configured.
  */
 
+import { ScanCacheManager } from '../market/ScanCacheManager.js';
 import { signalEngine } from './SignalEngine.js';
 import { getDynamicPrecision } from '../../utils/formatters.js';
 import { TradeRankingEngine } from './TradeRankingEngine.js';
@@ -66,7 +67,7 @@ export interface ScannerSettings {
 
 export interface ManualScanResult {
   success: boolean;
-  status: 'COMPLETED' | 'SCAN_ALREADY_RUNNING' | 'SKIPPED_CAP_REACHED' | 'SKIPPED_NOT_DUE' | 'PERSISTENCE_UNAVAILABLE_DEGRADED' | 'ERROR';
+  status: 'COMPLETED' | 'SCAN_ALREADY_RUNNING' | 'SKIPPED_ALREADY_RUNNING' | 'SKIPPED_CAP_REACHED' | 'SKIPPED_NOT_DUE' | 'PERSISTENCE_UNAVAILABLE_DEGRADED' | 'ERROR';
   message: string;
   timestamp: number;
   lastScanTime: number;
@@ -116,7 +117,7 @@ export interface ManualScanResult {
 }
 
 export class HourlyScannerService {
-  private isScanning = false;
+  public isScanning = false;
 
   constructor() {
     ScannerPersistence.init();
@@ -156,7 +157,8 @@ export class HourlyScannerService {
     const configuredTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     logger.info(`[Hourly Scanner] CRON_TRIGGER_EXECUTING | Date.now(): ${now} | ISO UTC: ${new Date(now).toISOString()} | Runtime TZ: ${configuredTz}`);
 
-    // Selectively clear expired cache entries and ticker quotes before scan cycle
+    // Requirement 5: Clear scan-level cache and market cache at start of scan cycle
+    ScanCacheManager.clear();
     const { marketCache } = await import('../market/CacheStore.js');
     marketCache.clearExpired();
     marketCache.clearTickers();
@@ -198,13 +200,14 @@ export class HourlyScannerService {
 
     const instanceId = Math.random().toString(36).substring(2, 9);
     const lockResult = await ScannerPersistence.tryAcquireLock(instanceId);
+    const scanId = lockResult.scanId;
 
     if (!lockResult.acquired) {
       const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
       logger.warn(`[Hourly Scanner] Concurrency lock check: ${lockResult.reason || 'Scan already running'}`);
       return {
         success: false,
-        status: 'SCAN_ALREADY_RUNNING',
+        status: lockResult.status === 'SKIPPED_ALREADY_RUNNING' ? 'SKIPPED_ALREADY_RUNNING' : 'SCAN_ALREADY_RUNNING',
         message: 'REJECTED: SCAN_ALREADY_RUNNING. Another scan cycle is currently in progress.',
         timestamp: Date.now(),
         lastScanTime: capState.lastScanTime,
@@ -1193,7 +1196,7 @@ export class HourlyScannerService {
       };
     } finally {
       this.isScanning = false;
-      await ScannerPersistence.releaseLock(instanceId);
+      await ScannerPersistence.releaseLock(instanceId, scanId, 'COMPLETED');
     }
   }
 

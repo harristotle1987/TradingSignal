@@ -8,6 +8,7 @@
  * - Enforces data staleness, timestamp validation, and OHLC integrity.
  */
 
+import { fetchWithTimeout } from '../../utils/fetchWithTimeout.js';
 import { IMarketDataProvider } from './IMarketDataProvider.js';
 import { NormalizedTicker, NormalizedCandle, ProviderHealth } from '../types.js';
 import { SymbolNormalizer } from '../SymbolNormalizer.js';

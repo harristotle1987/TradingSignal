@@ -202,97 +202,142 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
   logger.info(`[Scanner Diagnostic] EXTERNAL_HOURLY_SCAN_TRIGGERED | Date.now(): ${now} | ISO UTC: ${new Date(now).toISOString()} | Runtime TZ: ${configuredTz}`);
 
   try {
-    // Directly invoke Market Scan Engine as the single automated scan trigger
-    logger.info(`[Scanner Trigger] MARKET_SCAN_ENGINE_START | triggerTime: ${Date.now()}`);
-    const scanEngineStartTime = Date.now();
-    const result = await hourlyScanner.triggerAutomatedScan(true, requestStartTime);
-    const scanEngineDurationMs = Date.now() - scanEngineStartTime;
-    logger.info(`[Scanner Trigger] MARKET_SCAN_ENGINE_END | duration: ${scanEngineDurationMs}ms | status: ${result.status} | candidates: ${result.candidatesEvaluated} | accepted: ${result.acceptedSignalsCount}`);
+    // Check if caller explicitly requested synchronous execution (e.g. ?sync=true)
+    const isSyncMode = req.query?.sync === 'true' || req.headers['x-sync'] === 'true';
 
-    let statusLog = '';
-    if (result.status === 'COMPLETED') {
-      logger.info('EXTERNAL_HOURLY_SCAN_COMPLETED');
-      statusLog = 'EXTERNAL_HOURLY_SCAN_COMPLETED';
-    } else if (result.status === 'SKIPPED_CAP_REACHED' || result.status === 'SCAN_ALREADY_RUNNING') {
-      logger.info('EXTERNAL_HOURLY_SCAN_SKIPPED');
-      statusLog = 'EXTERNAL_HOURLY_SCAN_SKIPPED';
-    } else {
-      logger.error('EXTERNAL_HOURLY_SCAN_FAILED');
-      statusLog = 'EXTERNAL_HOURLY_SCAN_FAILED';
+    if (isSyncMode) {
+      // Synchronous execution path (explicit opt-in for manual debugging/API callers wanting blocking response)
+      logger.info(`[Scanner Trigger] MARKET_SCAN_ENGINE_START (SYNC) | triggerTime: ${Date.now()}`);
+      const scanEngineStartTime = Date.now();
+      const result = await hourlyScanner.triggerAutomatedScan(true, requestStartTime);
+      const scanEngineDurationMs = Date.now() - scanEngineStartTime;
+      logger.info(`[Scanner Trigger] MARKET_SCAN_ENGINE_END | duration: ${scanEngineDurationMs}ms | status: ${result.status} | candidates: ${result.candidatesEvaluated} | accepted: ${result.acceptedSignalsCount}`);
+
+      let statusLog = '';
+      if (result.status === 'COMPLETED') {
+        logger.info('EXTERNAL_HOURLY_SCAN_COMPLETED');
+        statusLog = 'EXTERNAL_HOURLY_SCAN_COMPLETED';
+      } else if (result.status === 'SKIPPED_CAP_REACHED' || result.status === 'SCAN_ALREADY_RUNNING') {
+        logger.info('EXTERNAL_HOURLY_SCAN_SKIPPED');
+        statusLog = 'EXTERNAL_HOURLY_SCAN_SKIPPED';
+      } else {
+        logger.error('EXTERNAL_HOURLY_SCAN_FAILED');
+        statusLog = 'EXTERNAL_HOURLY_SCAN_FAILED';
+      }
+
+      const settings = ScannerPersistence.getSettings();
+      const capState = result.capState || await ScannerPersistence.getCapState();
+      const intervalMinutes = [15, 30, 45, 60].includes(Number(settings.intervalMinutes))
+        ? Number(settings.intervalMinutes)
+        : 30;
+      const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || 0;
+      
+      CronJobOrgService.getJobStatus(false).catch((err) => {
+        logger.debug('[Scanner Route] Background cron status update deferred', { error: String(err) });
+      });
+
+      const cachedCron = CronJobOrgService.getCachedStatus();
+      const nextCronExecution = cachedCron?.nextExecution?.timestamp || (lastAutomatedScan + intervalMinutes * 60 * 1000);
+      const nextScanTime = nextCronExecution;
+
+      const httpCode = result.status === 'ERROR' ? 500 : 200;
+      const durationMs = result.scanDurationMs ?? (Date.now() - now);
+      const totalRequestDurationMs = Date.now() - requestStartTime;
+
+      return res.status(httpCode).json({
+        success: result.success,
+        status: result.status,
+        message: result.message,
+        timestamp: result.timestamp || Date.now(),
+        lastCronExecution: now,
+        lastAutomatedScan,
+        lastScanCompletedAt: capState.lastScanCompletedAt || Date.now(),
+        lastScanDuration: durationMs,
+        universeSymbolsScanned: result.universeSymbolsScanned ?? capState.universeSymbolsScanned ?? 0,
+        preliminaryCandidatesFound: result.preliminaryCandidatesFound ?? capState.preliminaryCandidatesFound ?? 0,
+        candidatesRejectedPreliminary: result.candidatesRejectedPreliminary ?? capState.candidatesRejectedPreliminary ?? 0,
+        candidatesEvaluated: result.candidatesEvaluated ?? capState.candidatesEvaluated ?? 0,
+        candidatesRejectedFinal: result.candidatesRejectedFinal ?? capState.candidatesRejectedFinal ?? (result.rejectedCount ?? 0),
+        signalsGenerated: result.signalsGenerated ?? result.signalsFound ?? capState.signalsGenerated ?? 0,
+        signalsAccepted: result.signalsAccepted ?? result.acceptedSignalsCount ?? capState.signalsAccepted ?? 0,
+        lastCandidatesEvaluated: result.candidatesEvaluated ?? capState.lastCandidatesEvaluated ?? 0,
+        lastSignalsFound: result.signalsFound ?? result.acceptedSignalsCount ?? capState.lastSignalsFound ?? 0,
+        lastAcceptedSignals: result.acceptedSignalsCount ?? capState.lastAcceptedSignals ?? 0,
+        signalsFound: result.signalsFound ?? result.acceptedSignalsCount ?? capState.lastSignalsFound ?? 0,
+        acceptedSignalsCount: result.acceptedSignalsCount ?? capState.lastAcceptedSignals ?? 0,
+        nextCronExecution,
+        lastScanTime: lastAutomatedScan,
+        nextScanTime,
+        intervalMinutes,
+        rejectedCount: result.rejectedCount ?? 0,
+        rejectionReasons: result.rejectionReasons ?? [],
+        scanDurationMs: durationMs,
+        scanDuration: `${(durationMs / 1000).toFixed(2)}s`,
+        totalDurationMs: totalRequestDurationMs,
+        external_hourly_scan_status: statusLog
+      });
     }
 
-    const settings = ScannerPersistence.getSettings();
-    const capState = result.capState || await ScannerPersistence.getCapState();
-    const intervalMinutes = [15, 30, 45, 60].includes(Number(settings.intervalMinutes))
-      ? Number(settings.intervalMinutes)
-      : 30;
-    const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || 0;
-    
-    // Refresh cron status completely in the background without blocking the scanner trigger API
+    // DEFAULT: ASYNC NON-BLOCKING DISPATCH FOR EXTERNAL CRON SERVICES (cron-job.org, Vercel cron, etc.)
+    // Responds in < 100ms to eliminate HTTP timeouts (e.g. cron-job.org 30s connection limit).
+
+    if (hourlyScanner.isScanning) {
+      logger.info('[Scanner Trigger] SCAN_ALREADY_IN_PROGRESS | Returning 200 OK immediately.');
+      const capState = await ScannerPersistence.getCapState();
+      return res.status(200).json({
+        success: true,
+        status: 'SCAN_ALREADY_RUNNING',
+        message: 'A market scan cycle is already in progress.',
+        timestamp: now,
+        lastCronExecution: now,
+        lastAutomatedScan: capState.lastAutomatedScan || capState.lastScanTime || 0,
+        lastScanCompletedAt: capState.lastScanCompletedAt || 0,
+        external_hourly_scan_status: 'EXTERNAL_HOURLY_SCAN_SKIPPED',
+        totalDurationMs: Date.now() - requestStartTime,
+      });
+    }
+
+    logger.info(`[Scanner Trigger] MARKET_SCAN_ENGINE_DISPATCHED (ASYNC) | triggerTime: ${Date.now()}`);
+    hourlyScanner.triggerAutomatedScan(true, requestStartTime)
+      .then((result) => {
+        logger.info(`[Scanner Trigger Background] SCAN_COMPLETED | status: ${result.status} | duration: ${result.scanDurationMs}ms | candidates: ${result.candidatesEvaluated} | accepted: ${result.acceptedSignalsCount}`);
+      })
+      .catch((err) => {
+        logger.error('[Scanner Trigger Background] UNHANDLED_SCAN_ERROR:', { error: String(err) });
+      });
+
     CronJobOrgService.getJobStatus(false).catch((err) => {
       logger.debug('[Scanner Route] Background cron status update deferred', { error: String(err) });
     });
 
-    const cachedCron = CronJobOrgService.getCachedStatus();
-    const nextCronExecution = cachedCron?.nextExecution?.timestamp || (lastAutomatedScan + intervalMinutes * 60 * 1000);
-    const nextScanTime = nextCronExecution;
+    const settings = ScannerPersistence.getSettings();
+    const capState = await ScannerPersistence.getCapState();
+    const intervalMinutes = [15, 30, 45, 60].includes(Number(settings.intervalMinutes))
+      ? Number(settings.intervalMinutes)
+      : 30;
+    const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || 0;
+    const nextCronExecution = lastAutomatedScan ? (lastAutomatedScan + intervalMinutes * 60 * 1000) : (now + intervalMinutes * 60 * 1000);
 
-    const httpCode = result.status === 'ERROR' ? 500 : 200;
-    const durationMs = result.scanDurationMs ?? (Date.now() - now);
     const totalRequestDurationMs = Date.now() - requestStartTime;
+    logger.info(`[Scanner Trigger] ASYNC_DISPATCH_COMPLETE | duration: ${totalRequestDurationMs}ms`);
 
-    logger.info(`[Scanner Trigger] TOTAL_DURATION | duration: ${totalRequestDurationMs}ms | scanEngineDuration: ${durationMs}ms`);
-
-    // Fast, lightweight HTTP response for cron scheduler with complete state metrics
-    res.status(httpCode).json({
-      success: result.success,
-      status: result.status,
-      message: result.message,
-      timestamp: result.timestamp || Date.now(),
+    return res.status(200).json({
+      success: true,
+      status: 'DISPATCHED',
+      message: 'Automated market scan cycle initiated successfully in background.',
+      timestamp: now,
       lastCronExecution: now,
       lastAutomatedScan,
-      lastScanCompletedAt: capState.lastScanCompletedAt || Date.now(),
-      lastScanDuration: durationMs,
-      universeSymbolsScanned: result.universeSymbolsScanned ?? capState.universeSymbolsScanned ?? 0,
-      preliminaryCandidatesFound: result.preliminaryCandidatesFound ?? capState.preliminaryCandidatesFound ?? 0,
-      candidatesRejectedPreliminary: result.candidatesRejectedPreliminary ?? capState.candidatesRejectedPreliminary ?? 0,
-      candidatesEvaluated: result.candidatesEvaluated ?? capState.candidatesEvaluated ?? 0,
-      candidatesRejectedFinal: result.candidatesRejectedFinal ?? capState.candidatesRejectedFinal ?? (result.rejectedCount ?? 0),
-      signalsGenerated: result.signalsGenerated ?? result.signalsFound ?? capState.signalsGenerated ?? 0,
-      signalsAccepted: result.signalsAccepted ?? result.acceptedSignalsCount ?? capState.signalsAccepted ?? 0,
-      lastCandidatesEvaluated: result.candidatesEvaluated ?? capState.lastCandidatesEvaluated ?? 0,
-      lastSignalsFound: result.signalsFound ?? result.acceptedSignalsCount ?? capState.lastSignalsFound ?? 0,
-      lastAcceptedSignals: result.acceptedSignalsCount ?? capState.lastAcceptedSignals ?? 0,
-      signalsFound: result.signalsFound ?? result.acceptedSignalsCount ?? capState.lastSignalsFound ?? 0,
-      acceptedSignalsCount: result.acceptedSignalsCount ?? capState.lastAcceptedSignals ?? 0,
+      lastScanCompletedAt: capState.lastScanCompletedAt || 0,
+      lastScanDuration: capState.lastScanDuration || 0,
+      lastCandidatesEvaluated: capState.lastCandidatesEvaluated || 0,
+      lastAcceptedSignals: capState.lastAcceptedSignals || 0,
       nextCronExecution,
-      lastScanTime: lastAutomatedScan,
-      nextScanTime,
+      nextScanTime: nextCronExecution,
       intervalMinutes,
-      rejectedCount: result.rejectedCount ?? 0,
-      candidatesRejectedBeforeMTF: result.candidatesRejectedBeforeMTF ?? 0,
-      candidatesRejectedByMTF: result.candidatesRejectedByMTF ?? 0,
-      candidatesRejectedByScore: result.candidatesRejectedByScore ?? 0,
-      candidatesRejectedByRR: result.candidatesRejectedByRR ?? 0,
-      candidatesRejectedByStructure: result.candidatesRejectedByStructure ?? 0,
-      rejectionReasons: result.rejectionReasons ?? [],
-      rejectionReasonsCounts: result.rejectionReasonsCounts ?? result.rejectionReasonsAggregated ?? {},
-      candidateRejectionDetails: result.candidateRejectionDetails ?? [],
-      diagnosticsCount: result.diagnosticsCount ?? 0,
-      diagnostics: result.diagnostics ?? [],
-      scanDurationMs: durationMs,
-      scanDuration: `${(durationMs / 1000).toFixed(2)}s`,
+      external_hourly_scan_status: 'EXTERNAL_HOURLY_SCAN_DISPATCHED',
+      dispatchMode: 'ASYNC_BACKGROUND',
       totalDurationMs: totalRequestDurationMs,
-      globalScanStartMs: result.globalScanStartMs ?? requestStartTime,
-      globalScanDeadlineMs: result.globalScanDeadlineMs ?? (requestStartTime + 24000),
-      currentElapsedMs: result.currentElapsedMs ?? (Date.now() - requestStartTime),
-      remainingBudgetMs: result.remainingBudgetMs ?? Math.max(0, (requestStartTime + 24000) - Date.now()),
-      gate6ElapsedMs: result.gate6ElapsedMs ?? 0,
-      stage3ElapsedMs: result.stage3ElapsedMs ?? 0,
-      timeBudgetExceeded: result.timeBudgetExceeded ?? false,
-      providerRequestsStoppedByBudget: result.providerRequestsStoppedByBudget ?? false,
-      timingTelemetry: result.timingTelemetry,
-      external_hourly_scan_status: statusLog
     });
   } catch (err: unknown) {
     logger.error('EXTERNAL_HOURLY_SCAN_FAILED');

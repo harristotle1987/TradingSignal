@@ -1,3 +1,4 @@
+import { pLimit } from '../utils/concurrencyLimiter.js';
 import { TradingSignal, SignalGenerationResponse, NormalizedCandle, NormalizedTicker, SignalDirection } from '../../types/index.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
 import { quotaManager } from '../market/QuotaManager.js';
@@ -174,7 +175,8 @@ export async function runStagedPipeline(
       gate3Result?: Gate3PreliminaryScreenResult;
     }> = [];
 
-    const BATCH_SIZE = 16;
+    const limit = pLimit(8);
+    const BATCH_SIZE = 8;
     for (let i = 0; i < openAssets.length; i += BATCH_SIZE) {
       if (globalScanDeadlineMs - Date.now() <= 0) {
         timeBudgetExceeded = true;
@@ -184,7 +186,7 @@ export async function runStagedPipeline(
       }
       const batch = openAssets.slice(i, i + BATCH_SIZE);
       const batchResults = await Promise.all(
-        batch.map(async (asset) => {
+        batch.map((asset) => limit(async () => {
           let htf1h: NormalizedCandle[];
           try {
             htf1h = await marketDataManager.getCandles(asset, undefined, '1h', 50, false);
@@ -222,7 +224,7 @@ export async function runStagedPipeline(
             logger.debug?.(`[Gate 3 Rejected] ${asset} -> Score: ${gate3.preliminaryScore}/100 (< 60 threshold), Reason: ${gate3.reason}`);
           }
           return null;
-        })
+        }))
       );
 
       for (const res of batchResults) {

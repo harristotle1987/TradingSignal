@@ -11,6 +11,7 @@
  * - Timeout handling & Error isolation
  */
 
+import { ScanCacheManager } from './ScanCacheManager.js';
 import { IMarketDataProvider } from './adapters/IMarketDataProvider.js';
 import { BitgetAdapter } from './adapters/BitgetAdapter.js';
 import { FinnhubAdapter } from './adapters/FinnhubAdapter.js';
@@ -684,9 +685,11 @@ export class MarketDataManager {
       primaryProviderId = 'twelvedata'; // Twelve Data is authoritative
     }
 
-    const ttlMs = this.getTimeframeTtl(timeframe);
+    const scanCacheKey = `candles:${primaryProviderId}:${cleanSymbol}:${timeframe}:${limit}`;
+    return ScanCacheManager.getOrFetch(scanCacheKey, async () => {
+      const ttlMs = this.getTimeframeTtl(timeframe);
 
-    return marketCache.getOrFetchCandles(primaryProviderId, cleanSymbol, timeframe, ttlMs, async () => {
+      return marketCache.getOrFetchCandles(primaryProviderId, cleanSymbol, timeframe, ttlMs, async () => {
       let candles: NormalizedCandle[] = [];
 
       const adapter = this.getProvider(primaryProviderId);
@@ -763,6 +766,7 @@ export class MarketDataManager {
 
       logger.info(`No real OHLC candle data currently available for ${cleanSymbol} (${timeframe}) from primary or fallback providers`);
       return [];
+    });
     });
   }
 

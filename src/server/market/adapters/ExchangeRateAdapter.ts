@@ -4,6 +4,7 @@
  * Serves as a reliable fallback provider when primary Twelve Data API hits rate limits.
  */
 
+import { fetchWithTimeout } from '../../utils/fetchWithTimeout.js';
 import { IMarketDataProvider } from './IMarketDataProvider.js';
 import { NormalizedTicker, ProviderHealth } from '../types.js';
 import { SymbolNormalizer } from '../SymbolNormalizer.js';

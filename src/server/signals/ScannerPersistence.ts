@@ -17,7 +17,17 @@ import * as path from 'path';
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { logger } from '../logger.js';
 import { serverConfig } from '../config.js';
+import { withTimeout } from '../utils/fetchWithTimeout.js';
 import { TradingSignal, RankTier, isActionableSignal, ExecutionEvidenceState, HistoricalEntryPolicy } from '../../types/index.js';
+
+export interface ScanLockState {
+  isScanning: boolean;
+  lockAcquiredAt: number;
+  startedAt?: number;
+  scanId?: string;
+  status?: 'RUNNING' | 'COMPLETED' | 'SKIPPED_ALREADY_RUNNING' | 'ERROR';
+  instanceId?: string;
+}
 
 export interface DailyCapReservation {
   id: string;
@@ -1658,76 +1668,137 @@ export class ScannerPersistence {
 
   /**
    * Attempts to atomically acquire a scanner execution lock for concurrency protection across Vercel serverless containers.
-   * Lock auto-expires after lockTimeoutMs (default 5 minutes) to recover from orphaned crashed instances.
+   * Lock auto-expires after lockTimeoutMs (default 5 minutes / 300000ms) to recover from orphaned crashed instances.
    */
-  static async tryAcquireLock(instanceId: string, lockTimeoutMs = 300000): Promise<{ acquired: boolean; reason?: string }> {
+  static async tryAcquireLock(
+    instanceId: string,
+    lockTimeoutMs = 300000
+  ): Promise<{ acquired: boolean; scanId?: string; status?: string; reason?: string }> {
     this.init();
     const now = Date.now();
+    const scanId = `scan_${now}_${Math.random().toString(36).substring(2, 7)}`;
 
     const firestore = getFirestoreAdmin();
     if (!firestore) {
       if (this.isProductionMode()) {
         logger.error('[ScannerPersistence] FAIL CLOSED: Firestore required to acquire lock in production mode.');
-        return { acquired: false, reason: 'FAIL CLOSED: Production mode requires Firestore to acquire concurrency lock across serverless instances.' };
+        return {
+          acquired: false,
+          status: 'ERROR',
+          reason: 'FAIL CLOSED: Production mode requires Firestore to acquire concurrency lock across serverless instances.'
+        };
       }
-      if (this.localLock.isScanning && now - this.localLock.lockAcquiredAt < lockTimeoutMs) {
-        return { acquired: false, reason: 'Scan lock currently held in local process.' };
+      const activeLock = this.localLock.isScanning && (now - (this.localLock.startedAt || this.localLock.lockAcquiredAt) < lockTimeoutMs);
+      if (activeLock) {
+        return {
+          acquired: false,
+          scanId: this.localLock.scanId,
+          status: 'SKIPPED_ALREADY_RUNNING',
+          reason: 'Scan lock currently held in local process.'
+        };
       }
-      this.localLock = { isScanning: true, lockAcquiredAt: now, instanceId };
-      return { acquired: true };
+      this.localLock = {
+        isScanning: true,
+        lockAcquiredAt: now,
+        startedAt: now,
+        scanId,
+        status: 'RUNNING',
+        instanceId
+      };
+      return { acquired: true, scanId, status: 'RUNNING' };
     }
 
     try {
       const docRef = firestore.doc(FIRESTORE_LOCK_DOC);
-      const result = await firestore.runTransaction(async (tx) => {
-        const snap = await tx.get(docRef);
-        if (snap.exists) {
-          const remoteLock = snap.data() as ScanLockState;
-          if (remoteLock.isScanning && now - remoteLock.lockAcquiredAt < lockTimeoutMs) {
-            return { acquired: false, reason: 'Scan lock currently held in remote Firestore container.' };
+      const result = await withTimeout(
+        firestore.runTransaction(async (tx) => {
+          const snap = await tx.get(docRef);
+          if (snap.exists) {
+            const remoteLock = snap.data() as ScanLockState;
+            const started = remoteLock.startedAt || remoteLock.lockAcquiredAt || 0;
+            if (remoteLock.isScanning && (now - started < lockTimeoutMs)) {
+              return {
+                acquired: false,
+                scanId: remoteLock.scanId,
+                status: 'SKIPPED_ALREADY_RUNNING',
+                reason: 'Scan lock currently held in remote Firestore container.'
+              };
+            }
           }
-        }
-        const newLock: ScanLockState = {
-          isScanning: true,
-          lockAcquiredAt: now,
-          instanceId,
-        };
-        tx.set(docRef, newLock);
-        return { acquired: true };
-      });
+          const newLock: ScanLockState = {
+            isScanning: true,
+            lockAcquiredAt: now,
+            startedAt: now,
+            scanId,
+            status: 'RUNNING',
+            instanceId,
+          };
+          tx.set(docRef, newLock);
+          return { acquired: true, scanId, status: 'RUNNING' };
+        }),
+        4000,
+        'Firestore tryAcquireLock'
+      );
 
       if (result.acquired) {
-        this.localLock = { isScanning: true, lockAcquiredAt: now, instanceId };
+        this.localLock = {
+          isScanning: true,
+          lockAcquiredAt: now,
+          startedAt: now,
+          scanId,
+          status: 'RUNNING',
+          instanceId
+        };
       }
       return result;
     } catch (err) {
       logger.warn('[ScannerPersistence] Firestore tryAcquireLock error:', { error: String(err) });
       if (this.isProductionMode()) {
-        return { acquired: false, reason: 'FAIL CLOSED: Firestore lock transaction failed in production mode.' };
+        return { acquired: false, status: 'ERROR', reason: 'FAIL CLOSED: Firestore lock transaction failed in production mode.' };
       }
-      if (this.localLock.isScanning && now - this.localLock.lockAcquiredAt < lockTimeoutMs) {
-        return { acquired: false, reason: 'Scan lock held in local fallback memory.' };
+      const activeLock = this.localLock.isScanning && (now - (this.localLock.startedAt || this.localLock.lockAcquiredAt) < lockTimeoutMs);
+      if (activeLock) {
+        return {
+          acquired: false,
+          scanId: this.localLock.scanId,
+          status: 'SKIPPED_ALREADY_RUNNING',
+          reason: 'Scan lock held in local fallback memory.'
+        };
       }
-      this.localLock = { isScanning: true, lockAcquiredAt: now, instanceId };
-      return { acquired: true };
+      this.localLock = {
+        isScanning: true,
+        lockAcquiredAt: now,
+        startedAt: now,
+        scanId,
+        status: 'RUNNING',
+        instanceId
+      };
+      return { acquired: true, scanId, status: 'RUNNING' };
     }
   }
 
   /**
-   * Releases scanner execution lock.
+   * Releases scanner execution lock. Always called in 'finally' block.
    */
-  static async releaseLock(instanceId: string): Promise<void> {
+  static async releaseLock(instanceId: string, scanId?: string, finalStatus: 'COMPLETED' | 'ERROR' = 'COMPLETED'): Promise<void> {
     this.init();
-    this.localLock = { isScanning: false, lockAcquiredAt: 0 };
+    this.localLock = { isScanning: false, lockAcquiredAt: 0, status: finalStatus };
 
     const firestore = getFirestoreAdmin();
     if (firestore) {
       try {
-        await firestore.doc(FIRESTORE_LOCK_DOC).set({
-          isScanning: false,
-          lockAcquiredAt: 0,
-          instanceId,
-        });
+        await withTimeout(
+          firestore.doc(FIRESTORE_LOCK_DOC).set({
+            isScanning: false,
+            lockAcquiredAt: 0,
+            status: finalStatus,
+            releasedAt: Date.now(),
+            instanceId,
+            scanId: scanId || null,
+          }),
+          4000,
+          'Firestore releaseLock'
+        );
       } catch (err) {
         logger.warn('[ScannerPersistence] Firestore releaseLock error:', { error: String(err) });
       }

@@ -3,6 +3,7 @@
  * Fetches real crypto ticker and candle market data from Bitget v2 REST API.
  */
 
+import { fetchWithTimeout } from '../../utils/fetchWithTimeout.js';
 import { IMarketDataProvider } from './IMarketDataProvider.js';
 import { NormalizedTicker, NormalizedCandle, ProviderHealth } from '../types.js';
 import { SymbolNormalizer } from '../SymbolNormalizer.js';

@@ -4,6 +4,7 @@
  * STRICT POLICY: Requires valid server-side FINNHUB_API_KEY. Never fabricates data.
  */
 
+import { fetchWithTimeout } from '../../utils/fetchWithTimeout.js';
 import { IMarketDataProvider } from './IMarketDataProvider.js';
 import { NormalizedTicker, NormalizedCandle, ProviderHealth } from '../types.js';
 import { SymbolNormalizer } from '../SymbolNormalizer.js';
