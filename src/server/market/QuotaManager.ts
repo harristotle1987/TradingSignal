@@ -1,5 +1,4 @@
 import { logger } from '../logger.js';
-import { getActiveProfiler } from '../signals/ScanPerformanceProfiler.js';
 
 export interface ProviderQuotaConfig {
   maxPerMinute: number;
@@ -351,7 +350,6 @@ export class QuotaManager {
       const prevLatency = this.averageLatency.get(cleanProvider) || latencyMs;
       const newLatency = prevLatency * 0.8 + latencyMs * 0.2;
       this.averageLatency.set(cleanProvider, newLatency);
-      getActiveProfiler()?.recordProviderRequest(latencyMs);
     }
 
     // 2. Track timeouts

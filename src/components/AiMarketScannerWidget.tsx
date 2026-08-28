@@ -195,20 +195,23 @@ export function AiMarketScannerWidget({
 
             {/* Error State */}
             {error && !isScanning && (
-              <div className="bg-rose-950/40 border border-rose-900/50 rounded-xl p-3 space-y-2 text-rose-300 text-[11px]">
+              <div className="bg-rose-950/40 border border-rose-900/50 rounded-xl p-3 space-y-2.5 text-rose-300 text-[11px]">
                 <div className="flex items-center gap-1.5 font-semibold text-rose-400">
                   <AlertCircle className="w-4 h-4 shrink-0" />
                   <span>Scan Failed</span>
                 </div>
                 <p className="text-slate-300 text-[10px] leading-relaxed">{error}</p>
-                <button
-                  type="button"
-                  id="btn-retry-ai-scan"
-                  onClick={handleScanBestTrades}
-                  className="px-2.5 py-1 bg-rose-900/50 hover:bg-rose-900 text-rose-200 rounded text-[10px] border border-rose-700/50 transition cursor-pointer font-mono"
-                >
-                  Retry Scan
-                </button>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    id="btn-retry-ai-scan"
+                    onClick={handleScanBestTrades}
+                    className="px-2.5 py-1.5 bg-rose-900/50 hover:bg-rose-900 text-rose-200 rounded-lg text-[10px] border border-rose-700/50 transition cursor-pointer font-mono font-bold uppercase tracking-wider"
+                  >
+                    Retry Scan
+                  </button>
+                </div>
               </div>
             )}
 

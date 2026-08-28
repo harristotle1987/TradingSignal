@@ -6,7 +6,6 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
 // Load environment variables
@@ -24,9 +23,6 @@ import { hourlyScanner } from './src/server/signals/HourlyScanner.js';
 import { RepairService } from './src/server/signals/RepairService.js';
 import { SignalLifecycleManager } from './src/server/signals/SignalLifecycleManager.js';
 import { PushNotificationService } from './src/server/notifications/PushNotificationService.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 export async function createServer() {
   const app = express();
@@ -65,12 +61,6 @@ export async function createServer() {
     let swPath = path.join(process.cwd(), 'public', 'sw.js');
     if (!fs.existsSync(swPath)) {
       swPath = path.join(process.cwd(), 'dist', 'sw.js');
-    }
-    if (!fs.existsSync(swPath)) {
-      swPath = path.join(__dirname, 'public', 'sw.js');
-    }
-    if (!fs.existsSync(swPath)) {
-      swPath = path.join(__dirname, 'dist', 'sw.js');
     }
 
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');

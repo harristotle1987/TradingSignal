@@ -1,4 +1,10 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { logger } from '../logger.js';
+import { getFirestoreAdmin } from '../firebaseAdmin.js';
+
+const LOCAL_HISTORY_PATH = path.join(process.cwd(), 'scan_performance_history.json');
+const FIRESTORE_COL = 'scan_performance_history';
 
 export interface StagePerformanceRecord {
   stageName: string;
@@ -140,6 +146,7 @@ export class ScanPerformanceProfiler {
     const profile = this.getProfile();
 
     this.logSummary(profile);
+    ScanPerformanceProfiler.persistProfile(profile);
     return profile;
   }
 
@@ -179,6 +186,114 @@ export class ScanPerformanceProfiler {
       logger.info(`Stage: [${s.stageName.padEnd(20)}] | Duration: ${String(s.durationMs).padStart(5)}ms | Req: ${String(s.providerRequests).padStart(3)} | Latency: ${String(s.providerLatencyMs).padStart(5)}ms | Cache Hits: ${String(s.cacheHits).padStart(3)} | Misses: ${String(s.cacheMisses).padStart(3)} | In: ${String(s.candidatesIn).padStart(3)} -> Out: ${String(s.candidatesOut).padStart(3)}`);
     }
     logger.info(`================================================================`);
+  }
+
+  public static persistProfile(profile: ScanPerformanceProfile): void {
+    try {
+      let history: ScanPerformanceProfile[] = [];
+      if (fs.existsSync(LOCAL_HISTORY_PATH)) {
+        try {
+          const raw = fs.readFileSync(LOCAL_HISTORY_PATH, 'utf-8');
+          history = JSON.parse(raw);
+        } catch {
+          history = [];
+        }
+      }
+      history.push(profile);
+      if (history.length > 100) {
+        history = history.slice(-100);
+      }
+      fs.writeFileSync(LOCAL_HISTORY_PATH, JSON.stringify(history, null, 2), 'utf-8');
+    } catch (err) {
+      logger.warn('[ScanPerformanceProfiler] Failed to write profile history to disk:', { error: String(err) });
+    }
+
+    try {
+      const firestore = getFirestoreAdmin();
+      if (firestore) {
+        firestore
+          .collection(FIRESTORE_COL)
+          .doc(profile.scanId)
+          .set(profile)
+          .catch((err) => {
+            logger.debug('[ScanPerformanceProfiler] Firestore scan history sync deferred', { reason: String(err) });
+          });
+      }
+    } catch {
+      // ignore firestore sync errors in dev/unconfigured environment
+    }
+  }
+
+  public static getHealthReport(): {
+    status: 'HEALTHY' | 'DEGRADED' | 'CRITICAL';
+    averageScanDurationMs: number;
+    averageProviderLatencyMs: number;
+    totalScansLogged: number;
+    cacheHitRatio: number;
+    healthWarnings: string[];
+  } {
+    let history: ScanPerformanceProfile[] = [];
+    if (fs.existsSync(LOCAL_HISTORY_PATH)) {
+      try {
+        const raw = fs.readFileSync(LOCAL_HISTORY_PATH, 'utf-8');
+        history = JSON.parse(raw);
+      } catch {
+        history = [];
+      }
+    }
+
+    if (history.length === 0) {
+      return {
+        status: 'HEALTHY',
+        averageScanDurationMs: 0,
+        averageProviderLatencyMs: 0,
+        totalScansLogged: 0,
+        cacheHitRatio: 1.0,
+        healthWarnings: ['No scan records logged yet.'],
+      };
+    }
+
+    let totalDuration = 0;
+    let totalLatency = 0;
+    let totalHits = 0;
+    let totalMisses = 0;
+
+    for (const p of history) {
+      totalDuration += p.TOTAL_SCAN_DURATION_MS;
+      totalLatency += p.TOTAL_PROVIDER_LATENCY;
+      totalHits += p.totalCacheHits;
+      totalMisses += p.totalCacheMisses;
+    }
+
+    const averageScanDurationMs = Math.round(totalDuration / history.length);
+    const averageProviderLatencyMs = Math.round(totalLatency / history.length);
+    const totalCacheOps = totalHits + totalMisses;
+    const cacheHitRatio = totalCacheOps > 0 ? Number((totalHits / totalCacheOps).toFixed(4)) : 1.0;
+
+    const healthWarnings: string[] = [];
+    let status: 'HEALTHY' | 'DEGRADED' | 'CRITICAL' = 'HEALTHY';
+
+    if (averageScanDurationMs > 20000) {
+      status = 'DEGRADED';
+      healthWarnings.push(`Average scan duration is elevated: ${averageScanDurationMs}ms (Threshold: 20s).`);
+    }
+    if (cacheHitRatio < 0.5) {
+      status = 'DEGRADED';
+      healthWarnings.push(`Cache hit ratio is lower than optimal: ${(cacheHitRatio * 100).toFixed(1)}% (Threshold: 50%).`);
+    }
+    if (averageScanDurationMs > 30000) {
+      status = 'CRITICAL';
+      healthWarnings.push(`Average scan duration is extremely high: ${averageScanDurationMs}ms (Threshold: 30s).`);
+    }
+
+    return {
+      status,
+      averageScanDurationMs,
+      averageProviderLatencyMs,
+      totalScansLogged: history.length,
+      cacheHitRatio,
+      healthWarnings,
+    };
   }
 }
 

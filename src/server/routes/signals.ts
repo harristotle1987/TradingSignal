@@ -75,7 +75,7 @@ router.get('/cron/status', async (req: Request, res: Response) => {
  * POST /api/scanner/settings
  * Updates automated hourly scanner configurations (enabled, notifications, notifyOnNoTrade).
  */
-router.post('/scanner/settings', async (req: Request, res: Response) => {
+router.post('/scanner/settings', adminAuthMiddleware, async (req: Request, res: Response) => {
   const { enabled, notificationsEnabled, notifyOnNoTrade, intervalMinutes } = req.body || {};
   hourlyScanner.updateSettings({ enabled, notificationsEnabled, notifyOnNoTrade, intervalMinutes });
   const settings = await hourlyScanner.getSettingsAsync();
@@ -228,9 +228,13 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
       : 30;
     const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || 0;
     
-    // Refresh cron status to get authoritative next execution from cron-job.org
-    const cronStatus = await CronJobOrgService.getJobStatus(true);
-    const nextCronExecution = cronStatus.nextExecution?.timestamp || 0;
+    // Refresh cron status completely in the background without blocking the scanner trigger API
+    CronJobOrgService.getJobStatus(false).catch((err) => {
+      logger.debug('[Scanner Route] Background cron status update deferred', { error: String(err) });
+    });
+
+    const cachedCron = CronJobOrgService.getCachedStatus();
+    const nextCronExecution = cachedCron?.nextExecution?.timestamp || (lastAutomatedScan + intervalMinutes * 60 * 1000);
     const nextScanTime = nextCronExecution;
 
     const httpCode = result.status === 'ERROR' ? 500 : 200;
@@ -321,7 +325,7 @@ router.get('/scanner/trigger', handleScannerTrigger);
  * POST /api/scanner/manual-trigger
  * Separate endpoint for in-app UI manual/admin scanner execution.
  */
-router.post('/scanner/manual-trigger', async (_req: Request, res: Response) => {
+router.post('/scanner/manual-trigger', adminAuthMiddleware, async (_req: Request, res: Response) => {
   try {
     const result = await hourlyScanner.triggerManualScan();
     const httpCode = result.status === 'ERROR' ? 500 : 200;
@@ -857,7 +861,7 @@ router.get('/signals/log', async (_req: Request, res: Response) => {
  * DELETE /api/signals/log/:id
  * Deletes an individual dedicated signal log entry by ID.
  */
-router.delete('/signals/log/:id', async (req: Request, res: Response) => {
+router.delete('/signals/log/:id', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
     
@@ -903,7 +907,7 @@ router.delete('/signals/log/:id', async (req: Request, res: Response) => {
  * POST /api/signals/log/bulk-delete
  * Deletes multiple signal log entries by IDs.
  */
-router.post('/signals/log/bulk-delete', async (req: Request, res: Response) => {
+router.post('/signals/log/bulk-delete', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const { ids } = req.body || {};
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -951,7 +955,7 @@ router.post('/signals/log/bulk-delete', async (req: Request, res: Response) => {
  * DELETE /api/signals/log
  * Clears dedicated signal log records.
  */
-router.delete('/signals/log', async (_req: Request, res: Response) => {
+router.delete('/signals/log', adminAuthMiddleware, async (_req: Request, res: Response) => {
   try {
     await SignalLogger.clearLogs();
     await SignalOutcomeLogger.clearLogs();
@@ -991,7 +995,7 @@ router.get('/signals', async (_req: Request, res: Response) => {
  * POST /api/signals/generate
  * Triggers on-demand multi-timeframe signal analysis using the unified scan engine.
  */
-router.post('/signals/generate', async (req: Request, res: Response) => {
+router.post('/signals/generate', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const requestedSymbol = (req.body?.symbol as string) || 'EURUSD';
     const generationResult = await signalEngine.generateSignal(requestedSymbol, undefined, true);
@@ -1011,7 +1015,7 @@ router.post('/signals/generate', async (req: Request, res: Response) => {
  * DELETE /api/signals/:id
  * Deletes a specific active signal by ID.
  */
-router.delete('/signals/:id', async (req: Request, res: Response) => {
+router.delete('/signals/:id', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
     // Record that this signal has been deleted first
@@ -1055,7 +1059,7 @@ router.delete('/signals/:id', async (req: Request, res: Response) => {
  * DELETE /api/signals
  * Resets/clears active signals cache.
  */
-router.delete('/signals', async (_req: Request, res: Response) => {
+router.delete('/signals', adminAuthMiddleware, async (_req: Request, res: Response) => {
   signalEngine.clearSignals();
   await ScannerPersistence.clearSentSignals();
   res.status(200).json({

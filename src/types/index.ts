@@ -246,7 +246,6 @@ export interface ScannerFunnelCounters {
   candidatesRejectedFinal: number;
   signalsGenerated: number;
   signalsAccepted: number;
-  performanceProfile?: any;
   assetsReceived?: number;
   assetsCached?: number;
   cacheHits?: number;

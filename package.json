@@ -9,7 +9,8 @@
     "start": "node dist/server.cjs",
     "preview": "node dist/server.cjs",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:regression": "tsx tests/run-regression.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",
