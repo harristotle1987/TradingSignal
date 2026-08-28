@@ -24,7 +24,7 @@ export class FinnhubAdapter implements IMarketDataProvider {
   readonly id = 'finnhub';
   readonly name = 'Finnhub Market Data';
 
-  async fetchPrice(appSymbol: string, globalScanDeadlineMs?: number): Promise<NormalizedTicker> {
+  async fetchPrice(appSymbol: string): Promise<NormalizedTicker> {
     const receivedAt = Date.now();
     let providerSymbol = appSymbol;
     let assetType: 'CRYPTO' | 'STOCK' | 'FOREX' | 'INDEX' | 'UNKNOWN' = 'STOCK';
@@ -39,17 +39,7 @@ export class FinnhubAdapter implements IMarketDataProvider {
       );
     }
 
-    const configTimeout = serverConfig.getConfig().marketDataTimeoutMs;
-    let timeoutMs = configTimeout;
-    const safetyMargin = 100;
-    if (globalScanDeadlineMs) {
-      const remainingMs = globalScanDeadlineMs - Date.now();
-      if (remainingMs <= safetyMargin) {
-        throw new Error('TIMEOUT: Global scanner deadline reached before starting request');
-      }
-      timeoutMs = Math.min(configTimeout, remainingMs - safetyMargin);
-    }
-
+    const timeoutMs = serverConfig.getConfig().marketDataTimeoutMs;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -191,7 +181,7 @@ export class FinnhubAdapter implements IMarketDataProvider {
     }
   }
 
-  async fetchCandles(appSymbol: string, timeframe = '1m', limit = 50, globalScanDeadlineMs?: number): Promise<NormalizedCandle[]> {
+  async fetchCandles(appSymbol: string, timeframe = '1m', limit = 50): Promise<NormalizedCandle[]> {
     const apiKey = process.env.FINNHUB_API_KEY;
     if (!apiKey || apiKey.trim().length === 0) {
       logger.warn('FINNHUB_API_KEY environment variable missing for stock candle fetching');
@@ -212,17 +202,7 @@ export class FinnhubAdapter implements IMarketDataProvider {
     const windowSec = Math.max(limit * resInfo.secondsPerBar * 5, 7 * 86400);
     const fromSec = toSec - windowSec;
 
-    const configTimeout = serverConfig.getConfig().marketDataTimeoutMs;
-    let timeoutMs = configTimeout;
-    const safetyMargin = 100;
-    if (globalScanDeadlineMs) {
-      const remainingMs = globalScanDeadlineMs - Date.now();
-      if (remainingMs <= safetyMargin) {
-        throw new Error('TIMEOUT: Global scanner deadline reached before starting request');
-      }
-      timeoutMs = Math.min(configTimeout, remainingMs - safetyMargin);
-    }
-
+    const timeoutMs = serverConfig.getConfig().marketDataTimeoutMs;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 

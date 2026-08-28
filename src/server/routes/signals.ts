@@ -228,13 +228,12 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
       : 30;
     const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || 0;
     
-    // Refresh cron status completely in the background without blocking the scanner trigger API
-    CronJobOrgService.getJobStatus(false).catch((err) => {
+    // Refresh cron status asynchronously/background to get authoritative next execution from cron-job.org
+    const cronStatus = await CronJobOrgService.getJobStatus(false);
+    CronJobOrgService.getJobStatus(true).catch((err) => {
       logger.debug('[Scanner Route] Background cron status update deferred', { error: String(err) });
     });
-
-    const cachedCron = CronJobOrgService.getCachedStatus();
-    const nextCronExecution = cachedCron?.nextExecution?.timestamp || (lastAutomatedScan + intervalMinutes * 60 * 1000);
+    const nextCronExecution = cronStatus.nextExecution?.timestamp || 0;
     const nextScanTime = nextCronExecution;
 
     const httpCode = result.status === 'ERROR' ? 500 : 200;

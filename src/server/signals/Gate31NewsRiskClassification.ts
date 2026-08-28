@@ -67,11 +67,6 @@ export class Gate31NewsRiskClassification {
   private static lastFetchSuccessful = false;
   private static lastFetchTime = 0;
 
-  // Scan-level cache, deduplication, and failure cooldown
-  private static symbolNewsCache = new Map<string, { lastFetchTime: number; success: boolean }>();
-  private static pendingFetches = new Map<string, Promise<void>>();
-  private static lastFailureTime = 0;
-
   /**
    * Syncs verified news from Twelve Data for a given symbol and updates scheduledEvents.
    */
@@ -83,119 +78,79 @@ export class Gate31NewsRiskClassification {
       return;
     }
 
-    const cleanSymbol = SymbolNormalizer.normalizeAppSymbol(symbol) || symbol.trim().toUpperCase();
+    try {
+      const cleanSymbol = SymbolNormalizer.normalizeAppSymbol(symbol) || symbol.trim().toUpperCase();
+      const provMapping = SymbolNormalizer.toProviderSymbol(cleanSymbol, 'twelvedata');
+      const providerSymbol = provMapping.providerSymbol || cleanSymbol;
 
-    // 1. Check global failure cooldown (5 minutes) to protect provider and avoid repeated failures
-    const FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
-    if (this.lastFailureTime > 0 && (Date.now() - this.lastFailureTime < FAILURE_COOLDOWN_MS)) {
-      logger.warn(`[Gate 31 News Risk] Skipping news sync for ${cleanSymbol} due to global failure cooldown.`);
-      return;
-    }
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-    // 2. Check symbol-specific cache (15 minutes TTL)
-    const CACHE_TTL_MS = 15 * 60 * 1000;
-    const cached = this.symbolNewsCache.get(cleanSymbol);
-    if (cached && (Date.now() - cached.lastFetchTime < CACHE_TTL_MS)) {
-      logger.info(`[Gate 31 News Risk] Using cached news results for ${cleanSymbol}`);
-      if (cached.success) {
-        this.lastFetchSuccessful = true;
-      }
-      return;
-    }
+      // Fetch news for this symbol
+      const url = `https://api.twelvedata.com/news?symbol=${encodeURIComponent(providerSymbol)}&apikey=${apiKey.trim()}`;
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
 
-    // 3. Deduplicate parallel calls for the same symbol
-    const pending = this.pendingFetches.get(cleanSymbol);
-    if (pending) {
-      logger.info(`[Gate 31 News Risk] Reusing pending news fetch promise for ${cleanSymbol}`);
-      return pending;
-    }
-
-    const fetchPromise = (async () => {
-      try {
-        const provMapping = SymbolNormalizer.toProviderSymbol(cleanSymbol, 'twelvedata');
-        const providerSymbol = provMapping.providerSymbol || cleanSymbol;
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-        // Fetch news for this symbol
-        const url = `https://api.twelvedata.com/news?symbol=${encodeURIComponent(providerSymbol)}&apikey=${apiKey.trim()}`;
-        const response = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          logger.warn(`[Gate 31 News Risk] Twelve Data API returned HTTP ${response.status}`);
-          this.symbolNewsCache.set(cleanSymbol, { lastFetchTime: Date.now(), success: false });
-          this.lastFailureTime = Date.now();
-          this.lastFetchSuccessful = false;
-          return;
-        }
-
-        const json = await response.json() as any;
-        const articles = json.data || json.articles || [];
-
-        if (Array.isArray(articles) && articles.length > 0) {
-          const now = Date.now();
-          const verifiedEvents: ScheduledNewsEvent[] = articles.map((art: any, index: number) => {
-            const pubDate = art.date ? new Date(art.date).getTime() : now;
-            const title = art.title || 'Verified News Article';
-            const titleLower = title.toLowerCase();
-
-            let category: NewsCategory = 'GENERAL_ECONOMIC';
-            let impact: NewsImpact = 'LOW';
-
-            if (titleLower.includes('fed') || titleLower.includes('fomc') || titleLower.includes('powell') || titleLower.includes('rate decision')) {
-              category = 'MACRO_US';
-              impact = 'HIGH';
-            } else if (titleLower.includes('ecb') || titleLower.includes('central bank') || titleLower.includes('inflation') || titleLower.includes('cpi')) {
-              category = 'CENTRAL_BANK';
-              impact = 'HIGH';
-            } else if (titleLower.includes('crypto') || titleLower.includes('bitcoin') || titleLower.includes('sec') || titleLower.includes('etf')) {
-              category = 'CRYPTO_REGULATORY';
-              impact = 'MEDIUM';
-            }
-
-            return {
-              id: `td_news_${cleanSymbol}_${index}_${pubDate}`,
-              title,
-              category,
-              impact,
-              scheduledTimeMs: pubDate,
-              affectedAssets: [cleanSymbol],
-              affectedAssetClasses: ['CRYPTO', 'FOREX', 'STOCKS'],
-              blackoutBeforeMinutes: impact === 'HIGH' ? 30 : 15,
-              blackoutAfterMinutes: impact === 'HIGH' ? 30 : 15,
-              provenance: 'twelvedata',
-            };
-          });
-
-          // Update local events matching symbol
-          this.scheduledEvents = this.scheduledEvents
-            .filter((e) => e.provenance !== 'twelvedata' || e.affectedAssets?.[0] !== cleanSymbol)
-            .concat(verifiedEvents);
-
-          this.symbolNewsCache.set(cleanSymbol, { lastFetchTime: Date.now(), success: true });
-          this.lastFetchSuccessful = true;
-          this.lastFetchTime = now;
-          logger.info(`[Gate 31 News Risk] Successfully synced ${verifiedEvents.length} verified news events from Twelve Data for ${cleanSymbol}`);
-        } else {
-          logger.info(`[Gate 31 News Risk] Twelve Data returned empty news array for ${cleanSymbol}`);
-          this.symbolNewsCache.set(cleanSymbol, { lastFetchTime: Date.now(), success: true });
-          this.lastFetchSuccessful = true; // Still marked successful to avoid hitting failure cooldown
-          this.lastFetchTime = Date.now();
-        }
-      } catch (err) {
-        logger.warn('[Gate 31 News Risk] Failed to sync verified news:', { error: String(err) });
-        this.symbolNewsCache.set(cleanSymbol, { lastFetchTime: Date.now(), success: false });
-        this.lastFailureTime = Date.now();
+      if (!response.ok) {
+        logger.warn(`[Gate 31 News Risk] Twelve Data API returned HTTP ${response.status}`);
         this.lastFetchSuccessful = false;
-      } finally {
-        this.pendingFetches.delete(cleanSymbol);
+        return;
       }
-    })();
 
-    this.pendingFetches.set(cleanSymbol, fetchPromise);
-    return fetchPromise;
+      const json = await response.json() as any;
+      const articles = json.data || json.articles || [];
+
+      if (Array.isArray(articles) && articles.length > 0) {
+        const now = Date.now();
+        const verifiedEvents: ScheduledNewsEvent[] = articles.map((art: any, index: number) => {
+          const pubDate = art.date ? new Date(art.date).getTime() : now;
+          const title = art.title || 'Verified News Article';
+          const titleLower = title.toLowerCase();
+
+          let category: NewsCategory = 'GENERAL_ECONOMIC';
+          let impact: NewsImpact = 'LOW';
+
+          if (titleLower.includes('fed') || titleLower.includes('fomc') || titleLower.includes('powell') || titleLower.includes('rate decision')) {
+            category = 'MACRO_US';
+            impact = 'HIGH';
+          } else if (titleLower.includes('ecb') || titleLower.includes('central bank') || titleLower.includes('inflation') || titleLower.includes('cpi')) {
+            category = 'CENTRAL_BANK';
+            impact = 'HIGH';
+          } else if (titleLower.includes('crypto') || titleLower.includes('bitcoin') || titleLower.includes('sec') || titleLower.includes('etf')) {
+            category = 'CRYPTO_REGULATORY';
+            impact = 'MEDIUM';
+          }
+
+          return {
+            id: `td_news_${cleanSymbol}_${index}_${pubDate}`,
+            title,
+            category,
+            impact,
+            scheduledTimeMs: pubDate,
+            affectedAssets: [cleanSymbol],
+            affectedAssetClasses: ['CRYPTO', 'FOREX', 'STOCKS'],
+            blackoutBeforeMinutes: impact === 'HIGH' ? 30 : 15,
+            blackoutAfterMinutes: impact === 'HIGH' ? 30 : 15,
+            provenance: 'twelvedata',
+          };
+        });
+
+        // Update local events matching symbol
+        this.scheduledEvents = this.scheduledEvents
+          .filter((e) => e.provenance !== 'twelvedata' || e.affectedAssets?.[0] !== cleanSymbol)
+          .concat(verifiedEvents);
+
+        this.lastFetchSuccessful = true;
+        this.lastFetchTime = now;
+        logger.info(`[Gate 31 News Risk] Successfully synced ${verifiedEvents.length} verified news events from Twelve Data for ${cleanSymbol}`);
+      } else {
+        logger.info(`[Gate 31 News Risk] Twelve Data returned empty news array for ${cleanSymbol}`);
+        this.lastFetchSuccessful = false;
+      }
+    } catch (err) {
+      logger.warn('[Gate 31 News Risk] Failed to sync verified news:', { error: String(err) });
+      this.lastFetchSuccessful = false;
+    }
   }
 
   /**
