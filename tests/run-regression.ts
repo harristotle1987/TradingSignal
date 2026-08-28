@@ -8,6 +8,7 @@ import { marketDataManager } from '../src/server/market/MarketDataManager.js';
 import { BitgetAdapter } from '../src/server/market/adapters/BitgetAdapter.js';
 import { TwelveDataAdapter } from '../src/server/market/adapters/TwelveDataAdapter.js';
 import { ExchangeRateAdapter } from '../src/server/market/adapters/ExchangeRateAdapter.js';
+import { adminAuthMiddleware, extractAuthToken } from '../src/server/middleware/adminAuth.js';
 import { logger } from '../src/server/logger.js';
 
 // Disable default log output during tests to keep output clean
@@ -367,6 +368,98 @@ async function runAll() {
 
       // Restore key
       process.env.TWELVE_DATA_API_KEY = originalKey;
+    });
+  });
+
+  // --- SUITE 5: GATE 6 ACCESS BOUNDARIES, ERROR HANDLING & SECRET PROTECTION ---
+  await describe('Suite 5: Gate 6 Access Boundaries, Error Handling & Secret Protection', async () => {
+    await test('extractAuthToken correctly parses Bearer and custom admin headers', () => {
+      const mockReq1: any = { headers: { authorization: 'Bearer secret_token_123' } };
+      assert(extractAuthToken(mockReq1) === 'secret_token_123', 'Should extract token from Bearer auth header');
+
+      const mockReq2: any = { headers: { 'x-admin-key': 'admin_key_456' } };
+      assert(extractAuthToken(mockReq2) === 'admin_key_456', 'Should extract token from x-admin-key header');
+
+      const mockReq3: any = { headers: { 'x-api-key': 'api_key_789' } };
+      assert(extractAuthToken(mockReq3) === 'api_key_789', 'Should extract token from x-api-key header');
+
+      const mockReq4: any = { headers: {} };
+      assert(extractAuthToken(mockReq4) === null, 'Should return null when no auth headers present');
+    });
+
+    await test('adminAuthMiddleware rejects missing credentials with 401 without exposing secret values', async () => {
+      const originalAdminKey = process.env.ADMIN_API_KEY;
+      process.env.ADMIN_API_KEY = 'test_secret_key_prod_999';
+
+      let statusCode = 0;
+      let jsonPayload: any = null;
+
+      const mockReq: any = { method: 'POST', path: '/api/scanner/settings', headers: {} };
+      const mockRes: any = {
+        status: (code: number) => {
+          statusCode = code;
+          return mockRes;
+        },
+        json: (data: any) => {
+          jsonPayload = data;
+          return mockRes;
+        },
+      };
+
+      let nextCalled = false;
+      adminAuthMiddleware(mockReq, mockRes, () => { nextCalled = true; });
+
+      assert(!nextCalled, 'Next should not be called on missing auth');
+      assert(statusCode === 401, `Expected status 401, got ${statusCode}`);
+      assert(jsonPayload?.error === 'Unauthorized: Missing administrative credentials.', 'Error message must be generic');
+      assert(!JSON.stringify(jsonPayload).includes('test_secret_key_prod_999'), 'Response must not contain secret key');
+
+      process.env.ADMIN_API_KEY = originalAdminKey;
+    });
+
+    await test('adminAuthMiddleware rejects invalid credentials with 403 without exposing secret values', async () => {
+      const originalAdminKey = process.env.ADMIN_API_KEY;
+      process.env.ADMIN_API_KEY = 'test_secret_key_prod_999';
+
+      let statusCode = 0;
+      let jsonPayload: any = null;
+
+      const mockReq: any = { method: 'DELETE', path: '/api/signals/outcomes', headers: { authorization: 'Bearer WRONG_KEY' } };
+      const mockRes: any = {
+        status: (code: number) => {
+          statusCode = code;
+          return mockRes;
+        },
+        json: (data: any) => {
+          jsonPayload = data;
+          return mockRes;
+        },
+      };
+
+      let nextCalled = false;
+      adminAuthMiddleware(mockReq, mockRes, () => { nextCalled = true; });
+
+      assert(!nextCalled, 'Next should not be called on invalid auth');
+      assert(statusCode === 403, `Expected status 403, got ${statusCode}`);
+      assert(jsonPayload?.error === 'Forbidden: Invalid administrative credentials.', 'Error message must be generic');
+      assert(!JSON.stringify(jsonPayload).includes('test_secret_key_prod_999'), 'Response must not leak valid secret');
+
+      process.env.ADMIN_API_KEY = originalAdminKey;
+    });
+
+    await test('adminAuthMiddleware permits request with valid administrative credential', async () => {
+      const originalAdminKey = process.env.ADMIN_API_KEY;
+      process.env.ADMIN_API_KEY = 'test_secret_key_prod_999';
+
+      let nextCalled = false;
+      const mockReq: any = { method: 'POST', path: '/api/scanner/settings', headers: { authorization: 'Bearer test_secret_key_prod_999' } };
+      const mockRes: any = {};
+
+      adminAuthMiddleware(mockReq, mockRes, () => { nextCalled = true; });
+
+      assert(nextCalled, 'Next must be called when valid credential is provided');
+
+      process.env.ADMIN_API_KEY = originalAdminKey;
     });
   });
 

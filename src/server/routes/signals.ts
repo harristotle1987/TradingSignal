@@ -44,6 +44,7 @@ const router = Router();
 
 /**
  * GET /api/scanner/settings
+ * [Access Boundary: Public/Read-only]
  * Retrieves automated hourly scanner configurations, today's stats, and cron-job.org status.
  */
 router.get('/scanner/settings', async (_req: Request, res: Response) => {
@@ -59,6 +60,7 @@ router.get('/scanner/settings', async (_req: Request, res: Response) => {
 
 /**
  * GET /api/cron/status
+ * [Access Boundary: Public/Read-only]
  * Dedicated route for retrieving cron-job.org execution details & history.
  */
 router.get('/cron/status', async (req: Request, res: Response) => {
@@ -73,6 +75,7 @@ router.get('/cron/status', async (req: Request, res: Response) => {
 
 /**
  * POST /api/scanner/settings
+ * [Access Boundary: Administrative/Destructive] (Protected by adminAuthMiddleware)
  * Updates automated hourly scanner configurations (enabled, notifications, notifyOnNoTrade).
  */
 router.post('/scanner/settings', adminAuthMiddleware, async (req: Request, res: Response) => {
@@ -89,6 +92,7 @@ router.post('/scanner/settings', adminAuthMiddleware, async (req: Request, res: 
 
 /**
  * GET /api/scanner/history
+ * [Access Boundary: Public/Read-only]
  * Retrieves full notification history, sent signals today, and rejected candidate logs.
  */
 router.get('/scanner/history', async (_req: Request, res: Response) => {
@@ -112,9 +116,10 @@ router.get('/scanner/history', async (_req: Request, res: Response) => {
 
 /**
  * GET & POST /api/scanner/trigger
+ * [Access Boundary: Cron-Only]
  * Production entry point for external automated cron scheduler (e.g. cron-job.org, GitHub Actions, curl).
  * Supports both GET and POST to maximize compatibility with free external cron providers.
- * Strictly protected by SCANNER_CRON_SECRET token.
+ * Strictly protected server-side by SCANNER_CRON_SECRET token.
  */
 const handleScannerTrigger = async (req: Request, res: Response) => {
   const requestStartTime = Date.now();
@@ -170,8 +175,13 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
       isAuthenticated = true;
     }
   } else {
-    // If no SCANNER_CRON_SECRET is configured in server environment, allow invocation
-    isAuthenticated = true;
+    // If no SCANNER_CRON_SECRET is configured in server environment:
+    // Fail closed in production, allow only in local development configuration
+    if (process.env.NODE_ENV === 'production') {
+      isAuthenticated = false;
+    } else {
+      isAuthenticated = true;
+    }
   }
 
   const authDurationMs = Date.now() - requestStartTime;
@@ -323,9 +333,10 @@ router.get('/scanner/trigger', handleScannerTrigger);
 
 /**
  * POST /api/scanner/manual-trigger
- * Separate endpoint for in-app UI manual/admin scanner execution.
+ * [Access Boundary: Manual Signal Generation]
+ * Endpoint for in-app UI manual scanner execution. Accessible without administrative token so users can initiate scans on demand.
  */
-router.post('/scanner/manual-trigger', adminAuthMiddleware, async (_req: Request, res: Response) => {
+router.post('/scanner/manual-trigger', async (_req: Request, res: Response) => {
   try {
     const result = await hourlyScanner.triggerManualScan();
     const httpCode = result.status === 'ERROR' ? 500 : 200;
@@ -993,9 +1004,10 @@ router.get('/signals', async (_req: Request, res: Response) => {
 
 /**
  * POST /api/signals/generate
- * Triggers on-demand multi-timeframe signal analysis using the unified scan engine.
+ * [Access Boundary: Manual Signal Generation]
+ * Triggers on-demand multi-timeframe signal analysis using the unified scan engine. Publicly accessible for manual user queries.
  */
-router.post('/signals/generate', adminAuthMiddleware, async (req: Request, res: Response) => {
+router.post('/signals/generate', async (req: Request, res: Response) => {
   try {
     const requestedSymbol = (req.body?.symbol as string) || 'EURUSD';
     const generationResult = await signalEngine.generateSignal(requestedSymbol, undefined, true);
