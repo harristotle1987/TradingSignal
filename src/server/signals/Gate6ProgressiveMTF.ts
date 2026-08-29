@@ -553,8 +553,8 @@ export class Gate6ProgressiveMTF {
     if (isBuy) {
       clearancePct = ((nearestResistance - currentPrice) / currentPrice) * 100;
       if (clearancePct < 0.2 && currentPrice > 0) {
-        // Close to major resistance: allow breakout setups if macro structure is bullish, penalize if opposing
-        srScore = ms4h.structureBias === 'BULLISH' ? 70 : 40;
+        // Close to major resistance: allow breakout setups if macro structure is bullish or range, penalize if bearish/opposing
+        srScore = ms4h.structureBias === 'BEARISH' ? 40 : 70;
         if (srScore < 50) {
           srFavorable = false;
           disagreements.push(`Resistance ceiling: Entry is only ${clearancePct.toFixed(2)}% below major resistance (${nearestResistance.toFixed(4)}).`);
@@ -567,8 +567,8 @@ export class Gate6ProgressiveMTF {
     } else {
       clearancePct = ((currentPrice - nearestSupport) / currentPrice) * 100;
       if (clearancePct < 0.2 && currentPrice > 0) {
-        // Close to major support: allow breakdown setups if macro structure is bearish, penalize if opposing
-        srScore = ms4h.structureBias === 'BEARISH' ? 70 : 40;
+        // Close to major support: allow breakdown setups if macro structure is bearish or range, penalize if bullish/opposing
+        srScore = ms4h.structureBias === 'BULLISH' ? 40 : 70;
         if (srScore < 50) {
           srFavorable = false;
           disagreements.push(`Support floor: Entry is only ${clearancePct.toFixed(2)}% above major support (${nearestSupport.toFixed(4)}).`);

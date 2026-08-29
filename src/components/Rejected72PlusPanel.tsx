@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { ShieldAlert, ChevronDown, ChevronUp, AlertOctagon, Filter } from 'lucide-react';
+import { RejectionBreakdown } from './SignalAnalysisDetails.js';
 
 export interface RejectedCandidateTelemetry {
   symbol: string;
@@ -215,21 +216,7 @@ export function Rejected72PlusPanel({
                       <span className="text-slate-200">{mtfInfo}</span>
                     </div>
 
-                    {cand.failedGates && cand.failedGates.length > 0 && (
-                      <div className="space-y-1 pt-1 border-t border-slate-800">
-                        <span className="text-slate-400 block font-semibold text-[9.5px]">Complete Failed Gates Array (`failedGates[]`):</span>
-                        <div className="flex flex-wrap gap-1.5">
-                          {cand.failedGates.map((gateName, gIdx) => (
-                            <span
-                              key={gIdx}
-                              className="px-2 py-0.5 bg-rose-950/90 text-rose-300 text-[9px] rounded border border-rose-800/80 font-mono font-bold"
-                            >
-                              {gateName}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                    <RejectionBreakdown candidate={cand as any} />
                   </div>
                 )}
               </div>

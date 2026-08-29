@@ -1,7 +1,4 @@
-import { NormalizedCandle, SignalDirection } from '../../types/index.js';
-import { TechnicalIndicators } from './TechnicalIndicators.js';
-import { Gate5SupportResistance, PriceZone } from './Gate5Liquidity.js';
-import { AtrTpGenerator } from './AtrTpGenerator.js';
+import { SignalDirection } from '../../types/index.js';
 
 export interface Gate9Result {
   entryPrice: number;
@@ -9,6 +6,7 @@ export interface Gate9Result {
   tp1: number;
   tp2: number;
   tp3: number;
+  takeProfit: number;
   risk: number;
   reward: number;
   rrRatio: number;
@@ -22,74 +20,68 @@ export class Gate9RiskManagement {
   public static calculate(
     currentPrice: number,
     direction: SignalDirection,
-    candles: NormalizedCandle[],
-    assetClass?: string,
-    isAggressive?: boolean
+    stopLoss: number,
+    tp1: number,
+    tp2: number,
+    tp3: number,
+    riskRewardRatio: number
   ): Gate9Result {
     const reasons: string[] = [];
-    const lastCandle = candles[candles.length - 1];
-    
-    // 1. Calculate Volatility (ATR)
-    const atr = TechnicalIndicators.calculateATR(candles, 14);
-    
-    // 2. Identify Structure for SL/TP
-    const sr = Gate5SupportResistance.analyze(direction, candles);
-    
-    // Initial SL based on ATR + Structure
-    let sl = direction === 'BUY' ? lastCandle.low - (atr * 1.5) : lastCandle.high + (atr * 1.5);
-    
-    // Refine SL based on Support/Resistance zones
-    if (direction === 'BUY' && sr.nearestSupport) {
-      sl = Math.min(sl, sr.nearestSupport.bottom - (atr * 0.5));
-    } else if (direction === 'SELL' && sr.nearestResistance) {
-      sl = Math.max(sl, sr.nearestResistance.top + (atr * 0.5));
+
+    // Compute risk and reward as signed distances first
+    const risk = direction === 'BUY' ? currentPrice - stopLoss : stopLoss - currentPrice;
+    if (risk <= 0) {
+      reasons.push('INVALID: stop-loss is on the wrong side of entry price');
+      return {
+        entryPrice: currentPrice,
+        sl: stopLoss,
+        tp1,
+        tp2,
+        tp3,
+        takeProfit: tp1,
+        risk,
+        reward: 0,
+        rrRatio: riskRewardRatio,
+        estimatedWinProbability: 0,
+        expectedValue: 0,
+        riskScore: 0,
+        reasons
+      };
     }
-    
-    // GATE 3: Primary ATR-Based TP Generation
-    const tpRes = AtrTpGenerator.generate({
-      direction,
-      entryPrice: currentPrice,
-      atr,
-      isAggressive,
-      assetClass,
-    });
 
-    const tp1 = tpRes.tp1;
-    const tp2 = tpRes.tp2;
-    const tp3 = tpRes.tp3;
+    const reward = direction === 'BUY'
+      ? (tp2 - currentPrice)
+      : (currentPrice - tp2);
 
-    const risk = Math.abs(currentPrice - sl);
-    const reward = Math.abs(tp1 - currentPrice);
-    const rrRatio = risk > 0 ? reward / risk : 0;
-    
-    // Estimated Win Probability (simplified logic based on confluence score and RR)
+    // Base estimated win probability on the passed-in riskRewardRatio to avoid re-derivation drift
     let winProb = 0.45; // Base probability
-    if (rrRatio > 2) winProb -= 0.05;
-    if (rrRatio < 1.5) winProb += 0.05;
-    
+    if (riskRewardRatio > 2) winProb -= 0.05;
+    if (riskRewardRatio < 1.5) winProb += 0.05;
+
     // Expected Value Calculation
     const expectedValue = (winProb * reward) - ((1 - winProb) * risk);
-    
-    // Risk Score
+
+    // Risk Score based on authoritative passed-in riskRewardRatio
     let riskScore = 100;
-    if (rrRatio < 1.2) {
+    if (riskRewardRatio < 1.2) {
       riskScore -= 40;
-      reasons.push(`Low Reward-to-Risk ratio: ${rrRatio.toFixed(2)}`);
+      reasons.push(`Low Reward-to-Risk ratio: ${riskRewardRatio.toFixed(2)}`);
     }
     if (expectedValue < 0) {
       riskScore -= 50;
       reasons.push('Negative Expected Value. Trade is statistically unfavorable.');
     }
-    
+
     return {
       entryPrice: currentPrice,
-      sl,
+      sl: stopLoss,
       tp1,
       tp2,
       tp3,
+      takeProfit: tp1,
       risk,
       reward,
-      rrRatio,
+      rrRatio: riskRewardRatio,
       estimatedWinProbability: winProb,
       expectedValue,
       riskScore,

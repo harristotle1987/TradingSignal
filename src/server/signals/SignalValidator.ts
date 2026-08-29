@@ -381,10 +381,10 @@ export class SignalValidator {
     // 2. Minimum Practical Distance Hurdles based on Volatility (ATR)
     const risk = Math.abs(livePrice - adjustedSL);
     
-    // Calculate reward based on actual TP structure (average of the three targets) if available, otherwise fallback to adjustedTP
+    // Calculate reward based on actual TP structure (TP2 only) if available, otherwise fallback to adjustedTP
     let reward = Math.abs(adjustedTP - livePrice);
-    if (adjustedTp1 !== undefined && adjustedTp2 !== undefined && adjustedTp3 !== undefined) {
-      reward = (Math.abs(adjustedTp1 - livePrice) + Math.abs(adjustedTp2 - livePrice) + Math.abs(adjustedTp3 - livePrice)) / 3;
+    if (adjustedTp2 !== undefined) {
+      reward = Math.abs(adjustedTp2 - livePrice);
     }
 
     if (risk <= 0 || reward <= 0) {
@@ -579,10 +579,9 @@ export class SignalValidator {
     const tp2Dist = Math.abs(tp2 - entryPrice);
     const tp3Dist = Math.abs(tp3 - entryPrice);
 
-    // 3. Check risk/reward
+    // 3. Check risk/reward (TP2 only)
     const risk = Math.abs(entryPrice - stopLoss);
-    const averageReward = (tp1Dist + tp2Dist + tp3Dist) / 3;
-    const rr = risk > 0 ? averageReward / risk : 0;
+    const rr = risk > 0 ? tp2Dist / risk : 0;
 
     // If valid, return original values
     if (isDistinct && isOrdered && tp1Dist > 0) {
@@ -606,11 +605,8 @@ export class SignalValidator {
       isAggressive,
     });
 
-    const newTp1Dist = Math.abs(atrGen.tp1 - entryPrice);
     const newTp2Dist = Math.abs(atrGen.tp2 - entryPrice);
-    const newTp3Dist = Math.abs(atrGen.tp3 - entryPrice);
-    const newAvgReward = (newTp1Dist + newTp2Dist + newTp3Dist) / 3;
-    const newRR = risk > 0 ? newAvgReward / risk : 0;
+    const newRR = risk > 0 ? newTp2Dist / risk : 0;
 
     return {
       tp1: atrGen.tp1,

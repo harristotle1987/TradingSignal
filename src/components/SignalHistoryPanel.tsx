@@ -9,6 +9,7 @@
 import { useState, useEffect } from 'react';
 import { SignalHistoryItem, TradingSignal } from '../types/index.js';
 import { TargetTracker } from './TargetTracker.js';
+import { RejectionBreakdown, AcceptanceBreakdown } from './SignalAnalysisDetails.js';
 import { formatTimeWithZone, DisplayTimeZone } from '../utils/time.js';
 import {
   formatLabel,
@@ -402,29 +403,10 @@ export function SignalHistoryPanel({
                   </div>
                 )}
 
-                {/* Rejection Reason & Human-Readable Summary */}
-                <div className="bg-slate-900/60 p-2.5 rounded-lg border border-slate-800/80 text-xs space-y-1">
-                  <div className="text-rose-300 font-semibold">
-                    Primary Reason: <span className="text-slate-200 font-normal">{cand.primaryRejectionReason}</span>
-                  </div>
-                  {cand.rejectionSummary && (
-                    <div className="text-amber-300/90 text-xs font-sans italic">
-                      Summary: {cand.rejectionSummary}
-                    </div>
-                  )}
-                </div>
-
-                {/* Failed Gates */}
-                {cand.failedGates && cand.failedGates.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                    <span className="text-xs text-slate-400">Failed Gates:</span>
-                    {cand.failedGates.map((g: string, gi: number) => (
-                      <span key={gi} className="px-2 py-0.5 bg-rose-950/80 text-rose-300 text-xs rounded border border-rose-800/60">
-                        {g}
-                      </span>
-                    ))}
-                  </div>
-                )}
+                 {/* Interactive Rejection Breakdown */}
+                 <div className="pt-2">
+                   <RejectionBreakdown candidate={cand as any} />
+                 </div>
               </div>
             ))}
           </div>
@@ -825,22 +807,8 @@ export function SignalHistoryPanel({
                     )}
 
                     {/* Technical Confluence Reasons List */}
-                    {item.confluenceReasons && item.confluenceReasons.length > 0 && (
-                      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-2">
-                        <div className="flex items-center gap-2 text-emerald-400 font-semibold text-xs uppercase tracking-wider">
-                          <Layers className="w-4 h-4 text-emerald-400" />
-                          <span>Technical Confluence Rationale</span>
-                        </div>
-                        <ul className="space-y-1.5 pl-1">
-                          {item.confluenceReasons.map((reason, rIdx) => (
-                            <li key={rIdx} className="text-xs text-slate-200 flex items-start gap-2.5 leading-relaxed">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5 shrink-0" />
-                              <span>{reason}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
+                    {/* Visual Acceptance & Technical Confluence Breakdown */}
+                    <AcceptanceBreakdown signal={item as any} />
 
                     {/* NVIDIA AI Risk Evaluation */}
                     {item.aiAssessment && (

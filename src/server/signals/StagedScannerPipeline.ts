@@ -511,7 +511,15 @@ export async function runStagedPipeline(
         const gate6 = Gate6VolumePriceAction.analyze(scoring.direction, setupCandles);
         const gate7 = Gate7MarketContext.analyze(asset, scoring.direction, setupCandles);
         const gate8 = Gate8EntryQuality.analyze(baselinePrice, scoring.direction, setupCandles);
-        const gate9 = Gate9RiskManagement.calculate(baselinePrice, scoring.direction, setupCandles);
+        const gate9 = Gate9RiskManagement.calculate(
+          baselinePrice,
+          scoring.direction,
+          scoring.stopLoss,
+          scoring.tp1,
+          scoring.tp2,
+          scoring.tp3,
+          scoring.riskRewardRatio
+        );
 
         if (gate12.direction !== 'NONE' && gate12.reasons) scoring.confluenceReasons.push(...gate12.reasons);
         if (gate13.breakoutQuality !== 'UNCONFIRMED_BREAKOUT' && gate13.reasons) scoring.confluenceReasons.push(...gate13.reasons);
@@ -563,12 +571,7 @@ export async function runStagedPipeline(
             scoring.isValid = false;
             scoring.rejectionReason = `REJECTED: SCORE_BELOW_THRESHOLD. Composite signal score ${scoring.score}/100 is below the minimum required threshold of ${thresholds.minimumScore}`;
           } else {
-            scoring.stopLoss = gate9.sl;
-            scoring.takeProfit = gate9.tp1;
-            scoring.tp1 = gate9.tp1;
-            scoring.tp2 = gate9.tp2;
-            scoring.tp3 = gate9.tp3;
-            scoring.riskRewardRatio = gate9.rrRatio;
+            // scoring.stopLoss/takeProfit/tp1/tp2/tp3/riskRewardRatio retain the values ScoringEngine originally produced
           }
         }
       }
@@ -885,14 +888,15 @@ export async function runStagedPipeline(
         if (gate8Eval.finalScore < (thresholds.signalThreshold || 72) || gate8Eval.finalScore < 72) {
           failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
         }
-        if (gate8Eval.factors.trendAlignment < 14) failedGates.push(StandardFailedGate.TREND);
-        if (gate8Eval.factors.momentum < 7) failedGates.push(StandardFailedGate.MOMENTUM);
-        if (gate8Eval.factors.marketStructure < 10) failedGates.push(StandardFailedGate.MARKET_STRUCTURE);
-        if (gate8Eval.factors.mtfConfirmation < 10) failedGates.push(StandardFailedGate.MTF_ALIGNMENT);
-        if (gate8Eval.factors.volumeLiquidity < 6) failedGates.push(StandardFailedGate.VOLUME);
-        if (gate8Eval.factors.volatilityAtrQuality < 6) failedGates.push(StandardFailedGate.VOLATILITY);
-        if (gate8Eval.factors.entryQuality < 3.5) failedGates.push(StandardFailedGate.VALID_ENTRY);
-        if (gate8Eval.factors.rrQuality < 3.5) failedGates.push(StandardFailedGate.RR);
+        const factors: any = gate8Eval.factors || {};
+        if (factors.trendAlignment !== undefined && factors.trendAlignment < 14) failedGates.push(StandardFailedGate.TREND);
+        if (factors.momentum !== undefined && factors.momentum < 7) failedGates.push(StandardFailedGate.MOMENTUM);
+        if (factors.marketStructure !== undefined && factors.marketStructure < 10) failedGates.push(StandardFailedGate.MARKET_STRUCTURE);
+        if (factors.mtfConfirmation !== undefined && factors.mtfConfirmation < 10) failedGates.push(StandardFailedGate.MTF_ALIGNMENT);
+        if (factors.volumeLiquidity !== undefined && factors.volumeLiquidity < 6) failedGates.push(StandardFailedGate.VOLUME);
+        if (factors.volatilityAtrQuality !== undefined && factors.volatilityAtrQuality < 6) failedGates.push(StandardFailedGate.VOLATILITY);
+        if (factors.entryQuality !== undefined && factors.entryQuality < 3.5) failedGates.push(StandardFailedGate.VALID_ENTRY);
+        if (factors.rrQuality !== undefined && factors.rrQuality < 3.5) failedGates.push(StandardFailedGate.RR);
 
         if (failedGates.length === 0) {
           if (gate8Eval.finalScore < 72) {
@@ -917,6 +921,7 @@ export async function runStagedPipeline(
           tp2: scoring.tp2,
           tp3: scoring.tp3,
           timestamp: now,
+          factors: gate8Eval.factors,
         });
 
         if (gate8Eval.classification === 'NEAR_MISS_WATCHLIST') {
@@ -1048,12 +1053,7 @@ export async function runStagedPipeline(
       }
 
       if (batchAiResult.classification !== 'UNAVAILABLE' && batchAiResult.recommendedSymbols) {
-        const recSet = new Set(batchAiResult.recommendedSymbols);
-        const originalCount = filteredCandidates.length;
-        const kept = filteredCandidates.filter((c) => recSet.has(c.signal.symbol));
-        filteredCandidates.length = 0;
-        filteredCandidates.push(...kept);
-        logger.info(`[NVIDIA AI Candidate Filter] Retained ${filteredCandidates.length}/${originalCount} AI-recommended candidates.`);
+        logger.info(`[NVIDIA AI Candidate Filter] GATE 80 policy prevents secondary analytics from rejecting a valid core signal. Applied soft-hurdle score penalty to non-recommended assets.`);
       }
     }
 

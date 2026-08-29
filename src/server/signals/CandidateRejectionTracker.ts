@@ -80,6 +80,7 @@ export interface CandidateRejectionAudit {
   rejectionSummary?: string;
   timestamp?: number;
   is72PlusRejected?: boolean;
+  factors?: any;
 }
 
 export class CandidateRejectionTracker {
@@ -440,10 +441,10 @@ export class CandidateRejectionTracker {
     if (lower.includes('structure') || lower.includes('support') || lower.includes('resistance') || lower.includes('breakout')) {
       failedGates.add(StandardFailedGate.MARKET_STRUCTURE);
     }
-    if (lower.includes('rr') || lower.includes('risk') || lower.includes('reward') || lower.includes('r:r')) {
+    if (/\b(rr|r:r|risk[- ]reward|risk\/reward)\b/i.test(reason) || lower.includes('reward') || (lower.includes('risk') && !lower.includes('risk cap') && !lower.includes('portfolio risk') && !lower.includes('risk limit') && !lower.includes('risk_cap') && !lower.includes('max daily risk'))) {
       failedGates.add(StandardFailedGate.RR);
     }
-    if (lower.includes('sl') || lower.includes('tp') || lower.includes('stop loss') || lower.includes('take profit') || lower.includes('stop-loss') || lower.includes('distance')) {
+    if (/\b(sl|tp)\b/i.test(reason) || lower.includes('stop loss') || lower.includes('take profit') || lower.includes('stop-loss') || lower.includes('take-profit') || lower.includes('distance')) {
       failedGates.add(StandardFailedGate.SL_TP_VALIDITY);
     }
     if (lower.includes('duplicate') || lower.includes('active signal') || lower.includes('existing') || lower.includes('fingerprint')) {
@@ -545,19 +546,29 @@ export class CandidateRejectionTracker {
     if (scoring.score < targetScoreThreshold || scoring.score < 72) {
       failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
     }
-    if (reasonLower.includes('directional') || reasonLower.includes('trend') || (scoring.factors?.higherTfTrendScore && scoring.factors.higherTfTrendScore < 14)) {
+    if (reasonLower.includes('directional') || reasonLower.includes('trend') || 
+        (scoring.factors?.higherTfTrendScore && scoring.factors.higherTfTrendScore < 14) ||
+        (scoring.factors?.trendAlignment && scoring.factors.trendAlignment < 14)) {
       failedGates.add(StandardFailedGate.TREND);
     }
-    if (reasonLower.includes('momentum') || (scoring.factors?.momentumScore && scoring.factors.momentumScore < 10)) {
+    if (reasonLower.includes('momentum') || 
+        (scoring.factors?.momentumScore && scoring.factors.momentumScore < 10) ||
+        (scoring.factors?.momentum && scoring.factors.momentum < 10)) {
       failedGates.add(StandardFailedGate.MOMENTUM);
     }
-    if (reasonLower.includes('structure') || (scoring.factors?.marketStructureScore && scoring.factors.marketStructureScore < 10)) {
+    if (reasonLower.includes('structure') || 
+        (scoring.factors?.marketStructureScore && scoring.factors.marketStructureScore < 10) ||
+        (scoring.factors?.marketStructure && scoring.factors.marketStructure < 10)) {
       failedGates.add(StandardFailedGate.MARKET_STRUCTURE);
     }
-    if (reasonLower.includes('volume') || (scoring.factors?.volumeOrderFlowScore && scoring.factors.volumeOrderFlowScore < 10)) {
+    if (reasonLower.includes('volume') || 
+        (scoring.factors?.volumeOrderFlowScore && scoring.factors.volumeOrderFlowScore < 10) ||
+        (scoring.factors?.volumeLiquidity && scoring.factors.volumeLiquidity < 10)) {
       failedGates.add(StandardFailedGate.VOLUME);
     }
-    if (reasonLower.includes('volatility') || reasonLower.includes('atr') || (scoring.factors?.volatilityAtrScore && scoring.factors.volatilityAtrScore < 7)) {
+    if (reasonLower.includes('volatility') || reasonLower.includes('atr') || 
+        (scoring.factors?.volatilityAtrScore && scoring.factors.volatilityAtrScore < 7) ||
+        (scoring.factors?.volatilityAtrQuality && scoring.factors.volatilityAtrQuality < 7)) {
       failedGates.add(StandardFailedGate.VOLATILITY);
     }
     if (reasonLower.includes('context') || reasonLower.includes('session')) {
@@ -598,28 +609,36 @@ export class CandidateRejectionTracker {
     }
 
     const factors = gate8Eval.factors || {};
-    if (factors.higherTfTrendScore !== undefined && factors.higherTfTrendScore < 14) {
+    if ((factors.higherTfTrendScore !== undefined && factors.higherTfTrendScore < 14) ||
+        (factors.trendAlignment !== undefined && factors.trendAlignment < 14)) {
       failedGates.add(StandardFailedGate.TREND);
     }
-    if (factors.mtfConfluenceScore !== undefined && factors.mtfConfluenceScore < 11) {
+    if ((factors.mtfConfluenceScore !== undefined && factors.mtfConfluenceScore < 11) ||
+        (factors.mtfConfirmation !== undefined && factors.mtfConfirmation < 11)) {
       failedGates.add(StandardFailedGate.MTF_ALIGNMENT);
     }
-    if (factors.momentumScore !== undefined && factors.momentumScore < 10) {
+    if ((factors.momentumScore !== undefined && factors.momentumScore < 10) ||
+        (factors.momentum !== undefined && factors.momentum < 10)) {
       failedGates.add(StandardFailedGate.MOMENTUM);
     }
-    if (factors.marketStructureScore !== undefined && factors.marketStructureScore < 10) {
+    if ((factors.marketStructureScore !== undefined && factors.marketStructureScore < 10) ||
+        (factors.marketStructure !== undefined && factors.marketStructure < 10)) {
       failedGates.add(StandardFailedGate.MARKET_STRUCTURE);
     }
-    if (factors.volumeOrderFlowScore !== undefined && factors.volumeOrderFlowScore < 10) {
+    if ((factors.volumeOrderFlowScore !== undefined && factors.volumeOrderFlowScore < 10) ||
+        (factors.volumeLiquidity !== undefined && factors.volumeLiquidity < 10)) {
       failedGates.add(StandardFailedGate.VOLUME);
     }
-    if (factors.volatilityAtrScore !== undefined && factors.volatilityAtrScore < 7) {
+    if ((factors.volatilityAtrScore !== undefined && factors.volatilityAtrScore < 7) ||
+        (factors.volatilityAtrQuality !== undefined && factors.volatilityAtrQuality < 7)) {
       failedGates.add(StandardFailedGate.VOLATILITY);
     }
-    if (factors.entryQualityScore !== undefined && factors.entryQualityScore < 7) {
+    if ((factors.entryQualityScore !== undefined && factors.entryQualityScore < 7) ||
+        (factors.entryQuality !== undefined && factors.entryQuality < 7)) {
       failedGates.add(StandardFailedGate.INVALID_ENTRY);
     }
-    if (factors.riskRewardScore !== undefined && factors.riskRewardScore < 3.5) {
+    if ((factors.riskRewardScore !== undefined && factors.riskRewardScore < 3.5) ||
+        (factors.rrQuality !== undefined && factors.rrQuality < 3.5)) {
       failedGates.add(StandardFailedGate.RR);
     }
 
