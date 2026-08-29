@@ -501,17 +501,50 @@ export class Gate6ProgressiveMTF {
     }
 
     // --- B. Support & Resistance Clearance ---
-    // Compute key swing levels across 4h and 1h
+    // Extract genuine fractal swing pivots across 4h and 1h rather than raw individual bar extremes
+    const extractSwingPivots = (candles: NormalizedCandle[]) => {
+      const pivotsHigh: number[] = [];
+      const pivotsLow: number[] = [];
+      for (let i = 2; i < candles.length - 2; i++) {
+        const c = candles[i];
+        if (
+          c.high >= candles[i - 1].high &&
+          c.high >= candles[i - 2].high &&
+          c.high >= candles[i + 1].high &&
+          c.high >= candles[i + 2].high
+        ) {
+          pivotsHigh.push(c.high);
+        }
+        if (
+          c.low <= candles[i - 1].low &&
+          c.low <= candles[i - 2].low &&
+          c.low <= candles[i + 1].low &&
+          c.low <= candles[i + 2].low
+        ) {
+          pivotsLow.push(c.low);
+        }
+      }
+      return { pivotsHigh, pivotsLow };
+    };
+
     const slice4h = sorted4h.slice(-20);
     const slice1h = sorted1h.slice(-30);
-    const swingHighs = [...slice4h.map(c => c.high), ...slice1h.map(c => c.high)];
-    const swingLows = [...slice4h.map(c => c.low), ...slice1h.map(c => c.low)];
+    const pivots4h = extractSwingPivots(slice4h);
+    const pivots1h = extractSwingPivots(slice1h);
+    const swingHighs = [...pivots4h.pivotsHigh, ...pivots1h.pivotsHigh];
+    const swingLows = [...pivots4h.pivotsLow, ...pivots1h.pivotsLow];
 
-    const resistanceLevels = swingHighs.filter(h => h > currentPrice).sort((a, b) => a - b);
-    const supportLevels = swingLows.filter(l => l < currentPrice).sort((a, b) => b - a);
+    // Exclude immediate intra-bar noise around current price using a dynamic buffer
+    const minBuffer = Math.max(currentPrice * 0.0005, atr1h * 0.15);
+    const resistanceLevels = swingHighs.filter(h => h > currentPrice + minBuffer).sort((a, b) => a - b);
+    const supportLevels = swingLows.filter(l => l < currentPrice - minBuffer).sort((a, b) => b - a);
 
     const nearestResistance = resistanceLevels.length > 0 ? resistanceLevels[0] : currentPrice * 1.05;
     const nearestSupport = supportLevels.length > 0 ? supportLevels[0] : currentPrice * 0.95;
+
+    // --- C. Market Structure Confirmation (5m & 4h) ---
+    const ms5m = TechnicalIndicators.calculateMarketStructure(sorted5m);
+    const ms4h = TechnicalIndicators.calculateMarketStructure(sorted4h);
 
     let srScore = 80;
     let srFavorable = true;
@@ -519,27 +552,33 @@ export class Gate6ProgressiveMTF {
 
     if (isBuy) {
       clearancePct = ((nearestResistance - currentPrice) / currentPrice) * 100;
-      if (clearancePct < 0.15 && currentPrice > 0) {
-        srScore = 30;
-        srFavorable = false;
-        disagreements.push(`Resistance ceiling: Entry is only ${clearancePct.toFixed(2)}% below major resistance (${nearestResistance.toFixed(4)}).`);
+      if (clearancePct < 0.2 && currentPrice > 0) {
+        // Close to major resistance: allow breakout setups if macro structure is bullish, penalize if opposing
+        srScore = ms4h.structureBias === 'BULLISH' ? 70 : 40;
+        if (srScore < 50) {
+          srFavorable = false;
+          disagreements.push(`Resistance ceiling: Entry is only ${clearancePct.toFixed(2)}% below major resistance (${nearestResistance.toFixed(4)}).`);
+        }
       } else if (clearancePct > 1.0) {
         srScore = 95;
+      } else {
+        srScore = 80;
       }
     } else {
       clearancePct = ((currentPrice - nearestSupport) / currentPrice) * 100;
-      if (clearancePct < 0.15 && currentPrice > 0) {
-        srScore = 30;
-        srFavorable = false;
-        disagreements.push(`Support floor: Entry is only ${clearancePct.toFixed(2)}% above major support (${nearestSupport.toFixed(4)}).`);
+      if (clearancePct < 0.2 && currentPrice > 0) {
+        // Close to major support: allow breakdown setups if macro structure is bearish, penalize if opposing
+        srScore = ms4h.structureBias === 'BEARISH' ? 70 : 40;
+        if (srScore < 50) {
+          srFavorable = false;
+          disagreements.push(`Support floor: Entry is only ${clearancePct.toFixed(2)}% above major support (${nearestSupport.toFixed(4)}).`);
+        }
       } else if (clearancePct > 1.0) {
         srScore = 95;
+      } else {
+        srScore = 80;
       }
     }
-
-    // --- C. Market Structure Confirmation (5m & 4h) ---
-    const ms5m = TechnicalIndicators.calculateMarketStructure(sorted5m);
-    const ms4h = TechnicalIndicators.calculateMarketStructure(sorted4h);
 
     let msConfScore = 50;
     let msConfirmed = true;
