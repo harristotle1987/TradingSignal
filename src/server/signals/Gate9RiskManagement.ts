@@ -1,4 +1,5 @@
 import { SignalDirection } from '../../types/index.js';
+import { RiskRewardCalculator } from './RiskRewardCalculator.js';
 
 export interface Gate9Result {
   entryPrice: number;
@@ -28,10 +29,12 @@ export class Gate9RiskManagement {
   ): Gate9Result {
     const reasons: string[] = [];
 
-    // Compute risk and reward as signed distances first
-    const risk = direction === 'BUY' ? currentPrice - stopLoss : stopLoss - currentPrice;
-    if (risk <= 0) {
-      reasons.push('INVALID: stop-loss is on the wrong side of entry price');
+    const rrResult = RiskRewardCalculator.calculate(currentPrice, stopLoss, tp1, tp2, tp3, direction);
+    const risk = rrResult.riskDistance;
+    const reward = rrResult.rewardDistance;
+
+    if (!rrResult.isValid || risk <= 0) {
+      reasons.push(rrResult.reason || 'INVALID: stop-loss is on the wrong side of entry price');
       return {
         entryPrice: currentPrice,
         sl: stopLoss,
@@ -39,7 +42,7 @@ export class Gate9RiskManagement {
         tp2,
         tp3,
         takeProfit: tp1,
-        risk,
+        risk: Math.abs(currentPrice - stopLoss),
         reward: 0,
         rrRatio: riskRewardRatio,
         estimatedWinProbability: 0,
@@ -48,10 +51,6 @@ export class Gate9RiskManagement {
         reasons
       };
     }
-
-    const reward = direction === 'BUY'
-      ? (tp2 - currentPrice)
-      : (currentPrice - tp2);
 
     // Base estimated win probability on the passed-in riskRewardRatio to avoid re-derivation drift
     let winProb = 0.45; // Base probability
@@ -89,3 +88,4 @@ export class Gate9RiskManagement {
     };
   }
 }
+

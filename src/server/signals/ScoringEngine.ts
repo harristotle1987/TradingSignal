@@ -7,7 +7,8 @@ import { Gate28ConfirmationDiversity } from './Gate28ConfirmationDiversity.js';
 import { Gate34ExecutionFrictionStressTest, FrictionStressTestResult } from './Gate34ExecutionFrictionStressTest.js';
 import { logger } from '../logger.js';
 import { serverConfig } from '../config.js';
-import { ASSET_CLASS_GUARDRAILS, GuardrailRange } from './AtrTpGenerator.js';
+import { ASSET_CLASS_GUARDRAILS, GuardrailRange, AtrTpGenerator } from './AtrTpGenerator.js';
+import { RiskRewardCalculator } from './RiskRewardCalculator.js';
 
 export interface ScoringFactors {
   higherTfTrendScore: number;     // 0 - 20 (4H / 1D major direction)
@@ -577,7 +578,6 @@ export class ScoringEngine {
 
     const profile = this.getAssetExecutionProfile(cleanSymbol, entryPrice, atr_15m);
     const precision = profile.precision;
-    const minSafeStopDist = Math.max(profile.minPracticalStopDistance, atr_15m * 0.85);
 
     let stopLoss = 0;
     let takeProfit = 0;
@@ -585,26 +585,27 @@ export class ScoringEngine {
     let tp2 = 0;
     let tp3 = 0;
 
+    // 1. Structural anchor & 2. Minimum-safe floor
+    const minSafeDistance = Math.max(profile.minPracticalStopDistance, atr_15m * 0.85);
     let rawStopDistance = 0;
     if (direction === 'BUY') {
       const structuralSlPrice = support15m - atr_15m * 0.4;
-      rawStopDistance = Math.max(entryPrice - structuralSlPrice, minSafeStopDist);
+      rawStopDistance = Math.max(entryPrice - structuralSlPrice, minSafeDistance);
     } else {
       const structuralSlPrice = resistance15m + atr_15m * 0.4;
-      rawStopDistance = Math.max(structuralSlPrice - entryPrice, minSafeStopDist);
+      rawStopDistance = Math.max(structuralSlPrice - entryPrice, minSafeDistance);
     }
 
+    // 3. Maximum stop cap
     const normalizedAsset = profile.assetClass === 'STOCK' ? 'STOCKS' : profile.assetClass.toUpperCase();
     const guardrails = ASSET_CLASS_GUARDRAILS[normalizedAsset] || ASSET_CLASS_GUARDRAILS.DEFAULT;
-    const maxStopDist = entryPrice * (guardrails.tp3.maxPct / 100);
+    const maxStopDistance = entryPrice * (guardrails.tp3.maxPct / 100);
+    const finalStopDistance = Math.min(rawStopDistance, maxStopDistance);
 
-    const finalStopDistance = Math.min(rawStopDistance, maxStopDist);
-
+    // 4. Round final SL
     stopLoss = direction === 'BUY'
       ? Number((entryPrice - finalStopDistance).toFixed(precision))
       : Number((entryPrice + finalStopDistance).toFixed(precision));
-
-    const calculatedRisk = Math.abs(entryPrice - stopLoss);
 
     const primaryStrategyName = strategyEval.strategyResults?.find(s => s.passed)?.name || 'Multi-Timeframe Trend Confluence';
 
@@ -628,9 +629,17 @@ export class ScoringEngine {
     tp3 = tpSetup.tp3;
     takeProfit = tp2;
 
-    // Base reward on actual TP structure: TP2 only (the headline/primary target)
-    const calculatedReward = Math.abs(tp2 - entryPrice);
-    const rawRR = calculatedRisk > 0 ? Number((calculatedReward / calculatedRisk).toFixed(2)) : 0;
+    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction);
+    if (!rrResult.isValid) {
+      return this.createRejection(
+        `REJECTED: INVALID_RR_GEOMETRY. ${rrResult.reason || 'Invalid Risk/Reward geometry'}`,
+        marketRegime,
+        regimeDetails
+      );
+    }
+    const rawRR = rrResult.grossRR;
+    const calculatedRisk = rrResult.riskDistance;
+    const calculatedReward = rrResult.rewardDistance;
 
     // GATE 45 Step 1 & 2: Calculate Gross R:R & Reject if gross R:R < minimum acceptable GROSS R:R
     if (rawRR < thresholds.minimumRR) {
@@ -933,15 +942,9 @@ export class ScoringEngine {
     const normalizedAsset = assetClass === 'STOCK' ? 'STOCKS' : assetClass.toUpperCase();
     const baseGuardrails = ASSET_CLASS_GUARDRAILS[normalizedAsset] || ASSET_CLASS_GUARDRAILS.DEFAULT;
 
-    const applyGuardrail = (rawTp: number, range: GuardrailRange): number => {
-      const distPct = (Math.abs(rawTp - entryPrice) / entryPrice) * 100;
-      const clampedPct = Math.min(Math.max(distPct, range.minPct), range.maxPct);
-      return isBuy ? entryPrice * (1 + clampedPct / 100) : entryPrice * (1 - clampedPct / 100);
-    };
-
-    let tp1Clamped = applyGuardrail(tp1, baseGuardrails.tp1);
-    let tp2Clamped = applyGuardrail(tp2, baseGuardrails.tp2);
-    let tp3Clamped = applyGuardrail(tp3, baseGuardrails.tp3);
+    let tp1Clamped = AtrTpGenerator.applyGuardrail(tp1, baseGuardrails.tp1, entryPrice, isBuy);
+    let tp2Clamped = AtrTpGenerator.applyGuardrail(tp2, baseGuardrails.tp2, entryPrice, isBuy);
+    let tp3Clamped = AtrTpGenerator.applyGuardrail(tp3, baseGuardrails.tp3, entryPrice, isBuy);
 
     tp1 = tp1Clamped;
     tp2 = tp2Clamped;

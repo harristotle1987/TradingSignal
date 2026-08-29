@@ -71,6 +71,12 @@ export interface AtrTpResult {
 }
 
 export class AtrTpGenerator {
+  public static applyGuardrail(rawTp: number, range: GuardrailRange, entryPrice: number, isBuy: boolean): number {
+    const distPct = (Math.abs(rawTp - entryPrice) / entryPrice) * 100;
+    const clampedPct = Math.min(Math.max(distPct, range.minPct), range.maxPct);
+    return isBuy ? entryPrice * (1 + clampedPct / 100) : entryPrice * (1 - clampedPct / 100);
+  }
+
   /**
    * Determine volatility regime based on ATR % relative to price if not explicitly provided.
    */
@@ -184,9 +190,7 @@ export class AtrTpGenerator {
     };
 
     const applyGuardrail = (rawTp: number, range: GuardrailRange): number => {
-      const distPct = (Math.abs(rawTp - entryPrice) / entryPrice) * 100;
-      const clampedPct = Math.min(Math.max(distPct, range.minPct), range.maxPct);
-      return isBuy ? entryPrice * (1 + clampedPct / 100) : entryPrice * (1 - clampedPct / 100);
+      return AtrTpGenerator.applyGuardrail(rawTp, range, entryPrice, isBuy);
     };
 
     let tp1Clamped = applyGuardrail(rawTp1, guardrails.tp1);

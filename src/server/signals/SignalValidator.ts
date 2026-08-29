@@ -17,6 +17,7 @@ import { getDynamicPrecision } from '../../utils/formatters.js';
 import { logger } from '../logger.js';
 import { TechnicalIndicators } from './TechnicalIndicators.js';
 import { AtrTpGenerator } from './AtrTpGenerator.js';
+import { RiskRewardCalculator } from './RiskRewardCalculator.js';
 import { Gate30DataFreshness } from './Gate30DataFreshness.js';
 import { Gate31NewsRiskClassification } from './Gate31NewsRiskClassification.js';
 import { Gate34ExecutionFrictionStressTest } from './Gate34ExecutionFrictionStressTest.js';
@@ -464,13 +465,14 @@ export class SignalValidator {
       };
     }
 
-    // 5. Gross Risk / Reward Ratio Check: Minimum acceptable GROSS R:R from config
-    const rawRR = Number((reward / risk).toFixed(2));
+    // 5. Gross Risk / Reward Ratio Check: Minimum acceptable GROSS R:R from config using RiskRewardCalculator canonical module
+    const rrResult = RiskRewardCalculator.calculate(livePrice, adjustedSL, adjustedTp1 ?? adjustedTP, adjustedTp2 ?? adjustedTP, adjustedTp3 ?? adjustedTP, direction);
+    const rawRR = rrResult.grossRR;
     const thresholds = serverConfig.getConfig().thresholds;
-    if (rawRR < thresholds.minimumRR) {
+    if (rawRR < thresholds.minimumRR || !rrResult.isValid) {
       return {
         isValid: false,
-        message: `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum acceptable GROSS R:R`,
+        message: `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum acceptable GROSS R:R (${rrResult.reason || 'Invalid geometry'})`,
       };
     }
 
@@ -576,15 +578,13 @@ export class SignalValidator {
     }
 
     const tp1Dist = Math.abs(tp1 - entryPrice);
-    const tp2Dist = Math.abs(tp2 - entryPrice);
-    const tp3Dist = Math.abs(tp3 - entryPrice);
 
-    // 3. Check risk/reward (TP2 only)
-    const risk = Math.abs(entryPrice - stopLoss);
-    const rr = risk > 0 ? tp2Dist / risk : 0;
+    // 3. Check risk/reward (TP2 primary) using RiskRewardCalculator
+    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction);
+    const rr = rrResult.grossRR;
 
     // If valid, return original values
-    if (isDistinct && isOrdered && tp1Dist > 0) {
+    if (isDistinct && isOrdered && tp1Dist > 0 && rrResult.isValid) {
       return {
         tp1,
         tp2,
@@ -605,8 +605,8 @@ export class SignalValidator {
       isAggressive,
     });
 
-    const newTp2Dist = Math.abs(atrGen.tp2 - entryPrice);
-    const newRR = risk > 0 ? newTp2Dist / risk : 0;
+    const newRrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, atrGen.tp1, atrGen.tp2, atrGen.tp3, direction);
+    const newRR = newRrResult.grossRR;
 
     return {
       tp1: atrGen.tp1,

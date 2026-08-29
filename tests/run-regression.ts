@@ -17,6 +17,7 @@ import { MarketStructureDetector } from '../src/server/signals/MarketStructureDe
 import { CooldownManager } from '../src/server/signals/CooldownManager.js';
 import { CandidateRejectionTracker, StandardFailedGate } from '../src/server/signals/CandidateRejectionTracker.js';
 import { OpportunityFunnelStore } from '../src/server/signals/Gate26OpportunityFunnel.js';
+import { RiskRewardCalculator } from '../src/server/signals/RiskRewardCalculator.js';
 import { logger } from '../src/server/logger.js';
 
 // Disable default log output during tests to keep output clean
@@ -648,6 +649,45 @@ async function runAll() {
 
       const watching = OpportunityFunnelStore.getByStage('WATCHING');
       assert(watching.some((i) => i.symbol === 'SOLUSDT'), 'OpportunityFunnelStore should retrieve WATCHING candidate SOLUSDT');
+    });
+  });
+
+  // --- SUITE 7: CANONICAL RISK REWARD CALCULATOR & GATE 3 SINGLE SOURCE ---
+  await describe('Canonical RiskRewardCalculator & Gate 3 Single Source Enforcement', async () => {
+    await test('BUY R:R calculation conforms to abs(TP2 - Entry) / abs(Entry - SL)', () => {
+      const res = RiskRewardCalculator.calculate(100, 95, 102, 110, 115, 'BUY');
+      assert(res.isValid, 'Result must be valid');
+      assert(res.grossRR === 2.0, `Expected grossRR 2.0 (reward 15 / risk 5), got ${res.grossRR}`);
+      assert(res.primaryRR === res.grossRR, 'primaryRR must equal grossRR');
+      assert(res.primaryRR === res.tp2RR, 'primaryRR must equal tp2RR');
+    });
+
+    await test('SELL R:R calculation conforms to abs(Entry - TP2) / abs(Entry - SL)', () => {
+      const res = RiskRewardCalculator.calculate(100, 105, 98, 90, 85, 'SELL');
+      assert(res.isValid, 'Result must be valid');
+      assert(res.grossRR === 2.0, `Expected grossRR 2.0 (reward 10 / risk 5), got ${res.grossRR}`);
+      assert(res.primaryRR === res.grossRR, 'primaryRR must equal grossRR');
+      assert(res.primaryRR === res.tp2RR, 'primaryRR must equal tp2RR');
+    });
+
+    await test('Diagnostic TP1/TP2/TP3 R:R values are individually correct', () => {
+      const res = RiskRewardCalculator.calculate(100, 95, 105, 110, 120, 'BUY');
+      assert(res.tp1RR === 1.0, `Expected TP1 RR 1.0, got ${res.tp1RR}`);
+      assert(res.tp2RR === 2.0, `Expected TP2 RR 2.0, got ${res.tp2RR}`);
+      assert(res.tp3RR === 4.0, `Expected TP3 RR 4.0, got ${res.tp3RR}`);
+      assert(res.primaryRR === res.tp2RR, 'primaryRR must equal TP2 RR');
+    });
+
+    await test('Invalid entry, SL, TP or missing direction cannot produce a fabricated R:R', () => {
+      const invalidRes1 = RiskRewardCalculator.calculate(0, 95, 102, 110, 115, 'BUY');
+      assert(!invalidRes1.isValid, 'Zero entry must be invalid');
+      assert(invalidRes1.grossRR === 0, 'Gross RR must be 0');
+
+      const invalidRes2 = RiskRewardCalculator.calculate(100, 105, 102, 110, 115, 'BUY'); // SL above entry for BUY
+      assert(!invalidRes2.isValid, 'BUY with SL above entry must be invalid');
+
+      const invalidRes3 = RiskRewardCalculator.calculate(100, 95, 102, 110, 115, 'INVALID' as any);
+      assert(!invalidRes3.isValid, 'Invalid direction cannot silently fall through to SELL');
     });
   });
 

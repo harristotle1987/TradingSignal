@@ -35,6 +35,7 @@ import { Gate20ProbabilityCalibration } from './Gate20ProbabilityCalibration.js'
 import { Gate21WalkForwardValidation } from './Gate21WalkForwardValidation.js';
 import { Gate32AdaptiveCandidateSelection, Stage2CandidateInput } from './Gate32AdaptiveCandidateSelection.js';
 import { TargetQualityEvaluator, calculateTargetRr } from './TargetQualityEvaluator.js';
+import { RiskRewardCalculator } from './RiskRewardCalculator.js';
 import { Gate22MonteCarloSimulation } from './Gate22MonteCarloSimulation.js';
 import { NvidiaAIService, CandidateAnalysisPayload } from './NvidiaAIService.js';
 import { SignalValidator } from './SignalValidator.js';
@@ -967,10 +968,11 @@ export async function runStagedPipeline(
       const safeTp3 = tpEnforced.tp3;
       const safeTakeProfit = tpEnforced.takeProfit;
 
-      const tp1Rr = calculateTargetRr(scoring.direction, finalEntry, finalSL, safeTp1);
-      const tp2Rr = calculateTargetRr(scoring.direction, finalEntry, finalSL, safeTp2);
-      const tp3Rr = calculateTargetRr(scoring.direction, finalEntry, finalSL, safeTp3);
-      const exactPrimaryRr = calculateTargetRr(scoring.direction, finalEntry, finalSL, safeTakeProfit);
+      const rrResult = RiskRewardCalculator.calculate(finalEntry, finalSL, safeTp1, safeTp2, safeTp3, scoring.direction);
+      const tp1Rr = rrResult.tp1RR;
+      const tp2Rr = rrResult.tp2RR;
+      const tp3Rr = rrResult.tp3RR;
+      const exactPrimaryRr = rrResult.grossRR;
 
       const tqResult = TargetQualityEvaluator.evaluate({
         direction: scoring.direction, entryPrice: finalEntry, stopLoss: finalSL,

@@ -24,6 +24,7 @@
 import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 import { serverConfig } from '../config.js';
 import { logger } from '../logger.js';
+import { RiskRewardCalculator } from './RiskRewardCalculator.js';
 
 export interface FrictionBreakdown {
   spread: number;
@@ -93,11 +94,13 @@ export class Gate34ExecutionFrictionStressTest {
       assetClassUpper === 'CRYPTO' ? 'CRYPTO' :
       assetClassUpper === 'INDEX' ? 'INDEX' : 'STOCKS';
 
-    const rawRisk = Math.abs(entryPrice - stopLoss);
-    const rawReward = Math.abs(takeProfit - entryPrice);
+    const direction = stopLoss < entryPrice ? 'BUY' : 'SELL';
+    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, takeProfit, takeProfit, takeProfit, direction);
+    const rawRisk = rrResult.riskDistance;
+    const rawReward = rrResult.rewardDistance;
     
-    // 1. Calculate GROSS_RR
-    const grossRR = rawRisk > 0 ? parseFloat((rawReward / rawRisk).toFixed(2)) : 0;
+    // 1. Calculate GROSS_RR via RiskRewardCalculator
+    const grossRR = rrResult.grossRR;
 
     // Build normal and adverse friction breakdowns based on asset-specific profile
     const normalFriction = this.calculateNormalFriction(cleanSymbol, assetClass, entryPrice, rawReward, rawRisk);
