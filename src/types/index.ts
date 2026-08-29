@@ -159,6 +159,8 @@ export interface TradingSignal {
   status: 'WAITING_ENTRY' | 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'REJECTED' | 'SUPERSEDED' | 'AMBIGUOUS';
   isTradeableSignal?: boolean;
   signalClassification?: 'TRADEABLE' | 'WATCHING' | 'QUALIFIED_CANDIDATE' | 'CANDIDATE' | 'REJECTED' | 'FILTERED' | 'BLOCKED' | 'INVALID' | 'EXPIRED_BEFORE_ENTRY' | 'NON_TRADEABLE' | 'ANALYTICS_ONLY' | 'DIAGNOSTIC';
+  provenance?: 'LIVE' | 'HISTORICAL' | 'BACKTEST' | 'SIMULATION' | 'TEST';
+  isSynthetic?: boolean;
   isActionableSignal?: boolean;
   executionEvidence?: ExecutionEvidenceState;
   historicalEntryPolicy?: HistoricalEntryPolicy;

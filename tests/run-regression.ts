@@ -2,6 +2,7 @@ import { Gate31NewsRiskClassification, ScheduledNewsEvent } from '../src/server/
 import { HistoricalPerformanceManager } from '../src/server/signals/HistoricalPerformanceManager.js';
 import { StrategyPerformanceTracker, TradeOutcomeRecord } from '../src/server/signals/StrategyPerformanceTracker.js';
 import { runStagedPipeline } from '../src/server/signals/StagedScannerPipeline.js';
+import { ScanPerformanceProfiler } from '../src/server/signals/ScanPerformanceProfiler.js';
 import { CronJobOrgService } from '../src/server/cron/CronJobOrgService.js';
 import { marketCache } from '../src/server/market/CacheStore.js';
 import { marketDataManager } from '../src/server/market/MarketDataManager.js';
@@ -9,6 +10,13 @@ import { BitgetAdapter } from '../src/server/market/adapters/BitgetAdapter.js';
 import { TwelveDataAdapter } from '../src/server/market/adapters/TwelveDataAdapter.js';
 import { ExchangeRateAdapter } from '../src/server/market/adapters/ExchangeRateAdapter.js';
 import { adminAuthMiddleware, extractAuthToken } from '../src/server/middleware/adminAuth.js';
+import { SignalEngine } from '../src/server/signals/SignalEngine.js';
+import { serverConfig } from '../src/server/config.js';
+import { SignalValidator } from '../src/server/signals/SignalValidator.js';
+import { MarketStructureDetector } from '../src/server/signals/MarketStructureDetector.js';
+import { CooldownManager } from '../src/server/signals/CooldownManager.js';
+import { CandidateRejectionTracker, StandardFailedGate } from '../src/server/signals/CandidateRejectionTracker.js';
+import { OpportunityFunnelStore } from '../src/server/signals/Gate26OpportunityFunnel.js';
 import { logger } from '../src/server/logger.js';
 
 // Disable default log output during tests to keep output clean
@@ -86,7 +94,6 @@ async function runAll() {
 
     await test('Fail-closed fallback is correctly triggered when source is empty and cache is expired', () => {
       // Simulate failed/empty fetch and expired cache
-      // We can force this state by resetting lastFetchSuccessful to false and lastFetchTime to 0
       const Gate31Class = Gate31NewsRiskClassification as any;
       Gate31Class.lastFetchSuccessful = false;
       Gate31Class.lastFetchTime = 0;
@@ -95,6 +102,18 @@ async function runAll() {
       assert(evalResult.classification === 'BLOCK', 'Should trigger BLOCK on fail-closed news fallback');
       assert(evalResult.isTradingAllowed === false, 'Trading must be blocked');
       assert(evalResult.minRequiredConfirmationScore === 1000, 'Score requirement must be raised to 1000');
+      assert(evalResult.reasons.some((r: string) => r.includes('NEWS_DATA_UNAVAILABLE')), 'Must explicitly report NEWS_DATA_UNAVAILABLE in reasons');
+    });
+
+    await test('Crypto candidate is NORMAL and allowed when news source is active with no scheduled events', () => {
+      const Gate31Class = Gate31NewsRiskClassification as any;
+      Gate31Class.lastFetchSuccessful = true;
+      Gate31Class.lastFetchTime = Date.now();
+      Gate31Class.scheduledEvents = [];
+
+      const evalResult = Gate31NewsRiskClassification.evaluate('BTCUSDT');
+      assert(evalResult.classification === 'NORMAL', 'Crypto should be NORMAL when no active scheduled event exists');
+      assert(evalResult.isTradingAllowed === true, 'Trading must be allowed for BTCUSDT');
     });
   });
 
@@ -224,6 +243,10 @@ async function runAll() {
       // Verify that scanner exits safely (it returns success: false with NO QUALIFIED TRADE on timeout, which is expected and graceful)
       assert(result !== null && typeof result === 'object', 'Scanner pipeline should return a valid result object');
       assert(result.success === false && result.message === 'NO QUALIFIED TRADE', 'Should gracefully return NO QUALIFIED TRADE when timed out');
+
+      const profilerReport = ScanPerformanceProfiler.getHealthReport();
+      assert(profilerReport.totalScansLogged > 0, 'Profiler should record scan history without blocking pipeline');
+      console.log('  \x1b[32m✓ [PASS]\x1b[0m ScanPerformanceProfiler records pipeline metrics and health report accurately');
     });
   });
 
@@ -460,6 +483,171 @@ async function runAll() {
       assert(nextCalled, 'Next must be called when valid credential is provided');
 
       process.env.ADMIN_API_KEY = originalAdminKey;
+    });
+  });
+
+  // --- SUITE 6: GATE 4 CORE TRADING STRATEGY & SAFETY BOUNDARIES VERIFICATION ---
+  await describe('Suite 6: Gate 4 Core Trading Strategy & Safety Boundaries Verification', async () => {
+    await test('Asset universe size remains exactly 113 unique assets', () => {
+      const engine = new SignalEngine() as any;
+      const resolvedAll = engine.resolveTargetUniverse('ALL', 'ALL');
+      const uniqueSymbols = new Set(resolvedAll.universe);
+
+      assert(resolvedAll.assetCategory === 'ALL', 'Category should be ALL');
+      assert(uniqueSymbols.size === 113, `Expected exactly 113 unique symbols in universe, got ${uniqueSymbols.size}`);
+
+      const resolvedCrypto = engine.resolveTargetUniverse('CRYPTO', 'CRYPTO');
+      const resolvedForex = engine.resolveTargetUniverse('FOREX', 'FOREX');
+      const resolvedStocks = engine.resolveTargetUniverse('STOCKS', 'STOCKS');
+
+      assert(resolvedCrypto.universe.length === 45, `Expected 45 Crypto assets, got ${resolvedCrypto.universe.length}`);
+      assert(resolvedForex.universe.length === 20, `Expected 20 Forex assets, got ${resolvedForex.universe.length}`);
+      assert(resolvedStocks.universe.length === 48, `Expected 48 Stock assets, got ${resolvedStocks.universe.length}`);
+    });
+
+    await test('72 remains actionable signal threshold and R:R minimum is 1.8', () => {
+      // Test default system fallbacks when env overrides are cleared
+      const origMinScore = process.env.THRESHOLD_MIN_SCORE;
+      const origSigScore = process.env.THRESHOLD_SIGNAL_SCORE;
+      const origMinRr = process.env.THRESHOLD_MIN_RR;
+
+      delete process.env.THRESHOLD_MIN_SCORE;
+      delete process.env.THRESHOLD_SIGNAL_SCORE;
+      delete process.env.THRESHOLD_MIN_RR;
+
+      // Create a fresh config instance to test code defaults
+      const freshConfig = (serverConfig as any).loadAndValidate();
+      assert(freshConfig.thresholds.signalThreshold === 72, `Default signalThreshold must be 72, got ${freshConfig.thresholds.signalThreshold}`);
+      assert(freshConfig.thresholds.minimumRR === 1.8, `Default minimumRR must be 1.8, got ${freshConfig.thresholds.minimumRR}`);
+      assert(freshConfig.thresholds.minimumNetRR === 1.5, `Default minimumNetRR must be 1.5, got ${freshConfig.thresholds.minimumNetRR}`);
+
+      // Restore env vars
+      if (origMinScore !== undefined) process.env.THRESHOLD_MIN_SCORE = origMinScore;
+      if (origSigScore !== undefined) process.env.THRESHOLD_SIGNAL_SCORE = origSigScore;
+      if (origMinRr !== undefined) process.env.THRESHOLD_MIN_RR = origMinRr;
+    });
+
+    await test('SignalValidator rejects trades with R:R below 1.8:1 minimum threshold', () => {
+      const dummyCandles: any[] = Array.from({ length: 30 }, (_, i) => ({
+        timestamp: Date.now() - (30 - i) * 3600000,
+        open: 100,
+        high: 102,
+        low: 98,
+        close: 100,
+        volume: 1000,
+      }));
+
+      // Candidate with Entry=100, SL=95 (Risk=5), TP=105 (Reward=5) -> R:R = 1.0 (Below 1.8)
+      const valResult = SignalValidator.validate({
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        score: 80,
+        entryPrice: 100,
+        stopLoss: 95,
+        takeProfit: 105,
+        riskRewardRatio: 1.0,
+        candlesMap: { '1h': dummyCandles },
+        liveTicker: { price: 100, isFresh: true, status: 'OK', timestamp: Date.now() } as any,
+      });
+
+      assert(!valResult.isValid, 'Validation must fail for R:R < 1.8');
+      assert(valResult.detailedMessage.includes('GROSS_RR_BELOW_THRESHOLD') || valResult.detailedMessage.includes('INSUFFICIENT_TARGET_DISTANCE'), `Message should indicate R:R failure, got: ${valResult.detailedMessage}`);
+    });
+
+    await test('MarketStructureDetector detects material level displacement and regime shifts', () => {
+      const noChange = MarketStructureDetector.hasStructureMateriallyChanged({
+        symbol: 'EURUSD',
+        currentEntry: 1.1000,
+        currentRegime: 'BULLISH_TREND',
+        currentDirection: 'BUY',
+        currentAtr: 0.0020,
+        prevSignal: {
+          entryPrice: 1.1005,
+          marketRegime: 'BULLISH_TREND',
+          direction: 'BUY',
+          timestamp: Date.now() - 3600000,
+        },
+      });
+      assert(!noChange.hasChanged, 'Small price change within 1.5x ATR should not be considered a material shift');
+
+      const regimeShift = MarketStructureDetector.hasStructureMateriallyChanged({
+        symbol: 'EURUSD',
+        currentEntry: 1.1000,
+        currentRegime: 'BREAKOUT',
+        currentDirection: 'BUY',
+        currentAtr: 0.0020,
+        prevSignal: {
+          entryPrice: 1.1005,
+          marketRegime: 'RANGING',
+          direction: 'BUY',
+          timestamp: Date.now() - 3600000,
+        },
+      });
+      assert(regimeShift.hasChanged, 'RANGING to BREAKOUT regime transition must be detected as material structure change');
+      assert(regimeShift.changeType === 'REGIME_SHIFT', 'Change type should be REGIME_SHIFT');
+    });
+
+    await test('CooldownManager enforces asset and strategy cooldown windows correctly', () => {
+      CooldownManager.clearCooldown('TEST_ASSET');
+
+      const initialCheck = CooldownManager.isAssetInCooldown('TEST_ASSET');
+      assert(!initialCheck.inCooldown, 'Asset should initially not be in cooldown');
+
+      CooldownManager.recordSignalEmit('TEST_ASSET', 'BreakoutStrategy', Date.now());
+
+      const activeCheck = CooldownManager.isAssetInCooldown('TEST_ASSET');
+      assert(activeCheck.inCooldown, 'Asset must be in cooldown after signal emission');
+
+      const stratCheck = CooldownManager.isStrategyInCooldown('TEST_ASSET', 'BreakoutStrategy');
+      assert(stratCheck.inCooldown, 'Strategy must be in cooldown');
+
+      CooldownManager.clearCooldown('TEST_ASSET');
+    });
+
+    await test('CandidateRejectionTracker tracks rejected 72+ candidates and makes them accessible for UI', () => {
+      const tracker = new CandidateRejectionTracker();
+      tracker.recordCandidate({
+        symbol: 'NVDA',
+        direction: 'BUY',
+        score: 76,
+        scoreBeforeGate6: 76,
+        primaryRejectionReason: 'REJECTED: RISK_CAP_EXCEEDED. Max portfolio risk exceeded',
+        failedGates: [StandardFailedGate.SIGNAL_CAP_EXCEEDED],
+        finalDecision: 'REJECTED',
+        finalScore: 76,
+      });
+
+      const allRecords = tracker.getAllRecords();
+      const nvdaAudit = allRecords.find((r) => r.symbol === 'NVDA');
+
+      assert(nvdaAudit !== undefined, 'Record for NVDA must exist');
+      assert(nvdaAudit?.is72PlusRejected === true, 'Candidate scoring 76 and rejected must be marked is72PlusRejected = true');
+      assert(nvdaAudit?.score === 76, 'Score must be preserved as 76');
+      assert(nvdaAudit?.rejectionSummary !== undefined, 'Human-readable rejection summary must be generated for UI');
+    });
+
+    await test('OpportunityFunnelStore tracks watching, confirmed, and rejected candidates', () => {
+      OpportunityFunnelStore.addOrUpdate({
+        id: 'funnel_test_1',
+        symbol: 'SOLUSDT',
+        direction: 'BUY',
+        entryPrice: 150,
+        stopLoss: 145,
+        takeProfit: 160,
+        riskRewardRatio: 2.0,
+        score: 73,
+        stage: 'WATCHING',
+        status: 'WATCHING',
+        hardGatesPassed: true,
+        passedSoftConditions: ['EMA_STACK'],
+        missingSoftConditions: ['RSI_RECOVERY'],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        expiresAt: Date.now() + 3600000,
+      });
+
+      const watching = OpportunityFunnelStore.getByStage('WATCHING');
+      assert(watching.some((i) => i.symbol === 'SOLUSDT'), 'OpportunityFunnelStore should retrieve WATCHING candidate SOLUSDT');
     });
   });
 

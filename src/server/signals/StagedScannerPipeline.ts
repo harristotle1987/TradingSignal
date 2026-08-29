@@ -49,6 +49,7 @@ import { Gate35SignalFunnelAnalytics } from './Gate35SignalFunnelAnalytics.js';
 import { Gate31NewsRiskClassification } from './Gate31NewsRiskClassification.js';
 import { OpportunityFunnelStore } from './Gate26OpportunityFunnel.js';
 import { CandidateRejectionTracker, StandardFailedGate } from './CandidateRejectionTracker.js';
+import { ScanPerformanceProfiler, setActiveProfiler } from './ScanPerformanceProfiler.js';
 import { logger } from '../logger.js';
 import { getDynamicPrecision } from '../../utils/formatters.js';
 
@@ -99,10 +100,17 @@ export async function runStagedPipeline(
   const allCandidateScores: Gate10CandidateScoreRecord[] = [];
   const { assetCategory, universe } = engine.resolveTargetUniverse(cleanSymbol, category);
 
+  const profiler = new ScanPerformanceProfiler();
+  profiler.startScan(globalScanStartMs);
+  profiler.setGlobalDeadline(globalScanDeadlineMs);
+  setActiveProfiler(profiler);
+
   // 1. Check duplicate / active signal cooldown
   const existingSignal = engine.activeSignals.get(cleanSymbol);
   if (existingSignal && now - existingSignal.timestamp < 8 * 60 * 1000) {
     logger.info('Returning existing active signal within cooldown window', { symbol: cleanSymbol, id: existingSignal.id, snapshotId: existingSignal.snapshotId });
+    profiler.endScan();
+    setActiveProfiler(null);
     return {
       success: true,
       message: `Active signal retrieved for ${cleanSymbol} (Snapshot ${existingSignal.snapshotId})`,
@@ -143,12 +151,18 @@ export async function runStagedPipeline(
     // -----------------------------------------------------------------
     // STAGE 0: Cached/Session Screening
     // -----------------------------------------------------------------
+    profiler.startStage('Stage 0: Session Screening', universe.length);
     const openAssets = universe.filter((asset) => MarketSessionManager.getSessionState(asset) === 'MARKET_OPEN');
     const stage0OutputCount = openAssets.length;
+    profiler.endStage('Stage 0: Session Screening', stage0OutputCount);
+
     logger.info(`[Stage 0: Cached/session screening] Input: ${universe.length} assets, Output: ${stage0OutputCount} active/open assets`);
 
     if (openAssets.length === 0) {
       logger.info(`[Multi-Asset Scanner] All assets in ${assetCategory} universe are MARKET CLOSED.`);
+      profiler.setFunnelMetrics({ preliminaryCandidates: 0, deepCandidates: 0, MTFCandidates: 0, signalsGenerated: 0, signalsAccepted: 0 });
+      profiler.endScan();
+      setActiveProfiler(null);
       return {
         success: false,
         message: 'MARKET CLOSED',
@@ -161,11 +175,8 @@ export async function runStagedPipeline(
 
     // -----------------------------------------------------------------
     // GATE 3: CHEAP PRELIMINARY SCREEN
-    // Screen all eligible assets using only inexpensive/cached market info (1H baseline).
-    // Calculates preliminary score: Liquidity(20), Volume(20), Trend(20), Momentum(15), Volatility(15), Spread(10) = 100.
-    // Routing: <45: reject, 45-59: reject, 60-69: preliminary candidate, 70+: strong preliminary candidate.
-    // Surviving candidates (~30-45) advance; rejected assets stop immediately. No trade signals generated here.
     // -----------------------------------------------------------------
+    profiler.startStage('Gate 3: Preliminary Screening', stage0OutputCount);
     const stage2Candidates: Array<{
       asset: string;
       htf1h: NormalizedCandle[];
@@ -231,9 +242,13 @@ export async function runStagedPipeline(
     }
 
     const stage1OutputCount = stage2Candidates.length;
+    profiler.endStage('Gate 3: Preliminary Screening', stage1OutputCount);
     logger.info(`[Gate 3: Cheap preliminary screening] Input: ${stage0OutputCount} assets, Output: ${stage1OutputCount} surviving candidates (Target: ~30-45)`);
 
     if (stage1OutputCount === 0) {
+      profiler.setFunnelMetrics({ preliminaryCandidates: 0, deepCandidates: 0, MTFCandidates: 0, signalsGenerated: 0, signalsAccepted: 0 });
+      profiler.endScan();
+      setActiveProfiler(null);
       return {
         success: false,
         message: 'NO QUALIFIED TRADE',
@@ -254,6 +269,10 @@ export async function runStagedPipeline(
 
     if (!gate4Budget.passed || gate4Budget.maxDeepCandidates <= 0) {
       logger.warn(`[Gate 4 Budget Exhausted] ${gate4Budget.reason}`);
+      profiler.setStoppedByBudget(true);
+      profiler.setFunnelMetrics({ preliminaryCandidates: stage1OutputCount, deepCandidates: 0, MTFCandidates: 0, signalsGenerated: 0, signalsAccepted: 0 });
+      profiler.endScan();
+      setActiveProfiler(null);
       return {
         success: false,
         message: 'NO QUALIFIED TRADE',
@@ -266,11 +285,8 @@ export async function runStagedPipeline(
 
     // -----------------------------------------------------------------
     // GATE 5: DEEP CANDIDATE SELECTION
-    // Selects 8–12 candidates (or budget-constrained limit) from the 30–45 preliminary candidates.
-    // Ranks descending using ALREADY AVAILABLE data (Trend 25%, Mom 20%, Vol 15%, VolQual 15%, Liq 10%, Struct 15%).
-    // Applies correlation / cluster control to prevent single-sector crowding.
-    // Does NOT fetch expensive MTF data before ranking.
     // -----------------------------------------------------------------
+    profiler.startStage('Gate 5: Deep Candidate Selection', stage1OutputCount);
     const gate5Inputs: Gate5CandidateInput[] = stage2Candidates.map((c) => ({
       asset: c.asset,
       htf1h: c.htf1h,
@@ -286,12 +302,16 @@ export async function runStagedPipeline(
 
     const selectedDeepCandidates = gate5Selection.selectedCandidates;
     const gate5OutputCount = selectedDeepCandidates.length;
+    profiler.endStage('Gate 5: Deep Candidate Selection', gate5OutputCount);
 
     logger.info(
       `[Gate 5 Deep Candidate Selection] Input: ${stage1OutputCount} preliminary candidates -> Output: ${gate5OutputCount} selected deep candidates (Budget Cap: ${gate4Budget.maxDeepCandidates}, Health: ${gate4Budget.overallBudgetHealth})`
     );
 
     if (gate5OutputCount === 0) {
+      profiler.setFunnelMetrics({ preliminaryCandidates: stage1OutputCount, deepCandidates: 0, MTFCandidates: 0, signalsGenerated: 0, signalsAccepted: 0 });
+      profiler.endScan();
+      setActiveProfiler(null);
       return {
         success: false,
         message: 'NO QUALIFIED TRADE',
@@ -317,12 +337,16 @@ export async function runStagedPipeline(
       preliminaryScore: cand.preliminaryScore,
     }));
 
+    profiler.startStage('Gate 6 Layer 1: MTF 15m/1h', gate6Inputs.length);
     const gate6Analysis = await Gate6ProgressiveMTF.analyzeCandidates(
       gate6Inputs,
       5,
       globalScanStartMs,
       globalScanDeadlineMs
     );
+    profiler.endStage('Gate 6 Layer 1: MTF 15m/1h', gate6Analysis.survivedCandidates.length);
+
+    profiler.startStage('Gate 6 Layer 2: MTF 5m/4h', gate6Analysis.survivedCandidates.length);
 
     gate6ElapsedMs = gate6Analysis.gate6ElapsedMs;
     if (gate6Analysis.timeBudgetExceeded) timeBudgetExceeded = true;
@@ -422,8 +446,8 @@ export async function runStagedPipeline(
         if (!lastCandle || lastCandle.close <= 0) return null;
 
         try {
-          // Sync verified news from Twelve Data for this candidate before evaluating news risk
-          await Gate31NewsRiskClassification.syncVerifiedNews(asset);
+          // Sync verified news from Twelve Data for this candidate (cache-first/non-blocking)
+          await Gate31NewsRiskClassification.syncVerifiedNews(asset, Math.min(200, Math.max(0, remainingMs)));
 
           const liveTicker = await marketDataManager.getPrice(asset, undefined, true, 'AUTOMATED_SCANNER');
           if (!liveTicker || liveTicker.price <= 0) return null;
@@ -620,13 +644,13 @@ export async function runStagedPipeline(
 
     stage3ElapsedMs = Date.now() - stage3StartMs;
     const deepMtfOutputCount = deepAnalyzedCandidates.length;
+    profiler.endStage('Gate 6 Layer 2: MTF 5m/4h', deepMtfOutputCount);
     logger.info(`[Progressive deep MTF analysis] Input: ${gate6Inputs.length} candidates, Output: ${deepMtfOutputCount} passed deep analysis`);
 
     // -----------------------------------------------------------------
     // STAGE 3: Final Trade Validation (Gate 7 - 13 Mandatory Hard Gates)
-    // Strict Policy: If ANY hard gate fails -> NOT tradeable -> No signal.
-    // Score never overrides hard gates. Acceptance: FINAL_SCORE >= thresholds.signalThreshold (72) AND ALL HARD GATES = PASS
     // -----------------------------------------------------------------
+    profiler.startStage('Stage 3: Final Trade Validation', deepMtfOutputCount);
     const candidates: ValidatedCandidate[] = [];
 
     for (const candInfo of deepAnalyzedCandidates) {
@@ -1286,6 +1310,26 @@ export async function runStagedPipeline(
     const aggregatedReasons = rejectionTracker.getAggregatedRejectionReasons();
     const candidateAuditRecords = rejectionTracker.getAllRecords();
 
+    profiler.endStage('Stage 3: Final Trade Validation', finalSignals.length);
+
+    const candidates72PlusCount = allCandidateScores.filter((s) => s.score >= 72).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= 72 || r.compositeMtfScore >= 72)).length;
+    const rejected72PlusCount = allCandidateScores.filter((s) => s.score >= 72 && !s.passed).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= 72 || r.compositeMtfScore >= 72)).length;
+
+    profiler.setFunnelMetrics({
+      preliminaryCandidates: stage1OutputCount,
+      deepCandidates: gate5OutputCount,
+      MTFCandidates: deepMtfOutputCount,
+      candidates72Plus: candidates72PlusCount,
+      rejected72PlusCandidates: rejected72PlusCount,
+      signalsGenerated: finalSignals.length,
+      signalsAccepted: finalSignals.length,
+    });
+    profiler.setStoppedByBudget(providerRequestsStoppedByBudget);
+    profiler.setRejectionReasons(aggregatedReasons);
+
+    profiler.endScan();
+    setActiveProfiler(null);
+
     const stageTelemetry = {
       stage0Input: universe.length, stage0Output: stage0OutputCount,
       stage1Input: stage0OutputCount, stage1Output: stage1OutputCount,
@@ -1414,6 +1458,10 @@ export async function runStagedPipeline(
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
     logger.error('Multi-Asset scan failed with exception', { symbol: cleanSymbol, error: errMsg });
+
+    profiler.recordError(errMsg);
+    profiler.endScan();
+    setActiveProfiler(null);
 
     return {
       success: false,

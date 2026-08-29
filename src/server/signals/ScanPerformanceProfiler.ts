@@ -2,9 +2,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from '../logger.js';
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
+import { quotaManager } from '../market/QuotaManager.js';
 
 const LOCAL_HISTORY_PATH = path.join(process.cwd(), 'scan_performance_history.json');
 const FIRESTORE_COL = 'scan_performance_history';
+
+export type ProviderHealthStatus = 'HEALTHY' | 'DEGRADED' | 'RATE_LIMITED' | 'TIMEOUT' | 'UNAVAILABLE';
 
 export interface StagePerformanceRecord {
   stageName: string;
@@ -21,15 +24,46 @@ export interface StagePerformanceRecord {
 
 export interface ScanPerformanceProfile {
   scanId: string;
-  scanStartTime: number;
-  scanEndTime: number;
-  TOTAL_SCAN_DURATION_MS: number;
-  TOTAL_PROVIDER_LATENCY: number;
-  totalProviderRequests: number;
-  totalCacheHits: number;
-  totalCacheMisses: number;
-  stages: Record<string, StagePerformanceRecord>;
-  stageList: StagePerformanceRecord[];
+  startTime: number;
+  endTime: number;
+  totalDurationMs: number;
+  stageDurations: Record<string, number>;
+  providerRequests: number;
+  networkRequests: number;
+  cacheHits: number;
+  cacheMisses: number;
+  cacheHitRate: number;
+  providerLatency: number;
+
+  // Candidate and signal funnel metrics
+  preliminaryCandidates: number;
+  deepCandidates: number;
+  MTFCandidates: number;
+  '72PlusCandidates': number;
+  rejected72PlusCandidates: number;
+  signalsGenerated: number;
+  signalsAccepted: number;
+  rejectionReasons: Record<string, number>;
+
+  // Deadlines and Budgets
+  globalDeadline: number;
+  deadlineRemaining: number;
+  providerRequestsStoppedByBudget: number;
+
+  // Errors & Health
+  errors: string[];
+  providerHealth: Record<string, ProviderHealthStatus>;
+
+  // Backward compatibility fields
+  scanStartTime?: number;
+  scanEndTime?: number;
+  TOTAL_SCAN_DURATION_MS?: number;
+  TOTAL_PROVIDER_LATENCY?: number;
+  totalProviderRequests?: number;
+  totalCacheHits?: number;
+  totalCacheMisses?: number;
+  stages?: Record<string, StagePerformanceRecord>;
+  stageList?: StagePerformanceRecord[];
 }
 
 export class ScanPerformanceProfiler {
@@ -39,7 +73,7 @@ export class ScanPerformanceProfiler {
   private currentStageName: string | null = null;
   private stageStartTimes: Map<string, number> = new Map();
   private stageCandidatesIn: Map<string, number> = new Map();
-  
+
   private stageRecords: Map<string, StagePerformanceRecord> = new Map();
   private stageList: StagePerformanceRecord[] = [];
 
@@ -51,16 +85,43 @@ export class ScanPerformanceProfiler {
 
   // Aggregate totals
   private totalProviderRequests: number = 0;
+  private networkRequests: number = 0;
   private totalProviderLatency: number = 0;
   private totalCacheHits: number = 0;
   private totalCacheMisses: number = 0;
+
+  // Funnel & Observatory metrics
+  private preliminaryCandidates: number = 0;
+  private deepCandidates: number = 0;
+  private MTFCandidates: number = 0;
+  private candidates72Plus: number = 0;
+  private rejected72PlusCandidates: number = 0;
+  private signalsGenerated: number = 0;
+  private signalsAccepted: number = 0;
+  private rejectionReasons: Record<string, number> = {};
+
+  // Budget & Deadline tracking
+  private globalDeadline: number = 0;
+  private providerRequestsStoppedByBudget: number = 0;
+
+  // Errors & Provider Health Map
+  private errors: string[] = [];
+  private providerHealthMap: Record<string, ProviderHealthStatus> = {};
 
   constructor(scanId?: string) {
     this.scanId = scanId || `scan_prof_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   }
 
+  public getScanId(): string {
+    return this.scanId;
+  }
+
   public startScan(scanStartTime?: number): void {
     this.scanStartTime = scanStartTime || Date.now();
+  }
+
+  public setGlobalDeadline(deadlineMs: number): void {
+    this.globalDeadline = deadlineMs;
   }
 
   public startStage(stageName: string, candidatesIn: number): void {
@@ -111,6 +172,7 @@ export class ScanPerformanceProfiler {
   public recordProviderRequest(latencyMs: number, stageName?: string): void {
     const targetStage = stageName || this.currentStageName;
     this.totalProviderRequests++;
+    this.networkRequests++;
     this.totalProviderLatency += latencyMs;
 
     if (targetStage) {
@@ -120,6 +182,10 @@ export class ScanPerformanceProfiler {
       const currentLatency = this.stageProviderLatency.get(targetStage) || 0;
       this.stageProviderLatency.set(targetStage, currentLatency + latencyMs);
     }
+  }
+
+  public recordNetworkRequest(provider: string, endpoint: string, latencyMs: number): void {
+    this.networkRequests++;
   }
 
   public recordCacheHit(stageName?: string): void {
@@ -140,31 +206,141 @@ export class ScanPerformanceProfiler {
     }
   }
 
+  public recordError(errorMsg: string): void {
+    this.errors.push(errorMsg);
+  }
+
+  public recordRejectionReason(reason: string, count: number = 1): void {
+    this.rejectionReasons[reason] = (this.rejectionReasons[reason] || 0) + count;
+  }
+
+  public setRejectionReasons(reasons: Record<string, number>): void {
+    this.rejectionReasons = { ...reasons };
+  }
+
+  public setFunnelMetrics(metrics: Partial<{
+    preliminaryCandidates: number;
+    deepCandidates: number;
+    MTFCandidates: number;
+    '72PlusCandidates': number;
+    candidates72Plus: number;
+    rejected72PlusCandidates: number;
+    signalsGenerated: number;
+    signalsAccepted: number;
+  }>): void {
+    if (metrics.preliminaryCandidates !== undefined) this.preliminaryCandidates = metrics.preliminaryCandidates;
+    if (metrics.deepCandidates !== undefined) this.deepCandidates = metrics.deepCandidates;
+    if (metrics.MTFCandidates !== undefined) this.MTFCandidates = metrics.MTFCandidates;
+    if (metrics['72PlusCandidates'] !== undefined) this.candidates72Plus = metrics['72PlusCandidates'];
+    if (metrics.candidates72Plus !== undefined) this.candidates72Plus = metrics.candidates72Plus;
+    if (metrics.rejected72PlusCandidates !== undefined) this.rejected72PlusCandidates = metrics.rejected72PlusCandidates;
+    if (metrics.signalsGenerated !== undefined) this.signalsGenerated = metrics.signalsGenerated;
+    if (metrics.signalsAccepted !== undefined) this.signalsAccepted = metrics.signalsAccepted;
+  }
+
+  public setStoppedByBudget(stopped: boolean | number): void {
+    this.providerRequestsStoppedByBudget = typeof stopped === 'boolean' ? (stopped ? 1 : 0) : stopped;
+  }
+
+  public setProviderHealth(provider: string, status: ProviderHealthStatus): void {
+    this.providerHealthMap[provider.toLowerCase()] = status;
+  }
+
+  public computeProviderHealth(): Record<string, ProviderHealthStatus> {
+    const result: Record<string, ProviderHealthStatus> = { ...this.providerHealthMap };
+    const providers = ['twelvedata', 'finnhub', 'bitget', 'exchangerate'];
+    const now = Date.now();
+
+    for (const p of providers) {
+      if (result[p]) continue;
+      try {
+        const metrics = quotaManager.getProviderMetrics(p);
+        const isRateLimited = metrics.isLocked || metrics.recentErrors.some(e => e.status === 429 && now - e.timestamp < 120000);
+        const isUnavailable = metrics.recentErrors.some(e => e.status >= 500 && now - e.timestamp < 120000);
+        const isTimeout = metrics.recentTimeouts.some(t => now - t.timestamp < 120000);
+        const isDegraded = metrics.budgetHealth === 'LOW' || metrics.budgetHealth === 'CRITICAL' || metrics.budgetHealth === 'EXHAUSTED' || metrics.averageLatencyMs > 2500;
+
+        if (isRateLimited) {
+          result[p] = 'RATE_LIMITED';
+        } else if (isUnavailable) {
+          result[p] = 'UNAVAILABLE';
+        } else if (isTimeout) {
+          result[p] = 'TIMEOUT';
+        } else if (isDegraded) {
+          result[p] = 'DEGRADED';
+        } else {
+          result[p] = 'HEALTHY';
+        }
+      } catch {
+        result[p] = 'HEALTHY';
+      }
+    }
+    return result;
+  }
+
   public endScan(): ScanPerformanceProfile {
     this.scanEndTime = Date.now();
-    const totalDuration = this.scanEndTime - (this.scanStartTime || this.scanEndTime);
     const profile = this.getProfile();
 
     this.logSummary(profile);
-    ScanPerformanceProfiler.persistProfile(profile);
+    // Non-blocking asynchronous persistence: run after the current call stack clears
+    setImmediate(() => {
+      ScanPerformanceProfiler.persistProfile(profile);
+    });
     return profile;
   }
 
   public getProfile(): ScanPerformanceProfile {
     const now = Date.now();
-    const scanEndTime = this.scanEndTime || now;
-    const TOTAL_SCAN_DURATION_MS = scanEndTime - (this.scanStartTime || scanEndTime);
+    const endTime = this.scanEndTime || now;
+    const startTime = this.scanStartTime || endTime;
+    const totalDurationMs = endTime - startTime;
 
+    const stageDurations: Record<string, number> = {};
     const stagesObj: Record<string, StagePerformanceRecord> = {};
     for (const [name, rec] of this.stageRecords.entries()) {
       stagesObj[name] = rec;
+      stageDurations[name] = rec.durationMs;
     }
+
+    const totalCacheOps = this.totalCacheHits + this.totalCacheMisses;
+    const cacheHitRate = totalCacheOps > 0 ? Number((this.totalCacheHits / totalCacheOps).toFixed(4)) : 1.0;
+    const deadlineRemaining = this.globalDeadline > 0 ? Math.max(0, this.globalDeadline - endTime) : 0;
+    const providerHealth = this.computeProviderHealth();
 
     return {
       scanId: this.scanId,
-      scanStartTime: this.scanStartTime,
-      scanEndTime,
-      TOTAL_SCAN_DURATION_MS,
+      startTime,
+      endTime,
+      totalDurationMs,
+      stageDurations,
+      providerRequests: this.totalProviderRequests,
+      networkRequests: this.networkRequests || this.totalProviderRequests,
+      cacheHits: this.totalCacheHits,
+      cacheMisses: this.totalCacheMisses,
+      cacheHitRate,
+      providerLatency: this.totalProviderLatency,
+
+      preliminaryCandidates: this.preliminaryCandidates,
+      deepCandidates: this.deepCandidates,
+      MTFCandidates: this.MTFCandidates,
+      '72PlusCandidates': this.candidates72Plus,
+      rejected72PlusCandidates: this.rejected72PlusCandidates,
+      signalsGenerated: this.signalsGenerated,
+      signalsAccepted: this.signalsAccepted,
+      rejectionReasons: { ...this.rejectionReasons },
+
+      globalDeadline: this.globalDeadline,
+      deadlineRemaining,
+      providerRequestsStoppedByBudget: this.providerRequestsStoppedByBudget,
+
+      errors: [...this.errors],
+      providerHealth,
+
+      // Backward compatibility aliases
+      scanStartTime: startTime,
+      scanEndTime: endTime,
+      TOTAL_SCAN_DURATION_MS: totalDurationMs,
       TOTAL_PROVIDER_LATENCY: this.totalProviderLatency,
       totalProviderRequests: this.totalProviderRequests,
       totalCacheHits: this.totalCacheHits,
@@ -178,12 +354,13 @@ export class ScanPerformanceProfiler {
     const p = profile || this.getProfile();
     logger.info(`================================================================`);
     logger.info(`[STAGE-BY-STAGE PERFORMANCE PROFILE REPORT] Scan ID: ${p.scanId}`);
-    logger.info(`TOTAL_SCAN_DURATION_MS: ${p.TOTAL_SCAN_DURATION_MS}ms`);
-    logger.info(`TOTAL_PROVIDER_LATENCY: ${p.TOTAL_PROVIDER_LATENCY}ms across ${p.totalProviderRequests} provider requests`);
-    logger.info(`TOTAL_CACHE_STATS: Hits=${p.totalCacheHits}, Misses=${p.totalCacheMisses}`);
+    logger.info(`TOTAL_SCAN_DURATION_MS: ${p.totalDurationMs}ms`);
+    logger.info(`TOTAL_PROVIDER_LATENCY: ${p.providerLatency}ms across ${p.providerRequests} provider requests`);
+    logger.info(`TOTAL_CACHE_STATS: Hits=${p.cacheHits}, Misses=${p.cacheMisses} (HitRate: ${(p.cacheHitRate * 100).toFixed(1)}%)`);
+    logger.info(`FUNNEL_METRICS: Prelim=${p.preliminaryCandidates}, Deep=${p.deepCandidates}, MTF=${p.MTFCandidates}, 72+=${p['72PlusCandidates']}, Rejected72+=${p.rejected72PlusCandidates}, SignalsGen=${p.signalsGenerated}, SignalsAcc=${p.signalsAccepted}`);
     logger.info(`----------------------------------------------------------------`);
-    for (const s of p.stageList) {
-      logger.info(`Stage: [${s.stageName.padEnd(20)}] | Duration: ${String(s.durationMs).padStart(5)}ms | Req: ${String(s.providerRequests).padStart(3)} | Latency: ${String(s.providerLatencyMs).padStart(5)}ms | Cache Hits: ${String(s.cacheHits).padStart(3)} | Misses: ${String(s.cacheMisses).padStart(3)} | In: ${String(s.candidatesIn).padStart(3)} -> Out: ${String(s.candidatesOut).padStart(3)}`);
+    for (const s of p.stageList || []) {
+      logger.info(`Stage: [${s.stageName.padEnd(25)}] | Duration: ${String(s.durationMs).padStart(5)}ms | Req: ${String(s.providerRequests).padStart(3)} | Latency: ${String(s.providerLatencyMs).padStart(5)}ms | Cache Hits: ${String(s.cacheHits).padStart(3)} | Misses: ${String(s.cacheMisses).padStart(3)} | In: ${String(s.candidatesIn).padStart(3)} -> Out: ${String(s.candidatesOut).padStart(3)}`);
     }
     logger.info(`================================================================`);
   }
@@ -259,10 +436,10 @@ export class ScanPerformanceProfiler {
     let totalMisses = 0;
 
     for (const p of history) {
-      totalDuration += p.TOTAL_SCAN_DURATION_MS;
-      totalLatency += p.TOTAL_PROVIDER_LATENCY;
-      totalHits += p.totalCacheHits;
-      totalMisses += p.totalCacheMisses;
+      totalDuration += p.totalDurationMs || p.TOTAL_SCAN_DURATION_MS || 0;
+      totalLatency += p.providerLatency || p.TOTAL_PROVIDER_LATENCY || 0;
+      totalHits += p.cacheHits || p.totalCacheHits || 0;
+      totalMisses += p.cacheMisses || p.totalCacheMisses || 0;
     }
 
     const averageScanDurationMs = Math.round(totalDuration / history.length);
@@ -297,7 +474,7 @@ export class ScanPerformanceProfiler {
   }
 }
 
-// Active global profiler tracker (execution-scoped or thread-local storage)
+// Active global profiler tracker (execution-scoped)
 let activeProfilerInstance: ScanPerformanceProfiler | null = null;
 
 export function setActiveProfiler(profiler: ScanPerformanceProfiler | null): void {

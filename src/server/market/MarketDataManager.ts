@@ -24,6 +24,7 @@ import { serverConfig } from '../config.js';
 import { logger } from '../logger.js';
 import { ScannerPersistence } from '../signals/ScannerPersistence.js';
 import { NvidiaAIService } from '../signals/NvidiaAIService.js';
+import { getActiveProfiler } from '../signals/ScanPerformanceProfiler.js';
 
 class ProviderRequestQueue {
   private lastCallTime = new Map<string, number>();
@@ -412,6 +413,8 @@ export class MarketDataManager {
       try {
         const result = await adapter.fetchPrice(cleanSymbol, globalScanDeadlineMs);
         const latency = Date.now() - startTime;
+        getActiveProfiler()?.recordProviderRequest(latency);
+        getActiveProfiler()?.recordNetworkRequest(providerId, 'fetchPrice', latency);
         const success = result.status === 'OK' && result.price > 0;
         const is429 = result.errorMessage?.includes('429') || false;
         const isTimeout = result.errorMessage?.toLowerCase().includes('timeout') || false;
@@ -425,6 +428,8 @@ export class MarketDataManager {
         return result;
       } catch (err: any) {
         const latency = Date.now() - startTime;
+        getActiveProfiler()?.recordProviderRequest(latency);
+        getActiveProfiler()?.recordNetworkRequest(providerId, 'fetchPrice', latency);
         const errMsg = String(err);
         const is429 = errMsg.includes('429') || errMsg.includes('rate limit');
         const isTimeout = errMsg.toLowerCase().includes('timeout');
@@ -699,12 +704,16 @@ export class MarketDataManager {
             try {
               const res = await adapter.fetchCandles!(cleanSymbol, timeframe, limit, globalScanDeadlineMs);
               const latency = Date.now() - startTime;
+              getActiveProfiler()?.recordProviderRequest(latency);
+              getActiveProfiler()?.recordNetworkRequest(primaryProviderId, `fetchCandles:${timeframe}`, latency);
               if (res && res.length > 0) {
                 quotaManager.recordResponse(primaryProviderId, 200, latency);
               }
               return res;
             } catch (err: any) {
               const latency = Date.now() - startTime;
+              getActiveProfiler()?.recordProviderRequest(latency);
+              getActiveProfiler()?.recordNetworkRequest(primaryProviderId, `fetchCandles:${timeframe}`, latency);
               const errMsg = String(err);
               const is429 = errMsg.includes('429') || errMsg.includes('rate limit');
               const isTimeout = errMsg.toLowerCase().includes('timeout');
@@ -732,6 +741,8 @@ export class MarketDataManager {
               try {
                 const res = await fallbackAdapter.fetchCandles!(cleanSymbol, timeframe, limit, globalScanDeadlineMs);
                 const latency = Date.now() - startTime;
+                getActiveProfiler()?.recordProviderRequest(latency);
+                getActiveProfiler()?.recordNetworkRequest(fallbackId, `fetchCandles:${timeframe}`, latency);
                 if (res && res.length > 0) {
                   quotaManager.recordResponse(fallbackId, 200, latency);
                   logger.info(`Candles fetched from fallback provider '${fallbackId}' for ${cleanSymbol} (${timeframe})`);
@@ -739,6 +750,8 @@ export class MarketDataManager {
                 return res;
               } catch (err: any) {
                 const latency = Date.now() - startTime;
+                getActiveProfiler()?.recordProviderRequest(latency);
+                getActiveProfiler()?.recordNetworkRequest(fallbackId, `fetchCandles:${timeframe}`, latency);
                 const errMsg = String(err);
                 const is429 = errMsg.includes('429') || errMsg.includes('rate limit');
                 const isTimeout = errMsg.toLowerCase().includes('timeout');

@@ -113,13 +113,13 @@ export class StrategyPerformanceTracker {
       wins: 0,
       losses: 0,
       breakevens: 0,
-      winRatePct: 50.0,
-      lossRatePct: 50.0,
-      rollingWinRatePct: 50.0,
-      profitFactor: 1.5,
+      winRatePct: 0.0,
+      lossRatePct: 0.0,
+      rollingWinRatePct: 0.0,
+      profitFactor: 0.0,
       totalRealizedR: 0,
       avgR: 0,
-      expectancyR: 0.5,
+      expectancyR: 0.0,
       maxDrawdownR: 0,
       maxLosingStreak: 0,
       currentStreak: 0,
@@ -315,10 +315,10 @@ export class StrategyPerformanceTracker {
       wins: 0,
       losses: 0,
       breakevens: 0,
-      winRatePct: 50.0,
-      lossRatePct: 50.0,
-      rollingWinRatePct: 50.0,
-      profitFactor: 1.0,
+      winRatePct: 0.0,
+      lossRatePct: 0.0,
+      rollingWinRatePct: 0.0,
+      profitFactor: 0.0,
       totalRealizedR: 0,
       avgR: 0,
       expectancyR: 0.0,
@@ -404,15 +404,15 @@ export class StrategyPerformanceTracker {
     }
     summary.profitFactor = totalLossR > 0
       ? Number((totalWinR / totalLossR).toFixed(2))
-      : (totalWinR > 0 ? 3.0 : 1.0);
+      : (totalWinR > 0 ? Number(totalWinR.toFixed(2)) : 0.0);
 
     // Calculate Expectancy: (Win% * AvgWinR) - (Loss% * AvgLossR) (actual entered trades only)
     const winProb = summary.winRatePct / 100;
     const lossProb = summary.totalTrades > 0 ? (summary.losses / summary.totalTrades) : 0.0;
     const winTrades = actualTradesHistory.filter((t) => t.realizedRR > 0);
     const lossTrades = actualTradesHistory.filter((t) => t.realizedRR < 0);
-    const avgWin = winTrades.length > 0 ? winTrades.reduce((acc, t) => acc + t.realizedRR, 0) / winTrades.length : 2.0;
-    const avgLoss = lossTrades.length > 0 ? Math.abs(lossTrades.reduce((acc, t) => acc + t.realizedRR, 0) / lossTrades.length) : 1.0;
+    const avgWin = winTrades.length > 0 ? winTrades.reduce((acc, t) => acc + t.realizedRR, 0) / winTrades.length : 0.0;
+    const avgLoss = lossTrades.length > 0 ? Math.abs(lossTrades.reduce((acc, t) => acc + t.realizedRR, 0) / lossTrades.length) : 0.0;
     summary.expectancyR = Number((winProb * avgWin - lossProb * avgLoss).toFixed(3));
 
     // Calculate Average realized R per trade (actual entered trades only)
@@ -509,12 +509,12 @@ export class StrategyPerformanceTracker {
         wins: 0,
         losses: 0,
         breakevens: 0,
-        winRatePct: 50.0,
-        rollingWinRatePct: 50.0,
-        profitFactor: 1.5,
+        winRatePct: 0.0,
+        rollingWinRatePct: 0.0,
+        profitFactor: 0.0,
         totalRealizedR: 0,
         avgR: 0,
-        expectancyR: 0.5,
+        expectancyR: 0.0,
         maxDrawdownR: 0,
         maxLosingStreak: 0,
         currentStreak: 0,

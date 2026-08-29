@@ -423,13 +423,13 @@ export class WalkForwardEngine {
     const last20Wins = last20.filter((t) => t.isWin || t.outcomeStatus === 'TP_HIT').length;
     const rollingWinRatePct = Number(((last20Wins / Math.max(1, last20.length)) * 100).toFixed(1));
 
-    const profitFactor = totalLossR > 0 ? Number((totalWinR / totalLossR).toFixed(2)) : (totalWinR > 0 ? 3.0 : 1.0);
-    const avgR = Number((totalRealizedR / totalTrades).toFixed(3));
+    const profitFactor = totalLossR > 0 ? Number((totalWinR / totalLossR).toFixed(2)) : (totalWinR > 0 ? Number(totalWinR.toFixed(2)) : 0.0);
+    const avgR = totalTrades > 0 ? Number((totalRealizedR / totalTrades).toFixed(3)) : 0.0;
 
     const winProb = winRatePct / 100;
     const lossProb = 1 - winProb;
-    const avgWinR = wins > 0 ? totalWinR / wins : 2.0;
-    const avgLossR = losses > 0 ? totalLossR / losses : 1.0;
+    const avgWinR = wins > 0 ? totalWinR / wins : 0.0;
+    const avgLossR = losses > 0 ? totalLossR / losses : 0.0;
     const expectancyR = Number((winProb * avgWinR - lossProb * avgLossR).toFixed(3));
 
     return {
