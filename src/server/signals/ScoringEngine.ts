@@ -50,6 +50,12 @@ export interface ScoringResult {
   tp2?: number;
   tp3?: number;
   riskRewardRatio: number;
+  grossRR?: number;
+  primaryRR?: number;
+  tp1RR?: number;
+  tp2RR?: number;
+  tp3RR?: number;
+  entryPrice?: number;
   estimatedWinRate: number;
   expectancy: number;
   targetDistance?: number;
@@ -634,7 +640,20 @@ export class ScoringEngine {
       return this.createRejection(
         `REJECTED: INVALID_RR_GEOMETRY. ${rrResult.reason || 'Invalid Risk/Reward geometry'}`,
         marketRegime,
-        regimeDetails
+        regimeDetails,
+        totalScore,
+        direction,
+        stopLoss,
+        takeProfit,
+        tp1,
+        tp2,
+        tp3,
+        rrResult.grossRR,
+        entryPrice,
+        rrResult.primaryRR,
+        rrResult.tp1RR,
+        rrResult.tp2RR,
+        rrResult.tp3RR
       );
     }
     const rawRR = rrResult.grossRR;
@@ -646,7 +665,20 @@ export class ScoringEngine {
       return this.createRejection(
         `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${thresholds.minimumRR}:1)`,
         marketRegime,
-        regimeDetails
+        regimeDetails,
+        totalScore,
+        direction,
+        stopLoss,
+        takeProfit,
+        tp1,
+        tp2,
+        tp3,
+        rawRR,
+        entryPrice,
+        rrResult.primaryRR,
+        rrResult.tp1RR,
+        rrResult.tp2RR,
+        rrResult.tp3RR
       );
     }
 
@@ -676,7 +708,20 @@ export class ScoringEngine {
       return this.createRejection(
         `REJECTED: WIN_RATE_BELOW_THRESHOLD. Estimated win rate (${estimatedWinRate}%) is at or below ${effectiveMinWinProb}% threshold`,
         marketRegime,
-        regimeDetails
+        regimeDetails,
+        totalScore,
+        direction,
+        stopLoss,
+        takeProfit,
+        tp1,
+        tp2,
+        tp3,
+        rawRR,
+        entryPrice,
+        rrResult.primaryRR,
+        rrResult.tp1RR,
+        rrResult.tp2RR,
+        rrResult.tp3RR
       );
     }
 
@@ -685,7 +730,20 @@ export class ScoringEngine {
       return this.createRejection(
         `REJECTED: NEGATIVE_EXPECTANCY. Negative mathematical expectancy (${expectancy}R per trade). Setup discarded.`,
         marketRegime,
-        regimeDetails
+        regimeDetails,
+        totalScore,
+        direction,
+        stopLoss,
+        takeProfit,
+        tp1,
+        tp2,
+        tp3,
+        rawRR,
+        entryPrice,
+        rrResult.primaryRR,
+        rrResult.tp1RR,
+        rrResult.tp2RR,
+        rrResult.tp3RR
       );
     }
 
@@ -711,7 +769,12 @@ export class ScoringEngine {
         tp1,
         tp2,
         tp3,
-        rawRR
+        rawRR,
+        entryPrice,
+        rrResult.primaryRR,
+        rrResult.tp1RR,
+        rrResult.tp2RR,
+        rrResult.tp3RR
       );
     }
 
@@ -723,7 +786,10 @@ export class ScoringEngine {
       symbol,
       entryPrice,
       stopLoss,
-      takeProfit
+      takeProfit,
+      tp1,
+      tp2,
+      tp3
     );
 
     // GATE 45 Step 4: Reject if normal net R:R < minimumNetRR
@@ -731,7 +797,20 @@ export class ScoringEngine {
       return this.createRejection(
         `REJECTED: NET_RR_BELOW_THRESHOLD. Normal Net Risk/Reward ratio (${stressTest.normal.netRR.toFixed(2)}:1) is below minimum acceptable NET R:R (${thresholds.minimumNetRR}:1) (Gross R:R: ${rawRR.toFixed(2)}:1)`,
         marketRegime,
-        regimeDetails
+        regimeDetails,
+        totalScore,
+        direction,
+        stopLoss,
+        takeProfit,
+        tp1,
+        tp2,
+        tp3,
+        rawRR,
+        entryPrice,
+        rrResult.primaryRR,
+        rrResult.tp1RR,
+        rrResult.tp2RR,
+        rrResult.tp3RR
       );
     }
 
@@ -740,7 +819,20 @@ export class ScoringEngine {
       return this.createRejection(
         `REJECTED: ADVERSE_NET_RR_BELOW_THRESHOLD. Adverse Net Risk/Reward ratio (${stressTest.adverse.netRR.toFixed(2)}:1) is below required stress floor (${(thresholds.minimumAdverseNetRR ?? 1.0)}:1)`,
         marketRegime,
-        regimeDetails
+        regimeDetails,
+        totalScore,
+        direction,
+        stopLoss,
+        takeProfit,
+        tp1,
+        tp2,
+        tp3,
+        rawRR,
+        entryPrice,
+        rrResult.primaryRR,
+        rrResult.tp1RR,
+        rrResult.tp2RR,
+        rrResult.tp3RR
       );
     }
 
@@ -749,7 +841,20 @@ export class ScoringEngine {
       return this.createRejection(
         stressTest.reasons[0] || `REJECTED: ${stressTest.rejectionReason}. Execution friction stress test failed.`,
         marketRegime,
-        regimeDetails
+        regimeDetails,
+        totalScore,
+        direction,
+        stopLoss,
+        takeProfit,
+        tp1,
+        tp2,
+        tp3,
+        rawRR,
+        entryPrice,
+        rrResult.primaryRR,
+        rrResult.tp1RR,
+        rrResult.tp2RR,
+        rrResult.tp3RR
       );
     }
 
@@ -796,6 +901,12 @@ export class ScoringEngine {
       tp2,
       tp3,
       riskRewardRatio: rawRR,
+      grossRR: rawRR,
+      primaryRR: rrResult.primaryRR,
+      tp1RR: rrResult.tp1RR,
+      tp2RR: rrResult.tp2RR,
+      tp3RR: rrResult.tp3RR,
+      entryPrice,
       estimatedWinRate,
       expectancy,
       targetDistance,
@@ -1039,7 +1150,12 @@ export class ScoringEngine {
     tp1 = 0,
     tp2 = 0,
     tp3 = 0,
-    riskRewardRatio = 0
+    riskRewardRatio = 0,
+    entryPrice = 0,
+    primaryRR = 0,
+    tp1RR = 0,
+    tp2RR = 0,
+    tp3RR = 0
   ): ScoringResult {
     return {
       isValid: false,
@@ -1057,6 +1173,12 @@ export class ScoringEngine {
       tp2,
       tp3,
       riskRewardRatio,
+      grossRR: riskRewardRatio,
+      primaryRR: primaryRR || riskRewardRatio,
+      tp1RR,
+      tp2RR,
+      tp3RR,
+      entryPrice,
       estimatedWinRate: 0,
       expectancy: 0,
       alignedCount: 0,

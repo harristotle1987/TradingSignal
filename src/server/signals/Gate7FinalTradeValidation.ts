@@ -29,6 +29,7 @@ import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 import { CooldownManager } from './CooldownManager.js';
 import { SignalFingerprint } from './SignalFingerprint.js';
 import { MarketStructureDetector } from './MarketStructureDetector.js';
+import { RiskRewardCalculator } from './RiskRewardCalculator.js';
 import { logger } from '../logger.js';
 
 export interface HardGateEvaluation {
@@ -361,10 +362,9 @@ export class Gate7FinalTradeValidation {
     let g9Passed = true;
     let g9Reason: string | undefined;
 
-    const stopDist = Math.abs(ctx.entryPrice - ctx.stopLoss);
-    const targetDist = Math.abs(tp1 - ctx.entryPrice);
-    const calculatedGrossRR = stopDist > 0 ? targetDist / stopDist : 0;
-    const effectiveRR = ctx.netRiskRewardRatio ?? (ctx.riskRewardRatio || calculatedGrossRR);
+    const rrResult = RiskRewardCalculator.calculate(ctx.entryPrice, ctx.stopLoss, tp1, tp2, tp3, ctx.direction);
+    const calculatedGrossRR = rrResult.grossRR;
+    const effectiveRR = ctx.netRiskRewardRatio ?? (ctx.riskRewardRatio ?? calculatedGrossRR);
 
     if (isNaN(effectiveRR) || !isFinite(effectiveRR) || effectiveRR < minRR) {
       g9Passed = false;

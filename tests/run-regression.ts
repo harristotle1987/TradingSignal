@@ -689,6 +689,55 @@ async function runAll() {
       const invalidRes3 = RiskRewardCalculator.calculate(100, 95, 102, 110, 115, 'INVALID' as any);
       assert(!invalidRes3.isValid, 'Invalid direction cannot silently fall through to SELL');
     });
+
+    await test('Candidate rejected by GROSS_RR_BELOW_THRESHOLD preserves canonical SL, TP2, grossRR, and primaryRR', () => {
+      const tracker = new CandidateRejectionTracker();
+      const canonical = RiskRewardCalculator.calculate(100, 95, 101, 101.2, 102, 'BUY');
+      tracker.recordCandidate({
+        symbol: 'TESTASSET',
+        direction: 'BUY',
+        score: 75,
+        primaryRejectionReason: 'REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (0.24:1) is below 1.8:1',
+        failedGates: [StandardFailedGate.RR],
+        finalDecision: 'REJECTED',
+        entryPrice: 100,
+        stopLoss: 95,
+        takeProfit: 101.2,
+        tp1: 101,
+        tp2: 101.2,
+        tp3: 102,
+        grossRR: canonical.grossRR,
+        primaryRR: canonical.primaryRR,
+        tp1RR: canonical.tp1RR,
+        tp2RR: canonical.tp2RR,
+        tp3RR: canonical.tp3RR,
+      });
+
+      const records = tracker.getAllRecords();
+      const rec = records.find(r => r.symbol === 'TESTASSET');
+      assert(rec !== undefined, 'Record should exist');
+      assert(rec!.stopLoss !== 0, 'stopLoss must not be 0');
+      assert(rec!.tp2 !== 0, 'tp2 must not be 0');
+      assert(rec!.grossRR === canonical.grossRR, 'grossRR must match canonical');
+      assert(rec!.primaryRR === canonical.primaryRR, 'primaryRR must match canonical');
+    });
+
+    await test('Candidates rejected earlier for confluence/MTF legitimately have SL/TP unset without fabrications', () => {
+      const tracker = new CandidateRejectionTracker();
+      tracker.recordCandidate({
+        symbol: 'EARLYREJECT',
+        direction: 'BUY',
+        score: 65,
+        primaryRejectionReason: 'Gate 6 MTF Contradiction',
+        failedGates: [StandardFailedGate.MTF_ALIGNMENT],
+        finalDecision: 'REJECTED',
+      });
+
+      const rec = tracker.getAllRecords().find(r => r.symbol === 'EARLYREJECT');
+      assert(rec !== undefined, 'Record should exist');
+      assert(!rec!.stopLoss || rec!.stopLoss === 0, 'stopLoss should be unset / 0 for early rejection');
+      assert(!rec!.grossRR || rec!.grossRR === 0, 'grossRR should be unset / 0 for early rejection');
+    });
   });
 
   console.log('\n\x1b[35m================================================================\x1b[0m');

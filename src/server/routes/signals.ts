@@ -1621,6 +1621,9 @@ router.post('/signals/execution-friction/stress-test', (req: Request, res: Respo
       entryPrice,
       stopLoss,
       takeProfit,
+      req.body.tp1 ?? takeProfit,
+      req.body.tp2 ?? takeProfit,
+      req.body.tp3 ?? takeProfit,
       thresholdOverrides
     );
 

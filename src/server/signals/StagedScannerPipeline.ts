@@ -622,12 +622,17 @@ export async function runStagedPipeline(
           failedGates,
           finalDecision: 'REJECTED',
           stage: 'STAGE_2_SCORING',
-          entryPrice: baselinePrice,
+          entryPrice: scoring.entryPrice || baselinePrice,
           stopLoss: scoring.stopLoss,
           takeProfit: scoring.takeProfit,
           tp1: scoring.tp1,
           tp2: scoring.tp2,
           tp3: scoring.tp3,
+          grossRR: scoring.grossRR ?? scoring.riskRewardRatio,
+          primaryRR: scoring.primaryRR ?? scoring.riskRewardRatio,
+          tp1RR: scoring.tp1RR,
+          tp2RR: scoring.tp2RR,
+          tp3RR: scoring.tp3RR,
           timestamp: now,
         });
         Gate35SignalFunnelAnalytics.recordCandidate({
@@ -708,12 +713,17 @@ export async function runStagedPipeline(
           failedGates,
           finalDecision: 'REJECTED',
           stage: 'GATE_7',
-          entryPrice: baselinePrice,
+          entryPrice: scoring.entryPrice || baselinePrice,
           stopLoss: scoring.stopLoss,
           takeProfit: scoring.takeProfit,
           tp1: scoring.tp1,
           tp2: scoring.tp2,
           tp3: scoring.tp3,
+          grossRR: scoring.grossRR ?? scoring.riskRewardRatio,
+          primaryRR: scoring.primaryRR ?? scoring.riskRewardRatio,
+          tp1RR: scoring.tp1RR,
+          tp2RR: scoring.tp2RR,
+          tp3RR: scoring.tp3RR,
           timestamp: now,
         });
 
@@ -753,12 +763,17 @@ export async function runStagedPipeline(
           failedGates,
           finalDecision: 'REJECTED',
           stage: 'GATE_3_VALIDATION',
-          entryPrice: baselinePrice,
-          stopLoss: scoring.stopLoss,
-          takeProfit: scoring.takeProfit,
-          tp1: scoring.tp1,
-          tp2: scoring.tp2,
-          tp3: scoring.tp3,
+          entryPrice: validation.adjustedEntryPrice ?? scoring.entryPrice ?? baselinePrice,
+          stopLoss: validation.adjustedStopLoss ?? scoring.stopLoss,
+          takeProfit: validation.adjustedTakeProfit ?? scoring.takeProfit,
+          tp1: validation.adjustedTp1 ?? scoring.tp1,
+          tp2: validation.adjustedTp2 ?? scoring.tp2,
+          tp3: validation.adjustedTp3 ?? scoring.tp3,
+          grossRR: validation.adjustedGrossRR ?? scoring.grossRR ?? scoring.riskRewardRatio,
+          primaryRR: validation.adjustedPrimaryRR ?? scoring.primaryRR ?? scoring.riskRewardRatio,
+          tp1RR: validation.adjustedTp1RR ?? scoring.tp1RR,
+          tp2RR: validation.adjustedTp2RR ?? scoring.tp2RR,
+          tp3RR: validation.adjustedTp3RR ?? scoring.tp3RR,
           timestamp: now,
         });
         Gate35SignalFunnelAnalytics.recordCandidate({
@@ -774,7 +789,7 @@ export async function runStagedPipeline(
       let finalEntry = validation.adjustedEntryPrice || liveTicker.price;
       let finalSL = validation.adjustedStopLoss || scoring.stopLoss;
       let finalTP = validation.adjustedTakeProfit || scoring.takeProfit;
-      const finalRR = validation.adjustedNetRR || scoring.riskRewardRatio;
+      const finalRR = validation.adjustedGrossRR ?? scoring.grossRR ?? scoring.riskRewardRatio;
 
       if (!scoring.technicalMetrics) continue;
 

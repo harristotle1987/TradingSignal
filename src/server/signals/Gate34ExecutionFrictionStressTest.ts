@@ -84,6 +84,9 @@ export class Gate34ExecutionFrictionStressTest {
     entryPrice: number,
     stopLoss: number,
     takeProfit: number,
+    tp1: number,
+    tp2: number,
+    tp3: number,
     thresholdOverrides?: FrictionTestThresholds
   ): FrictionStressTestResult {
     const cleanSymbol = SymbolNormalizer.normalizeAppSymbol(symbol) || symbol.trim().toUpperCase();
@@ -95,7 +98,7 @@ export class Gate34ExecutionFrictionStressTest {
       assetClassUpper === 'INDEX' ? 'INDEX' : 'STOCKS';
 
     const direction = stopLoss < entryPrice ? 'BUY' : 'SELL';
-    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, takeProfit, takeProfit, takeProfit, direction);
+    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction);
     const rawRisk = rrResult.riskDistance;
     const rawReward = rrResult.rewardDistance;
     

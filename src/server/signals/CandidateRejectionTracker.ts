@@ -76,6 +76,11 @@ export interface CandidateRejectionAudit {
   tp1?: number;
   tp2?: number;
   tp3?: number;
+  grossRR?: number;
+  primaryRR?: number;
+  tp1RR?: number;
+  tp2RR?: number;
+  tp3RR?: number;
   statusText?: string;
   rejectionSummary?: string;
   timestamp?: number;
@@ -146,22 +151,42 @@ export class CandidateRejectionTracker {
     const rejectionSummary = audit.rejectionSummary || CandidateRejectionTracker.formatHumanReadableSummary(audit.primaryRejectionReason, audit.failedGates, effectiveScore);
     const timestamp = audit.timestamp || Date.now();
 
+    const cleanAudit = { ...audit };
+    // Clear zero values to prevent overwriting existing valid data or logging them as 0
+    if (cleanAudit.entryPrice === 0) delete cleanAudit.entryPrice;
+    if (cleanAudit.stopLoss === 0) delete cleanAudit.stopLoss;
+    if (cleanAudit.takeProfit === 0) delete cleanAudit.takeProfit;
+    if (cleanAudit.tp1 === 0) delete cleanAudit.tp1;
+    if (cleanAudit.tp2 === 0) delete cleanAudit.tp2;
+    if (cleanAudit.tp3 === 0) delete cleanAudit.tp3;
+    if (cleanAudit.grossRR === 0) delete cleanAudit.grossRR;
+    if (cleanAudit.primaryRR === 0) delete cleanAudit.primaryRR;
+    if (cleanAudit.tp1RR === 0) delete cleanAudit.tp1RR;
+    if (cleanAudit.tp2RR === 0) delete cleanAudit.tp2RR;
+    if (cleanAudit.tp3RR === 0) delete cleanAudit.tp3RR;
+
     const existing = this.records.get(audit.symbol);
     if (existing) {
-      const mergedGates = Array.from(new Set([...existing.failedGates, ...audit.failedGates]));
+      const mergedGates = Array.from(new Set([...existing.failedGates, ...cleanAudit.failedGates]));
       const maxScore = Math.max(existing.score, effectiveScore);
-      const isStill72Plus = (maxScore >= 72 || (existing.scoreBeforeGate6 ?? 0) >= 72 || is72Plus) && audit.finalDecision === 'REJECTED';
+      const isStill72Plus = (maxScore >= 72 || (existing.scoreBeforeGate6 ?? 0) >= 72 || is72Plus) && cleanAudit.finalDecision === 'REJECTED';
+
       this.records.set(audit.symbol, {
         ...existing,
-        ...audit,
+        ...cleanAudit,
         score: maxScore,
-        finalScore: audit.finalScore ?? existing.finalScore ?? maxScore,
-        entryPrice: audit.entryPrice ?? existing.entryPrice,
-        stopLoss: audit.stopLoss ?? existing.stopLoss,
-        takeProfit: audit.takeProfit ?? existing.takeProfit,
-        tp1: audit.tp1 ?? existing.tp1,
-        tp2: audit.tp2 ?? existing.tp2,
-        tp3: audit.tp3 ?? existing.tp3,
+        finalScore: cleanAudit.finalScore ?? existing.finalScore ?? maxScore,
+        entryPrice: cleanAudit.entryPrice || existing.entryPrice,
+        stopLoss: cleanAudit.stopLoss || existing.stopLoss,
+        takeProfit: cleanAudit.takeProfit || existing.takeProfit,
+        tp1: cleanAudit.tp1 || existing.tp1,
+        tp2: cleanAudit.tp2 || existing.tp2,
+        tp3: cleanAudit.tp3 || existing.tp3,
+        grossRR: cleanAudit.grossRR || existing.grossRR,
+        primaryRR: cleanAudit.primaryRR || existing.primaryRR,
+        tp1RR: cleanAudit.tp1RR || existing.tp1RR,
+        tp2RR: cleanAudit.tp2RR || existing.tp2RR,
+        tp3RR: cleanAudit.tp3RR || existing.tp3RR,
         failedGates: mergedGates,
         is72PlusRejected: isStill72Plus,
         statusText,
@@ -170,7 +195,7 @@ export class CandidateRejectionTracker {
       });
     } else {
       this.records.set(audit.symbol, {
-        ...audit,
+        ...cleanAudit,
         score: effectiveScore,
         is72PlusRejected: is72Plus,
         statusText,

@@ -49,6 +49,14 @@ export interface ValidationResult {
   adjustedEntryPrice?: number;
   adjustedStopLoss?: number;
   adjustedTakeProfit?: number;
+  adjustedTp1?: number;
+  adjustedTp2?: number;
+  adjustedTp3?: number;
+  adjustedGrossRR?: number;
+  adjustedPrimaryRR?: number;
+  adjustedTp1RR?: number;
+  adjustedTp2RR?: number;
+  adjustedTp3RR?: number;
   adjustedNetRR?: number;
 }
 
@@ -145,6 +153,16 @@ export class SignalValidator {
         detailedMessage: slTpCheck.message,
         snapshotId,
         validatedAt: now,
+        adjustedStopLoss: slTpCheck.adjustedStopLoss,
+        adjustedTakeProfit: slTpCheck.adjustedTakeProfit,
+        adjustedTp1: slTpCheck.adjustedTp1,
+        adjustedTp2: slTpCheck.adjustedTp2,
+        adjustedTp3: slTpCheck.adjustedTp3,
+        adjustedGrossRR: slTpCheck.adjustedGrossRR,
+        adjustedPrimaryRR: slTpCheck.adjustedPrimaryRR,
+        adjustedTp1RR: slTpCheck.adjustedTp1RR,
+        adjustedTp2RR: slTpCheck.adjustedTp2RR,
+        adjustedTp3RR: slTpCheck.adjustedTp3RR,
       };
     }
 
@@ -157,6 +175,16 @@ export class SignalValidator {
         detailedMessage: `REJECTED: BLOCK_NEWS_EVENT. Trading blocked due to major scheduled market-moving event (${newsRiskResult.reasons.join('; ')})`,
         snapshotId,
         validatedAt: now,
+        adjustedStopLoss: slTpCheck.adjustedStopLoss,
+        adjustedTakeProfit: slTpCheck.adjustedTakeProfit,
+        adjustedTp1: slTpCheck.adjustedTp1,
+        adjustedTp2: slTpCheck.adjustedTp2,
+        adjustedTp3: slTpCheck.adjustedTp3,
+        adjustedGrossRR: slTpCheck.adjustedGrossRR,
+        adjustedPrimaryRR: slTpCheck.adjustedPrimaryRR,
+        adjustedTp1RR: slTpCheck.adjustedTp1RR,
+        adjustedTp2RR: slTpCheck.adjustedTp2RR,
+        adjustedTp3RR: slTpCheck.adjustedTp3RR,
       };
     }
 
@@ -177,6 +205,16 @@ export class SignalValidator {
         detailedMessage: reasonMsg,
         snapshotId,
         validatedAt: now,
+        adjustedStopLoss: slTpCheck.adjustedStopLoss,
+        adjustedTakeProfit: slTpCheck.adjustedTakeProfit,
+        adjustedTp1: slTpCheck.adjustedTp1,
+        adjustedTp2: slTpCheck.adjustedTp2,
+        adjustedTp3: slTpCheck.adjustedTp3,
+        adjustedGrossRR: slTpCheck.adjustedGrossRR,
+        adjustedPrimaryRR: slTpCheck.adjustedPrimaryRR,
+        adjustedTp1RR: slTpCheck.adjustedTp1RR,
+        adjustedTp2RR: slTpCheck.adjustedTp2RR,
+        adjustedTp3RR: slTpCheck.adjustedTp3RR,
       };
     }
 
@@ -190,6 +228,14 @@ export class SignalValidator {
       adjustedEntryPrice: livePrice,
       adjustedStopLoss: slTpCheck.adjustedStopLoss,
       adjustedTakeProfit: slTpCheck.adjustedTakeProfit,
+      adjustedTp1: slTpCheck.adjustedTp1,
+      adjustedTp2: slTpCheck.adjustedTp2,
+      adjustedTp3: slTpCheck.adjustedTp3,
+      adjustedGrossRR: slTpCheck.adjustedGrossRR,
+      adjustedPrimaryRR: slTpCheck.adjustedPrimaryRR,
+      adjustedTp1RR: slTpCheck.adjustedTp1RR,
+      adjustedTp2RR: slTpCheck.adjustedTp2RR,
+      adjustedTp3RR: slTpCheck.adjustedTp3RR,
       adjustedNetRR: slTpCheck.adjustedNetRR,
     };
   }
@@ -303,7 +349,21 @@ export class SignalValidator {
     tp1?: number,
     tp2?: number,
     tp3?: number
-  ): { isValid: boolean; message: string; adjustedStopLoss?: number; adjustedTakeProfit?: number; adjustedNetRR?: number } {
+  ): {
+    isValid: boolean;
+    message: string;
+    adjustedStopLoss?: number;
+    adjustedTakeProfit?: number;
+    adjustedTp1?: number;
+    adjustedTp2?: number;
+    adjustedTp3?: number;
+    adjustedGrossRR?: number;
+    adjustedPrimaryRR?: number;
+    adjustedTp1RR?: number;
+    adjustedTp2RR?: number;
+    adjustedTp3RR?: number;
+    adjustedNetRR?: number;
+  } {
     const precision = getDynamicPrecision(livePrice, symbol);
 
     // Adjust SL/TP if minor live price drift occurred
@@ -473,6 +533,16 @@ export class SignalValidator {
       return {
         isValid: false,
         message: `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum acceptable GROSS R:R (${rrResult.reason || 'Invalid geometry'})`,
+        adjustedStopLoss: adjustedSL,
+        adjustedTakeProfit: adjustedTP,
+        adjustedTp1: adjustedTp1 ?? adjustedTP,
+        adjustedTp2: adjustedTp2 ?? adjustedTP,
+        adjustedTp3: adjustedTp3 ?? adjustedTP,
+        adjustedGrossRR: rrResult.grossRR,
+        adjustedPrimaryRR: rrResult.primaryRR,
+        adjustedTp1RR: rrResult.tp1RR,
+        adjustedTp2RR: rrResult.tp2RR,
+        adjustedTp3RR: rrResult.tp3RR,
       };
     }
 
@@ -481,6 +551,14 @@ export class SignalValidator {
       message: 'OK',
       adjustedStopLoss: adjustedSL,
       adjustedTakeProfit: adjustedTP,
+      adjustedTp1: adjustedTp1 ?? adjustedTP,
+      adjustedTp2: adjustedTp2 ?? adjustedTP,
+      adjustedTp3: adjustedTp3 ?? adjustedTP,
+      adjustedGrossRR: rrResult.grossRR,
+      adjustedPrimaryRR: rrResult.primaryRR,
+      adjustedTp1RR: rrResult.tp1RR,
+      adjustedTp2RR: rrResult.tp2RR,
+      adjustedTp3RR: rrResult.tp3RR,
       adjustedNetRR: frictionCheck.netRR,
     };
   }
@@ -531,7 +609,7 @@ export class SignalValidator {
     const dummyStopLoss = price - rawRisk;
     const dummyTakeProfit = price + rawReward;
 
-    const res = Gate34ExecutionFrictionStressTest.evaluate(symbol, price, dummyStopLoss, dummyTakeProfit);
+    const res = Gate34ExecutionFrictionStressTest.evaluate(symbol, price, dummyStopLoss, dummyTakeProfit, dummyTakeProfit, dummyTakeProfit, dummyTakeProfit);
 
     if (!res.isPassed) {
       return {
