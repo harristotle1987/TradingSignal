@@ -232,6 +232,25 @@ export class AtrTpGenerator {
       ? entryPrice < tp1 && tp1 < tp2 && tp2 < tp3
       : entryPrice > tp1 && tp1 > tp2 && tp2 > tp3;
 
+    // Absolute positivity / sanity guard — negative, zero, or non-finite
+    // targets must never be emitted, regardless of ordering.
+    const allFiniteAndPositive =
+      Number.isFinite(tp1) && tp1 > 0 &&
+      Number.isFinite(tp2) && tp2 > 0 &&
+      Number.isFinite(tp3) && tp3 > 0;
+
+    if (!allFiniteAndPositive) {
+      return {
+        tp1, tp2, tp3,
+        takeProfit: tp2,
+        multipliersUsed: { m1, m2, m3 },
+        volatilityRegime,
+        isAggressive,
+        isValid: false,
+        rejectionReason: `Generated take-profit target is non-positive or invalid for ${direction}: entry=${entryPrice}, tp1=${tp1}, tp2=${tp2}, tp3=${tp3}`,
+      };
+    }
+
     if (!isOrdered) {
       return {
         tp1,

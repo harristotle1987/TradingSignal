@@ -407,11 +407,17 @@ export class Gate6ProgressiveMTF {
       msScore * 0.10
     );
 
+    // MACD disagreement is intentionally EXCLUDED from the hard-veto count
+    // below. It still fully affects compositeLayer1Score (15% weight) as a
+    // soft penalty, and is still recorded in `disagreements` for
+    // diagnostics/telemetry, but it can no longer by itself (or combined
+    // with just one other soft signal) force a hard reject.
+    const hardDisagreements = disagreements.filter((d) => !d.startsWith('MACD:'));
+
     const hasHardContradiction =
-      disagreements.length >= 2 ||
-      trendScore <= 20 ||
-      (msScore <= 20 && !msAligned) ||
-      (macdScore <= 20 && !macdAligned);
+      hardDisagreements.length >= 2 ||
+      trendScore <= 20 ||                  // HTF trend conflict remains a hard safety gate
+      (msScore <= 20 && !msAligned);        // Market-structure contradiction remains hard
 
     const passed = !hasHardContradiction && compositeLayer1Score >= 50;
 

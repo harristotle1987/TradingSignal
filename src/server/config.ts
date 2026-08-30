@@ -44,9 +44,9 @@ export interface SignalThresholds {
   enforceAdverseNetRRHardGate?: boolean;
   /** minimumWinProbability: percentage from 0 to 100, e.g. 55 */
   minimumWinProbability: number;
-  /** minimumStrategyAgreement: ratio from 0 to 1, e.g. 0.60 */
+  /** minimumStrategyAgreement: ratio from 0 to 1, e.g. 0.50 */
   minimumStrategyAgreement: number;
-  /** minimumTimeframeAlignment: ratio from 0 to 1, e.g. 0.60 */
+  /** minimumTimeframeAlignment: ratio from 0 to 1, e.g. 0.50 */
   minimumTimeframeAlignment: number;
   /** AI Confirmation Mode */
   AIConfirmationMode: 'REQUIRED' | 'OPTIONAL' | 'DISABLED';
@@ -119,8 +119,8 @@ class ConfigService {
       minimumAdverseNetRR: process.env.THRESHOLD_MIN_ADVERSE_NET_RR ? parseFloat(process.env.THRESHOLD_MIN_ADVERSE_NET_RR) : 1.0,
       enforceAdverseNetRRHardGate: process.env.ENFORCE_ADVERSE_NET_RR_HARD_GATE === 'true',
       minimumWinProbability: rawWinProb <= 1.0 ? rawWinProb * 100 : rawWinProb,
-      minimumStrategyAgreement: parseFloat(process.env.THRESHOLD_MIN_STRATEGY_AGREEMENT || '0.60'),
-      minimumTimeframeAlignment: parseFloat(process.env.THRESHOLD_MIN_TIMEFRAME_ALIGNMENT || '0.60'),
+      minimumStrategyAgreement: 0.50,
+      minimumTimeframeAlignment: 0.50,
       AIConfirmationMode: (process.env.THRESHOLD_AI_CONFIRMATION_MODE as 'REQUIRED' | 'OPTIONAL' | 'DISABLED') || 'OPTIONAL',
       minimumAiConfidence: rawAiConf <= 1.0 ? rawAiConf * 100 : rawAiConf,
       dailySignalCap: parseInt(process.env.THRESHOLD_DAILY_SIGNAL_CAP || '5', 10),

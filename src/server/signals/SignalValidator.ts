@@ -394,6 +394,22 @@ export class SignalValidator {
       adjustedTp3 = tp3Dist !== undefined ? Number((livePrice - tp3Dist).toFixed(precision)) : undefined;
     }
 
+    // 0. Absolute Positivity Guard — negative, zero, or non-finite SL/TP
+    // values must never reach emission, independent of the direction and
+    // ordering checks below.
+    const candidateValues: Array<[string, number | undefined]> = [
+      ['stop-loss', adjustedSL],
+      ['take-profit', adjustedTP],
+      ['TP1', adjustedTp1],
+      ['TP2', adjustedTp2],
+      ['TP3', adjustedTp3],
+    ];
+    for (const [label, val] of candidateValues) {
+      if (val !== undefined && (!Number.isFinite(val) || val <= 0)) {
+        return { isValid: false, message: `REJECTED: INVALID_SL_TP. ${label} value (${val}) is negative, zero, or invalid and cannot be emitted.` };
+      }
+    }
+
     // 1. Geometric Side & Ordering Validation
     if (direction === 'BUY') {
       if (adjustedSL >= livePrice) {

@@ -168,14 +168,21 @@ export class CandidateRejectionTracker {
     const existing = this.records.get(audit.symbol);
     if (existing) {
       const mergedGates = Array.from(new Set([...existing.failedGates, ...cleanAudit.failedGates]));
-      const maxScore = Math.max(existing.score, effectiveScore);
-      const isStill72Plus = (maxScore >= 72 || (existing.scoreBeforeGate6 ?? 0) >= 72 || is72Plus) && cleanAudit.finalDecision === 'REJECTED';
+      // Telemetry now reflects the MOST RECENT evaluation's actual score,
+      // never the historical maximum. A rejected candidate's score can go
+      // up or down between scans, but it must always reflect what was
+      // actually just computed — it must never appear to increase purely
+      // because of a prior evaluation being merged in. The 72+ visibility
+      // flag is tracked independently ("was this ever a 72+ candidate")
+      // and never overwrites the live score.
+      const everReached72Plus = (existing.score >= 72) || (existing.scoreBeforeGate6 ?? 0) >= 72 || is72Plus;
+      const isStill72Plus = (everReached72Plus || effectiveScore >= 72) && cleanAudit.finalDecision === 'REJECTED';
 
       this.records.set(audit.symbol, {
         ...existing,
         ...cleanAudit,
-        score: maxScore,
-        finalScore: cleanAudit.finalScore ?? existing.finalScore ?? maxScore,
+        score: effectiveScore,
+        finalScore: cleanAudit.finalScore ?? effectiveScore,
         entryPrice: cleanAudit.entryPrice || existing.entryPrice,
         stopLoss: cleanAudit.stopLoss || existing.stopLoss,
         takeProfit: cleanAudit.takeProfit || existing.takeProfit,

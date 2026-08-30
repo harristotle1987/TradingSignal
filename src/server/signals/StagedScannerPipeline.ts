@@ -512,6 +512,24 @@ export async function runStagedPipeline(
         const gate6 = Gate6VolumePriceAction.analyze(scoring.direction, setupCandles);
         const gate7 = Gate7MarketContext.analyze(asset, scoring.direction, setupCandles);
         const gate8 = Gate8EntryQuality.analyze(baselinePrice, scoring.direction, setupCandles);
+
+        // Defensive guard: scoring.stopLoss/tp1/tp2/tp3/riskRewardRatio are
+        // typed number|undefined upstream. If SL/TP generation failed
+        // earlier in ScoringEngine for any reason, fail loudly here rather
+        // than passing undefined into Gate9RiskManagement (which requires
+        // strict numbers) or silently treating it as 0.
+        if (
+          scoring.stopLoss === undefined ||
+          scoring.tp1 === undefined ||
+          scoring.tp2 === undefined ||
+          scoring.tp3 === undefined ||
+          scoring.riskRewardRatio === undefined
+        ) {
+          scoring.isValid = false;
+          scoring.rejectionReason = 'REJECTED: SL_TP_GENERATION_FAILED. Stop-loss/take-profit values were not generated prior to risk evaluation.';
+          continue;
+        }
+
         const gate9 = Gate9RiskManagement.calculate(
           baselinePrice,
           scoring.direction,
@@ -547,10 +565,7 @@ export async function runStagedPipeline(
 
         (scoring as any).anyOptimizedPathPassed = anyOptimizedPathPassed;
 
-        if (!hasDirectionalConfirmation) {
-          scoring.isValid = false;
-          scoring.rejectionReason = `REJECTED: DIRECTIONAL_CONFIRMATION_FAILED. Required 2 of 3 (Trend, Structure, Momentum) or one of the 4 optimized pathways.`;
-        } else if (gate7.tradingAllowed === 'NO') {
+        if (gate7.tradingAllowed === 'NO') {
           scoring.isValid = false;
           scoring.rejectionReason = `REJECTED: MARKET_CONTEXT_BLOCKED. ${gate7.reasons.join('; ')}`;
         } else if (gate9.rrRatio < thresholds.minimumRR) {
@@ -1155,7 +1170,9 @@ export async function runStagedPipeline(
         cand.signal.walkForwardStatus = wfResult.status;
         cand.signal.overfitRiskDetected = wfResult.overfitRiskDetected;
         if (wfResult.reasons) cand.signal.confluenceReasons.push(...wfResult.reasons);
-      } catch (err) {}
+      } catch (err) {
+        logger.warn(`[StagedScannerPipeline] Walk-forward validation failed for ${cand.signal.symbol}:`, { error: String(err) });
+      }
     }
 
     for (const cand of filteredCandidates) {
@@ -1166,7 +1183,9 @@ export async function runStagedPipeline(
         cand.signal.monteCarloRiskOfRuinPct = mcResult.riskOfRuinPct;
         cand.signal.monteCarloSimulationStatus = mcResult.simulationStatus;
         if (mcResult.reasons) cand.signal.confluenceReasons.push(...mcResult.reasons);
-      } catch (err) {}
+      } catch (err) {
+        logger.warn(`[StagedScannerPipeline] Monte Carlo simulation failed for ${cand.signal.symbol}:`, { error: String(err) });
+      }
     }
 
     const finalValidationOutputCount = filteredCandidates.length;

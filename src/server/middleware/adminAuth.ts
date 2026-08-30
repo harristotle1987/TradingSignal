@@ -4,8 +4,24 @@
  * Lightweight, local, and server-side authentication for single-user application.
  */
 
+import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../logger.js';
+
+/**
+ * Constant-time string comparison to avoid leaking information about how
+ * many leading characters of an admin credential matched via response
+ * timing.
+ */
+function timingSafeStringEquals(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) {
+    crypto.timingSafeEqual(bufA, bufA);
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 
 /**
  * Extracts authentication token from request headers:
@@ -80,7 +96,7 @@ export function adminAuthMiddleware(req: Request, res: Response, next: NextFunct
     });
   }
 
-  const isAuthorized = envSecrets.includes(token);
+  const isAuthorized = envSecrets.some((secret) => timingSafeStringEquals(token, secret));
 
   if (!isAuthorized) {
     logger.warn(`[AdminAuth] Rejected administrative request with invalid credentials for ${req.method} ${req.path}`);

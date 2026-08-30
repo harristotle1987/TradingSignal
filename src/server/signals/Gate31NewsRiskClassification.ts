@@ -471,17 +471,23 @@ export class Gate31NewsRiskClassification {
         blackoutAfterMinutes: 1440,
         provenance: 'fail_closed_fallback',
       };
+      // NEWS_DATA_UNAVAILABLE is now treated as elevated uncertainty
+      // (CAUTION), not an automatic reject. It still meaningfully raises
+      // the confirmation bar required to trade (higher than a normal
+      // CAUTION event) so candidates need materially stronger confluence,
+      // but a single missing news feed can no longer by itself block an
+      // otherwise-valid signal.
       return {
         symbol: cleanSymbol,
-        classification: 'BLOCK',
-        isTradingAllowed: false,
-        requiredConfirmationScoreMultiplier: Infinity,
-        minRequiredConfirmationScore: 1000,
+        classification: 'CAUTION',
+        isTradingAllowed: true,
+        requiredConfirmationScoreMultiplier: 1.5,
+        minRequiredConfirmationScore: 85,
         activeEvents: [failClosedEvent],
         recentArticles: this.getVerifiedArticles(cleanSymbol),
         relevantEventsCount: 1,
-        reasons: ['BLOCK: NEWS_DATA_UNAVAILABLE. Verified news/calendar source is unavailable or returned error and no valid cache exists.'],
-        explanation: `Gate 31 News Risk for ${cleanSymbol}: State=BLOCK, TradingAllowed=false, MinRequiredScore=1000. Fail-Closed default enforced due to NEWS_DATA_UNAVAILABLE.`,
+        reasons: ['CAUTION: NEWS_DATA_UNAVAILABLE. Verified news/calendar source is unavailable or returned error and no valid cache exists — treated as elevated uncertainty, requiring stronger confirmation.'],
+        explanation: `Gate 31 News Risk for ${cleanSymbol}: State=CAUTION, TradingAllowed=true, MinRequiredScore=85. Uncertainty penalty (not automatic block) applied due to NEWS_DATA_UNAVAILABLE.`,
         neverFabricateSignalEnforced: true,
       };
     }

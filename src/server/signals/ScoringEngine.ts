@@ -920,7 +920,7 @@ export class ScoringEngine {
       agreeingStrategiesCount: strategyEval.agreeingStrategiesCount,
       totalStrategiesCount: 6,
       strategyAgreementRatio: strategyEval.agreementRatio,
-      isTopTradeCandidate: totalScore >= thresholds.signalThreshold && timeframeAlignmentRatio >= (thresholds.minimumTimeframeAlignment || 0.60),
+      isTopTradeCandidate: totalScore >= thresholds.signalThreshold && timeframeAlignmentRatio >= (thresholds.minimumTimeframeAlignment || 0.50),
       estimatedFriction: {
         spreadPipsOrPoints: spreadUnits,
         feeBufferPct: feePct,

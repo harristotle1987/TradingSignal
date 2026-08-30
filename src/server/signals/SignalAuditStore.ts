@@ -52,6 +52,19 @@ const FIRESTORE_COLLECTION = 'scanner_audit_logs';
 export class SignalAuditStore {
   private static auditLogs: Map<string, SignalAuditRecord> = new Map();
   private static isInitialized = false;
+  // Must match the on-disk retention in persistLocal() below — otherwise
+  // the in-memory Map grows forever even though the disk snapshot is
+  // bounded.
+  private static readonly MAX_IN_MEMORY_RECORDS = 1000;
+
+  /**
+   * Keeps the in-memory audit map bounded to the most recent records.
+   */
+  private static pruneInMemory(): void {
+    if (this.auditLogs.size <= this.MAX_IN_MEMORY_RECORDS) return;
+    const sorted = Array.from(this.auditLogs.entries()).sort((a, b) => b[1].timestamp - a[1].timestamp);
+    this.auditLogs = new Map(sorted.slice(0, this.MAX_IN_MEMORY_RECORDS));
+  }
 
   private static init(): void {
     if (this.isInitialized) return;
@@ -111,6 +124,7 @@ export class SignalAuditStore {
     };
 
     this.auditLogs.set(id, record);
+    this.pruneInMemory();
     this.persistLocal();
     this.persistFirestore(record).catch(() => {});
 
