@@ -923,7 +923,7 @@ export class HourlyScannerService {
         Gate36ConfigurableSignalFrequency.recordNotificationCount(1);
 
         // Record Funnel Analytics Final Signal
-        const finalScore = sig.score ?? sig.confidenceScore ?? 72;
+        const finalScore = sig.score ?? sig.confidenceScore ?? 70;
         const grossRR = (sig as any).grossRiskRewardRatio ?? sig.riskRewardRatio ?? 0;
         const netRR = (sig as any).netRiskRewardRatio ?? sig.estimatedFriction?.netRiskRewardRatio ?? 0;
         const adverseNetRR = (sig as any).adverseNetRiskRewardRatio ?? (sig.estimatedFriction as any)?.adverseNetRiskRewardRatio ?? 0;
@@ -982,7 +982,7 @@ export class HourlyScannerService {
           dataFreshnessSeconds: 0,
           providerAgreement: true,
           expectedRR: sig.riskRewardRatio,
-          score: sig.score || 72,
+          score: sig.score || 70,
           status: 'ACCEPTED',
           rejectionReason: null,
           fingerprint: fp,

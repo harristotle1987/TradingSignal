@@ -350,14 +350,14 @@ export function AiMarketScannerWidget({
                         <div className="text-left bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/80 text-[9px] font-mono text-slate-400 max-h-56 overflow-y-auto space-y-2 mt-2">
                           <div className="flex items-center justify-between">
                             <span className="text-slate-300 font-semibold block uppercase tracking-wider">Candidate Rejection Telemetry:</span>
-                            {scanResult.candidateRejectionDetails.some((c: any) => c.is72PlusRejected || c.score >= 72 || c.finalScore >= 72) && (
+                            {scanResult.candidateRejectionDetails.some((c: any) => c.is72PlusRejected || c.score >= 70 || c.finalScore >= 70) && (
                               <span className="px-1.5 py-0.5 bg-rose-950 text-rose-300 text-[8px] font-bold rounded border border-rose-800">
-                                72+ REJECTED PRESENT
+                                70+ REJECTED PRESENT
                               </span>
                             )}
                           </div>
                           {scanResult.candidateRejectionDetails.map((cand: any, i: number) => {
-                            const is72Plus = cand.is72PlusRejected || (cand.score >= 72 || cand.finalScore >= 72) && cand.finalDecision === 'REJECTED';
+                            const is72Plus = cand.is72PlusRejected || (cand.score >= 70 || cand.finalScore >= 70) && cand.finalDecision === 'REJECTED';
                             return (
                               <div
                                 key={i}

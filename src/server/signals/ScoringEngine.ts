@@ -8,7 +8,7 @@ import { Gate34ExecutionFrictionStressTest, FrictionStressTestResult } from './G
 import { logger } from '../logger.js';
 import { serverConfig } from '../config.js';
 import { ASSET_CLASS_GUARDRAILS, GuardrailRange, AtrTpGenerator } from './AtrTpGenerator.js';
-import { RiskRewardCalculator } from './RiskRewardCalculator.js';
+import { RiskRewardCalculator, logRrRejectionDiagnostic } from './RiskRewardCalculator.js';
 
 export interface TpCalculationDiagnostics {
   rawTp1BeforeClamp: number;
@@ -677,8 +677,23 @@ export class ScoringEngine {
     tp3 = tpSetup.tp3;
     takeProfit = tp2;
 
-    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction);
+    const isBuyDirection = direction === 'BUY';
+
+    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, thresholds.minimumRR);
     if (!rrResult.isValid) {
+      logRrRejectionDiagnostic({
+        symbol: cleanSymbol,
+        direction,
+        entryPrice,
+        stopLoss,
+        tp1,
+        tp2,
+        tp3,
+        structural15m: isBuyDirection ? resistance15m : support15m,
+        structural1h: isBuyDirection ? majorResistance1h : majorSupport1h,
+        assetClass: profile.assetClass,
+        rejectionReason: rrResult.reason,
+      });
       return this.createRejection(
         `REJECTED: INVALID_RR_GEOMETRY. ${rrResult.reason || 'Invalid Risk/Reward geometry'}`,
         marketRegime,
@@ -690,7 +705,7 @@ export class ScoringEngine {
         tp1,
         tp2,
         tp3,
-        rrResult.grossRR,
+        rrResult.effectiveGrossRR,
         entryPrice,
         rrResult.primaryRR,
         rrResult.tp1RR,
@@ -700,12 +715,25 @@ export class ScoringEngine {
         tpSetup.diagnostics
       );
     }
-    const rawRR = rrResult.grossRR;
+    const rawRR = rrResult.effectiveGrossRR;
     const calculatedRisk = rrResult.riskDistance;
     const calculatedReward = rrResult.rewardDistance;
 
     // GATE 45 Step 1 & 2: Calculate Gross R:R & Reject if gross R:R < minimum acceptable GROSS R:R
     if (rawRR < thresholds.minimumRR) {
+      logRrRejectionDiagnostic({
+        symbol: cleanSymbol,
+        direction,
+        entryPrice,
+        stopLoss,
+        tp1,
+        tp2,
+        tp3,
+        structural15m: isBuyDirection ? resistance15m : support15m,
+        structural1h: isBuyDirection ? majorResistance1h : majorSupport1h,
+        assetClass: profile.assetClass,
+        rejectionReason: `GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${thresholds.minimumRR}:1)`,
+      });
       return this.createRejection(
         `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${thresholds.minimumRR}:1)`,
         marketRegime,
@@ -1046,6 +1074,9 @@ export class ScoringEngine {
 
     const isBuy = direction === 'BUY';
 
+    const riskDist = Math.abs(entryPrice - stopLoss);
+    const req1_8RTarget = isBuy ? entryPrice + (riskDist * 1.8) : entryPrice - (riskDist * 1.8);
+
     if (isBuy) {
       // TP1: conservative
       let baseTp1 = entryPrice + (cleanAtr * tp1Mult);
@@ -1057,7 +1088,13 @@ export class ScoringEngine {
       // TP2: primary
       let baseTp2 = entryPrice + (cleanAtr * tp2Mult);
       if (majorResistance1h > entryPrice) {
-        baseTp2 = 0.3 * baseTp2 + 0.7 * (majorResistance1h - cleanAtr * 0.15);
+        if (majorResistance1h >= req1_8RTarget) {
+          baseTp2 = 0.3 * baseTp2 + 0.7 * (majorResistance1h - cleanAtr * 0.15);
+        } else {
+          // Nearest 1h structural anchor is closer than 1.8R.
+          // Do not force baseTp2 down to near anchor if pure ATR target is higher.
+          baseTp2 = Math.max(baseTp2, majorResistance1h - cleanAtr * 0.15);
+        }
       }
       tp2 = Math.max(baseTp2, tp1 + minStep);
 
@@ -1078,7 +1115,11 @@ export class ScoringEngine {
       // TP2: primary
       let baseTp2 = entryPrice - (cleanAtr * tp2Mult);
       if (majorSupport1h < entryPrice) {
-        baseTp2 = 0.3 * baseTp2 + 0.7 * (majorSupport1h + cleanAtr * 0.15);
+        if (majorSupport1h <= req1_8RTarget) {
+          baseTp2 = 0.3 * baseTp2 + 0.7 * (majorSupport1h + cleanAtr * 0.15);
+        } else {
+          baseTp2 = Math.min(baseTp2, majorSupport1h + cleanAtr * 0.15);
+        }
       }
       tp2 = Math.min(baseTp2, tp1 - minStep);
 

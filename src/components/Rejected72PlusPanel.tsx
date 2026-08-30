@@ -35,7 +35,7 @@ interface Rejected72PlusPanelProps {
 
 export function Rejected72PlusPanel({
   candidates = [],
-  title = '72+ HIGH-SCORE REJECTED SETUPS',
+  title = '70+ HIGH-SCORE REJECTED SETUPS',
   compact = false,
 }: Rejected72PlusPanelProps) {
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
@@ -47,13 +47,13 @@ export function Rejected72PlusPanel({
       const scoreVal = cand.score ?? cand.finalScore ?? cand.scoreBeforeGate6 ?? 0;
       const decision = cand.finalDecision ?? 'REJECTED';
       const isRejected = decision === 'REJECTED' || cand.is72PlusRejected || cand.statusText?.includes('REJECTED');
-      const meetsScore = scoreVal >= 72 || cand.is72PlusRejected === true;
+      const meetsScore = scoreVal >= 70 || cand.is72PlusRejected === true;
       return meetsScore && isRejected;
     });
   }, [candidates]);
 
   if (qualifyingCandidates.length === 0) {
-    return null; // Don't render empty container if no 72+ candidates were rejected in current telemetry
+    return null; // Don't render empty container if no 70+ candidates were rejected in current telemetry
   }
 
   const toggleExpand = (sym: string) => {
@@ -73,7 +73,7 @@ export function Rejected72PlusPanel({
               <span>{title}</span>
             </h3>
             <span className="text-[10px] text-slate-400 font-sans block">
-              High-Score Candidates (Score ≥72) Blocked by Mandatory Risk & Safety Gates
+              High-Score Candidates (Score ≥70) Blocked by Mandatory Risk & Safety Gates
             </span>
           </div>
         </div>
@@ -88,7 +88,7 @@ export function Rejected72PlusPanel({
       {/* Candidate List */}
       <div className="space-y-3">
         {qualifyingCandidates.map((cand, idx) => {
-          const scoreVal = cand.score ?? cand.finalScore ?? cand.scoreBeforeGate6 ?? 72;
+          const scoreVal = cand.score ?? cand.finalScore ?? cand.scoreBeforeGate6 ?? 70;
           const isExpanded = expandedSymbol === cand.symbol;
           const reason = cand.rejectionSummary || cand.primaryRejectionReason || cand.details || 'Failed mandatory safety gate criteria.';
           const primaryFailedGate = cand.failedGates && cand.failedGates.length > 0 ? cand.failedGates[0] : (cand.primaryRejectionReason || 'SAFETY_GATE');

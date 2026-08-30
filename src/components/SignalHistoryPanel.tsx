@@ -331,7 +331,7 @@ export function SignalHistoryPanel({
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              72+ Rejected ({rejected72PlusCandidates.length})
+              70+ Rejected ({rejected72PlusCandidates.length})
             </button>
           </div>
 
@@ -454,7 +454,7 @@ export function SignalHistoryPanel({
           </div>
         ) : (
           <div className="text-center py-8 bg-slate-950/60 rounded-xl border border-slate-800 text-slate-400 text-xs font-mono">
-            No 72+ candidates have been rejected in recent scans.
+            No 70+ candidates have been rejected in recent scans.
           </div>
         )
       ) : filteredHistory.length > 0 ? (

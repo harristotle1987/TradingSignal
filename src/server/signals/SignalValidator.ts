@@ -17,7 +17,7 @@ import { getDynamicPrecision } from '../../utils/formatters.js';
 import { logger } from '../logger.js';
 import { TechnicalIndicators } from './TechnicalIndicators.js';
 import { AtrTpGenerator } from './AtrTpGenerator.js';
-import { RiskRewardCalculator } from './RiskRewardCalculator.js';
+import { RiskRewardCalculator, logRrRejectionDiagnostic } from './RiskRewardCalculator.js';
 import { Gate30DataFreshness } from './Gate30DataFreshness.js';
 import { Gate31NewsRiskClassification } from './Gate31NewsRiskClassification.js';
 import { Gate34ExecutionFrictionStressTest } from './Gate34ExecutionFrictionStressTest.js';
@@ -542,10 +542,20 @@ export class SignalValidator {
     }
 
     // 5. Gross Risk / Reward Ratio Check: Minimum acceptable GROSS R:R from config using RiskRewardCalculator canonical module
-    const rrResult = RiskRewardCalculator.calculate(livePrice, adjustedSL, adjustedTp1 ?? adjustedTP, adjustedTp2 ?? adjustedTP, adjustedTp3 ?? adjustedTP, direction);
-    const rawRR = rrResult.grossRR;
     const thresholds = serverConfig.getConfig().thresholds;
+    const rrResult = RiskRewardCalculator.calculate(livePrice, adjustedSL, adjustedTp1 ?? adjustedTP, adjustedTp2 ?? adjustedTP, adjustedTp3 ?? adjustedTP, direction, thresholds.minimumRR);
+    const rawRR = rrResult.effectiveGrossRR;
     if (rawRR < thresholds.minimumRR || !rrResult.isValid) {
+      logRrRejectionDiagnostic({
+        symbol,
+        direction,
+        entryPrice: livePrice,
+        stopLoss: adjustedSL,
+        tp1: adjustedTp1 ?? adjustedTP,
+        tp2: adjustedTp2 ?? adjustedTP,
+        tp3: adjustedTp3 ?? adjustedTP,
+        rejectionReason: `GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum acceptable GROSS R:R (${rrResult.reason || 'Invalid geometry'})`,
+      });
       return {
         isValid: false,
         message: `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum acceptable GROSS R:R (${rrResult.reason || 'Invalid geometry'})`,
@@ -554,7 +564,7 @@ export class SignalValidator {
         adjustedTp1: adjustedTp1 ?? adjustedTP,
         adjustedTp2: adjustedTp2 ?? adjustedTP,
         adjustedTp3: adjustedTp3 ?? adjustedTP,
-        adjustedGrossRR: rrResult.grossRR,
+        adjustedGrossRR: rrResult.effectiveGrossRR,
         adjustedPrimaryRR: rrResult.primaryRR,
         adjustedTp1RR: rrResult.tp1RR,
         adjustedTp2RR: rrResult.tp2RR,
@@ -570,7 +580,7 @@ export class SignalValidator {
       adjustedTp1: adjustedTp1 ?? adjustedTP,
       adjustedTp2: adjustedTp2 ?? adjustedTP,
       adjustedTp3: adjustedTp3 ?? adjustedTP,
-      adjustedGrossRR: rrResult.grossRR,
+      adjustedGrossRR: rrResult.effectiveGrossRR,
       adjustedPrimaryRR: rrResult.primaryRR,
       adjustedTp1RR: rrResult.tp1RR,
       adjustedTp2RR: rrResult.tp2RR,

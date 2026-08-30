@@ -19,7 +19,7 @@
  * STRICT EXECUTION POLICY:
  * - If ANY hard gate fails -> candidate is NOT tradeable -> DO NOT generate a signal.
  * - Numerical score NEVER overrides hard gates. (A score of 95 with invalid entry data is strictly rejected).
- * - ACCEPTANCE CRITERIA: FINAL_SCORE >= 72 AND ALL HARD_GATES = PASS.
+ * - ACCEPTANCE CRITERIA: FINAL_SCORE >= 70 AND ALL HARD_GATES = PASS.
  * - Only then classify the candidate as TRADEABLE.
  */
 
@@ -29,7 +29,7 @@ import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 import { CooldownManager } from './CooldownManager.js';
 import { SignalFingerprint } from './SignalFingerprint.js';
 import { MarketStructureDetector } from './MarketStructureDetector.js';
-import { RiskRewardCalculator } from './RiskRewardCalculator.js';
+import { RiskRewardCalculator, logRrRejectionDiagnostic } from './RiskRewardCalculator.js';
 import { logger } from '../logger.js';
 
 export interface HardGateEvaluation {
@@ -363,11 +363,22 @@ export class Gate7FinalTradeValidation {
     let g9Reason: string | undefined;
 
     
-    const canonicalRR = RiskRewardCalculator.calculate(ctx.entryPrice, ctx.stopLoss, tp1, tp2, tp3, ctx.direction);
+    const canonicalRR = RiskRewardCalculator.calculate(ctx.entryPrice, ctx.stopLoss, tp1, tp2, tp3, ctx.direction, minRR);
+    const effectiveRR = canonicalRR.effectiveGrossRR;
 
-    if (isNaN(canonicalRR.grossRR) || !isFinite(canonicalRR.grossRR) || canonicalRR.grossRR < minRR) {
+    if (isNaN(effectiveRR) || !isFinite(effectiveRR) || effectiveRR < minRR) {
       g9Passed = false;
-      g9Reason = `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${canonicalRR.grossRR.toFixed(2)}:1) is below ${minRR}:1 minimum acceptable GROSS R:R`;
+      g9Reason = `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${effectiveRR.toFixed(2)}:1) is below ${minRR}:1 minimum acceptable GROSS R:R`;
+      logRrRejectionDiagnostic({
+        symbol: ctx.symbol,
+        direction: ctx.direction,
+        entryPrice: ctx.entryPrice,
+        stopLoss: ctx.stopLoss,
+        tp1,
+        tp2,
+        tp3,
+        rejectionReason: g9Reason,
+      });
     }
 
     hardGates.push({
@@ -376,7 +387,7 @@ export class Gate7FinalTradeValidation {
       name: 'Minimum Acceptable R:R',
       passed: g9Passed,
       reason: g9Reason,
-      data: { effectiveRR: canonicalRR.grossRR, minRR, calculatedGrossRR: canonicalRR.grossRR },
+      data: { effectiveRR, minRR, calculatedGrossRR: canonicalRR.grossRR, passedViaTp3: canonicalRR.passedViaTp3 },
     });
 
     if (!g9Passed) reasons.push(`[Gate 9 Minimum Acceptable RR] ${g9Reason}`);
