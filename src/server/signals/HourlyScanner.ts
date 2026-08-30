@@ -1032,11 +1032,17 @@ export class HourlyScannerService {
         }
       }
 
+      
       // 9. Persist rejected candidates audit log
       if (rejectedDuringScan.length > 0) {
         await ScannerPersistence.recordRejectedCandidates(rejectedDuringScan);
         for (const rej of rejectedDuringScan) {
+          const match = rej.reason.match(/REJECTED: ([A-Z0-9_]+)/);
+          const gate = match ? match[1] : 'OTHER_REJECTION';
+          aggregatedRejectionCounts[gate] = (aggregatedRejectionCounts[gate] || 0) + 1;
+
           const dir: SignalDirection = (rej.direction === 'SELL' ? 'SELL' : 'BUY');
+
           const fp = SignalFingerprint.generateFingerprint({
             symbol: rej.symbol,
             direction: dir,

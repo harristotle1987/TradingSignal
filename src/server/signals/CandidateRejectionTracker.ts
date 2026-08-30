@@ -322,10 +322,9 @@ export class CandidateRejectionTracker {
     const counts: Record<string, number> = {};
 
     for (const record of this.records.values()) {
-      if (record.finalDecision === 'REJECTED' || record.failedGates.length > 0) {
-        for (const gate of record.failedGates) {
-          counts[gate] = (counts[gate] || 0) + 1;
-        }
+      if (record.finalDecision === 'REJECTED') {
+        const primaryGate = record.failedGates[0] || 'OTHER_REJECTION';
+        counts[primaryGate] = (counts[primaryGate] || 0) + 1;
       }
     }
 

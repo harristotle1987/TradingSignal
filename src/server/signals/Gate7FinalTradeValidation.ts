@@ -362,22 +362,23 @@ export class Gate7FinalTradeValidation {
     let g9Passed = true;
     let g9Reason: string | undefined;
 
-    const rrResult = RiskRewardCalculator.calculate(ctx.entryPrice, ctx.stopLoss, tp1, tp2, tp3, ctx.direction);
-    const calculatedGrossRR = rrResult.grossRR;
-    const effectiveRR = ctx.netRiskRewardRatio ?? (ctx.riskRewardRatio ?? calculatedGrossRR);
+    
+    const canonicalRR = RiskRewardCalculator.calculate(ctx.entryPrice, ctx.stopLoss, tp1, tp2, tp3, ctx.direction);
 
-    if (isNaN(effectiveRR) || !isFinite(effectiveRR) || effectiveRR < minRR) {
+    if (isNaN(canonicalRR.grossRR) || !isFinite(canonicalRR.grossRR) || canonicalRR.grossRR < minRR) {
       g9Passed = false;
-      g9Reason = `Risk-to-reward ratio (${effectiveRR.toFixed(2)}) is below required minimum (${minRR}).`;
+      g9Reason = `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${canonicalRR.grossRR.toFixed(2)}:1) is below ${minRR}:1 minimum acceptable GROSS R:R`;
     }
+
     hardGates.push({
       id: 9,
       code: 'MIN_ACCEPTABLE_RR',
       name: 'Minimum Acceptable R:R',
       passed: g9Passed,
       reason: g9Reason,
-      data: { effectiveRR, minRR, calculatedGrossRR },
+      data: { effectiveRR: canonicalRR.grossRR, minRR, calculatedGrossRR: canonicalRR.grossRR },
     });
+
     if (!g9Passed) reasons.push(`[Gate 9 Minimum Acceptable RR] ${g9Reason}`);
 
     // =========================================================================
@@ -569,7 +570,7 @@ export class Gate7FinalTradeValidation {
       adjustedEntryPrice: ctx.entryPrice,
       adjustedStopLoss: ctx.stopLoss,
       adjustedTakeProfit: tp1,
-      adjustedNetRR: effectiveRR,
+      adjustedNetRR: canonicalRR.grossRR,
     };
   }
 }
