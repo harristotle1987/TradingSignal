@@ -124,6 +124,7 @@ export interface Gate6CandidateEvaluation {
   maximumPossibleScoreAfterRemainingAnalysis: number;
   scoreAfterGate6: number;
   finalScore: number;
+  factors?: any;
 }
 
 export interface Gate6ProgressiveAnalysisResult {
@@ -145,6 +146,27 @@ export interface Gate6ProgressiveAnalysisResult {
 
 export class Gate6ProgressiveMTF {
   private static readonly MAX_EXPENSIVE_CANDIDATES = 5;
+
+  private static extractFactors(cand: { preliminaryScore?: number }, l1?: Gate6Layer1Result | null, l2?: Gate6Layer2Result | null, compositeMtfScore?: number): any {
+    return {
+      trendAlignmentScore: l1?.metrics?.trendAlignment?.score,
+      emaStructureScore: l1?.metrics?.emaStructure?.score,
+      momentumScore: l1?.metrics?.momentum?.score,
+      rsiScore: l1?.metrics?.rsi?.score,
+      macdScore: l1?.metrics?.macd?.score,
+      adxScore: l1?.metrics?.adx?.score,
+      marketStructureScore: l1?.metrics?.marketStructure?.score,
+      volatilityAtrScore: l2?.metrics?.atr?.score,
+      supportResistanceScore: l2?.metrics?.supportResistance?.score,
+      marketStructureConfirmationScore: l2?.metrics?.marketStructureConfirmation?.score,
+      compositeMtfScore: compositeMtfScore ?? l1?.score,
+      preliminaryScore: cand?.preliminaryScore,
+      // Standard compatibility keys
+      trendScore: l1?.metrics?.trendAlignment?.score,
+      structureScore: l1?.metrics?.marketStructure?.score,
+      volatilityScore: l2?.metrics?.atr?.score,
+    };
+  }
 
   /**
    * Evaluates Layer 1 (15m & 1h) technical confluence.
@@ -709,6 +731,7 @@ export class Gate6ProgressiveMTF {
           maximumPossibleScoreAfterRemainingAnalysis,
           scoreAfterGate6,
           finalScore,
+          factors: Gate6ProgressiveMTF.extractFactors(cand, null, null, scoreBeforeGate6),
         });
       } else {
         mtfEligibleCandidates.push(cand);
@@ -782,6 +805,7 @@ export class Gate6ProgressiveMTF {
               maximumPossibleScoreAfterRemainingAnalysis: preMaxPossible,
               scoreAfterGate6: 0,
               finalScore: 0,
+              factors: Gate6ProgressiveMTF.extractFactors(cand, null, null, 0),
             };
             return { cand, candles15m: [], l1Result: null, evalFail };
           }
@@ -807,6 +831,7 @@ export class Gate6ProgressiveMTF {
               maximumPossibleScoreAfterRemainingAnalysis: Math.min(100, Math.round(l1Result.score * 0.6 + 40) + 15),
               scoreAfterGate6: l1Result.score,
               finalScore: l1Result.score,
+              factors: Gate6ProgressiveMTF.extractFactors(cand, l1Result, null, l1Result.score),
             };
             return { cand, candles15m, l1Result, evalFail: evalL1Fail };
           }
@@ -833,6 +858,7 @@ export class Gate6ProgressiveMTF {
               maximumPossibleScoreAfterRemainingAnalysis,
               scoreAfterGate6: l1Result.score,
               finalScore: l1Result.score,
+              factors: Gate6ProgressiveMTF.extractFactors(cand, l1Result, null, l1Result.score),
             };
             return { cand, candles15m, l1Result, evalFail: evalPostL1Fail };
           }
@@ -938,6 +964,7 @@ export class Gate6ProgressiveMTF {
                   maximumPossibleScoreAfterRemainingAnalysis,
                   scoreAfterGate6,
                   finalScore,
+                  factors: Gate6ProgressiveMTF.extractFactors(cand, l1Result, l2Result, compositeScore),
                 };
                 return { isSuccess: false, evalData: evalL2Fail };
               }
@@ -959,6 +986,7 @@ export class Gate6ProgressiveMTF {
                 maximumPossibleScoreAfterRemainingAnalysis,
                 scoreAfterGate6,
                 finalScore,
+                factors: Gate6ProgressiveMTF.extractFactors(cand, l1Result, l2Result, compositeScore),
               };
               return { isSuccess: true, evalData: evalSuccess };
             })

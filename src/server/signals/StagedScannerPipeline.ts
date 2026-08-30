@@ -389,6 +389,7 @@ export async function runStagedPipeline(
         maximumPossibleScoreAfterRemainingAnalysis: rej.maximumPossibleScoreAfterRemainingAnalysis,
         scoreAfterGate6: rej.scoreAfterGate6,
         finalScore: rej.finalScore,
+        factors: rej.factors,
       });
 
       Gate35SignalFunnelAnalytics.recordCandidate({
@@ -649,6 +650,8 @@ export async function runStagedPipeline(
           tp2RR: scoring.tp2RR,
           tp3RR: scoring.tp3RR,
           timestamp: now,
+          factors: scoring.factors,
+          tpDiagnostics: scoring.tpDiagnostics,
         });
         Gate35SignalFunnelAnalytics.recordCandidate({
           symbol: asset, direction: scoring.direction, stage: 'GATE_3', score: scoring.score || 0,
@@ -740,6 +743,8 @@ export async function runStagedPipeline(
           tp2RR: scoring.tp2RR,
           tp3RR: scoring.tp3RR,
           timestamp: now,
+          factors: scoring.factors,
+          tpDiagnostics: scoring.tpDiagnostics,
         });
 
         Gate35SignalFunnelAnalytics.recordCandidate({
@@ -790,6 +795,8 @@ export async function runStagedPipeline(
           tp2RR: validation.adjustedTp2RR ?? scoring.tp2RR,
           tp3RR: validation.adjustedTp3RR ?? scoring.tp3RR,
           timestamp: now,
+          factors: scoring.factors,
+          tpDiagnostics: scoring.tpDiagnostics,
         });
         Gate35SignalFunnelAnalytics.recordCandidate({
           symbol: asset, direction: scoring.direction, stage: 'GATE_9', score: scoring.score,
@@ -845,6 +852,8 @@ export async function runStagedPipeline(
           tp2: scoring.tp2,
           tp3: scoring.tp3,
           timestamp: now,
+          factors: scoring.factors,
+          tpDiagnostics: scoring.tpDiagnostics,
         });
         logAuditHelper(asset, scoring, primaryStrategyName, crossCheck, fp, reason);
         continue;
@@ -874,6 +883,8 @@ export async function runStagedPipeline(
           tp2: scoring.tp2,
           tp3: scoring.tp3,
           timestamp: now,
+          factors: scoring.factors,
+          tpDiagnostics: scoring.tpDiagnostics,
         });
         logAuditHelper(asset, scoring, primaryStrategyName, crossCheck, fp, reason);
         continue;
@@ -1032,6 +1043,7 @@ export async function runStagedPipeline(
         validatedAt: validation.validatedAt, dataSource: `${providerName} with Live Price & Sentiment Cross-Validation`,
         status: 'WAITING_ENTRY', isActionableSignal: true, validationReason: 'VALID',
         aiAssessment: 'Pending NVIDIA AI comparative ranking...', score: gate8Eval.finalScore, coreScore: gate8Eval.finalScore,
+        factors: gate8Eval.factors || scoring.factors,
         entryHitTimestamp: null, tp1Status: 'PENDING', tp2Status: 'PENDING', tp3Status: 'PENDING', slStatus: 'ACTIVE_FOR_ENTRY_ONLY',
       };
 
@@ -1220,6 +1232,7 @@ export async function runStagedPipeline(
         tp2: rej.signal.tp2,
         tp3: rej.signal.tp3,
         timestamp: now,
+        factors: rej.signal.factors,
       });
     }
 
@@ -1232,6 +1245,7 @@ export async function runStagedPipeline(
         failedGates: [],
         finalDecision: 'DISPATCHED',
         stage: 'FINAL_DISPATCH',
+        factors: sig.factors,
       });
     }
 

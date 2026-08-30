@@ -86,6 +86,7 @@ export interface CandidateRejectionAudit {
   timestamp?: number;
   is72PlusRejected?: boolean;
   factors?: any;
+  tpDiagnostics?: any;
 }
 
 export class CandidateRejectionTracker {
@@ -225,7 +226,8 @@ export class CandidateRejectionTracker {
       `score: ${audit.score}\n` +
       `primaryRejectionReason: ${audit.primaryRejectionReason}\n` +
       `failedGates: [${audit.failedGates.map((g) => `"${g}"`).join(', ')}]\n` +
-      `finalDecision: ${audit.finalDecision}`
+      `finalDecision: ${audit.finalDecision}` +
+      (audit.tpDiagnostics ? `\ntpDiagnostics: ${JSON.stringify(audit.tpDiagnostics)}` : '')
     );
   }
 

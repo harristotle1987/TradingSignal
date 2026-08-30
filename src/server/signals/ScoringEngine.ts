@@ -10,6 +10,15 @@ import { serverConfig } from '../config.js';
 import { ASSET_CLASS_GUARDRAILS, GuardrailRange, AtrTpGenerator } from './AtrTpGenerator.js';
 import { RiskRewardCalculator } from './RiskRewardCalculator.js';
 
+export interface TpCalculationDiagnostics {
+  rawTp1BeforeClamp: number;
+  rawTp2BeforeClamp: number;
+  rawTp3BeforeClamp: number;
+  guardrailTp2MinPct: number;
+  guardrailTp2MaxPct: number;
+  structuralAnchorUsedForTp2: boolean;
+}
+
 export interface ScoringFactors {
   higherTfTrendScore: number;     // 0 - 20 (4H / 1D major direction)
   marketStructureScore: number;   // 0 - 15 (Swing structure, HH/HL, 1H EMA stack)
@@ -49,6 +58,7 @@ export interface ScoringResult {
   tp1?: number;
   tp2?: number;
   tp3?: number;
+  tpDiagnostics?: TpCalculationDiagnostics;
   riskRewardRatio: number;
   grossRR?: number;
   primaryRR?: number;
@@ -556,6 +566,27 @@ export class ScoringEngine {
     );
     const totalScore = coreScore;
 
+    const factors: ScoringFactors = {
+      higherTfTrendScore,
+      marketStructureScore,
+      momentumScore,
+      volumeOrderFlowScore,
+      supportResistanceScore,
+      volatilityAtrScore,
+      entryQualityScore,
+      newsSentimentScore,
+      coreScore: totalScore,
+      totalScore,
+      // Legacy compatibility
+      trendScore: higherTfTrendScore,
+      structureScore: marketStructureScore,
+      volatilityScore: volatilityAtrScore,
+      volumeScore: volumeOrderFlowScore,
+      strategyAgreementScore: Math.round((strategyEval.agreeingStrategiesCount / 6) * 20),
+      riskRewardScore: 8,
+      freshnessAgreementScore: newsSentimentScore * 2,
+    };
+
     // =========================================================================
     // GATE 28 / GATE 81: Independent Confirmation Diversity Evaluation (Secondary Evidence)
     // Evaluates confirmation diversity across independent indicator categories
@@ -615,11 +646,21 @@ export class ScoringEngine {
 
     const primaryStrategyName = strategyEval.strategyResults?.find(s => s.passed)?.name || 'Multi-Timeframe Trend Confluence';
 
+    // Use a blended ATR basis for take-profit sizing rather than the
+    // 15-minute ATR alone. The 15m ATR is naturally small and was
+    // confirmed (via live scan data) to cause TP2 to hit its guardrail
+    // floor almost universally, while SL is driven by genuine
+    // structural swing points and is not similarly constrained. A
+    // blend keeps TP responsive to short-term volatility while
+    // anchoring it to a timeframe more comparable to where SL's
+    // structural distance actually comes from.
+    const tpAtrBasis = atr_1h > 0 ? (atr_15m * 0.5 + atr_1h * 0.5) : atr_15m;
+
     const tpSetup = ScoringEngine.calculateThreeTakeProfits(
       direction,
       entryPrice,
       stopLoss,
-      atr_15m,
+      tpAtrBasis,
       support15m,
       resistance15m,
       majorSupport1h,
@@ -653,7 +694,9 @@ export class ScoringEngine {
         rrResult.primaryRR,
         rrResult.tp1RR,
         rrResult.tp2RR,
-        rrResult.tp3RR
+        rrResult.tp3RR,
+        factors,
+        tpSetup.diagnostics
       );
     }
     const rawRR = rrResult.grossRR;
@@ -678,7 +721,9 @@ export class ScoringEngine {
         rrResult.primaryRR,
         rrResult.tp1RR,
         rrResult.tp2RR,
-        rrResult.tp3RR
+        rrResult.tp3RR,
+        factors,
+        tpSetup.diagnostics
       );
     }
 
@@ -721,7 +766,9 @@ export class ScoringEngine {
         rrResult.primaryRR,
         rrResult.tp1RR,
         rrResult.tp2RR,
-        rrResult.tp3RR
+        rrResult.tp3RR,
+        factors,
+        tpSetup.diagnostics
       );
     }
 
@@ -743,7 +790,9 @@ export class ScoringEngine {
         rrResult.primaryRR,
         rrResult.tp1RR,
         rrResult.tp2RR,
-        rrResult.tp3RR
+        rrResult.tp3RR,
+        factors,
+        tpSetup.diagnostics
       );
     }
 
@@ -774,7 +823,9 @@ export class ScoringEngine {
         rrResult.primaryRR,
         rrResult.tp1RR,
         rrResult.tp2RR,
-        rrResult.tp3RR
+        rrResult.tp3RR,
+        factors,
+        tpSetup.diagnostics
       );
     }
 
@@ -810,7 +861,9 @@ export class ScoringEngine {
         rrResult.primaryRR,
         rrResult.tp1RR,
         rrResult.tp2RR,
-        rrResult.tp3RR
+        rrResult.tp3RR,
+        factors,
+        tpSetup.diagnostics
       );
     }
 
@@ -832,7 +885,9 @@ export class ScoringEngine {
         rrResult.primaryRR,
         rrResult.tp1RR,
         rrResult.tp2RR,
-        rrResult.tp3RR
+        rrResult.tp3RR,
+        factors,
+        tpSetup.diagnostics
       );
     }
 
@@ -854,7 +909,9 @@ export class ScoringEngine {
         rrResult.primaryRR,
         rrResult.tp1RR,
         rrResult.tp2RR,
-        rrResult.tp3RR
+        rrResult.tp3RR,
+        factors,
+        tpSetup.diagnostics
       );
     }
 
@@ -865,26 +922,8 @@ export class ScoringEngine {
 
     const hypotheticalRisk = this.calculateHypotheticalRisk(entryPrice, stopLoss, profile.minPracticalStopDistance);
 
-    const factors: ScoringFactors = {
-      higherTfTrendScore,
-      marketStructureScore,
-      momentumScore,
-      volumeOrderFlowScore,
-      supportResistanceScore,
-      volatilityAtrScore,
-      entryQualityScore,
-      newsSentimentScore,
-      coreScore: totalScore,
-      totalScore,
-      // Legacy compatibility
-      trendScore: higherTfTrendScore,
-      structureScore: marketStructureScore,
-      volatilityScore: volatilityAtrScore,
-      volumeScore: volumeOrderFlowScore,
-      strategyAgreementScore: Math.round((strategyEval.agreeingStrategiesCount / 6) * 20),
-      riskRewardScore: rawRR >= 2.5 ? 10 : 8,
-      freshnessAgreementScore: newsSentimentScore * 2,
-    };
+    // Update dynamic factor fields
+    factors.riskRewardScore = rawRR >= 2.5 ? 10 : 8;
 
     return {
       isValid: true,
@@ -900,6 +939,7 @@ export class ScoringEngine {
       tp1,
       tp2,
       tp3,
+      tpDiagnostics: tpSetup.diagnostics,
       riskRewardRatio: rawRR,
       grossRR: rawRR,
       primaryRR: rrResult.primaryRR,
@@ -963,7 +1003,7 @@ export class ScoringEngine {
     minPracticalTargetDistance: number,
     precision: number,
     assetClass: string
-  ): { tp1: number; tp2: number; tp3: number } {
+  ): { tp1: number; tp2: number; tp3: number; diagnostics?: TpCalculationDiagnostics } {
     if (direction !== 'BUY' && direction !== 'SELL') {
       throw new Error(`Invalid direction value: ${direction}`);
     }
@@ -1087,7 +1127,20 @@ export class ScoringEngine {
     return {
       tp1: Number(tp1.toFixed(precision)),
       tp2: Number(tp2.toFixed(precision)),
-      tp3: Number(tp3.toFixed(precision))
+      tp3: Number(tp3.toFixed(precision)),
+      // Diagnostics only — not used for any trading decision. Lets us
+      // confirm from real scan data whether the guardrail floor is
+      // still binding as often after Fix 1, and whether the
+      // structural anchor (majorResistance1h/majorSupport1h) or the
+      // pure-ATR component is driving the raw value.
+      diagnostics: {
+        rawTp1BeforeClamp: Number(tp1Clamped.toFixed(precision)),
+        rawTp2BeforeClamp: Number(tp2Clamped.toFixed(precision)),
+        rawTp3BeforeClamp: Number(tp3Clamped.toFixed(precision)),
+        guardrailTp2MinPct: baseGuardrails.tp2.minPct,
+        guardrailTp2MaxPct: baseGuardrails.tp2.maxPct,
+        structuralAnchorUsedForTp2: isBuy ? (majorResistance1h > entryPrice) : (majorSupport1h < entryPrice),
+      }
     };
   }
 
@@ -1155,7 +1208,9 @@ export class ScoringEngine {
     primaryRR = 0,
     tp1RR = 0,
     tp2RR = 0,
-    tp3RR = 0
+    tp3RR = 0,
+    factors?: ScoringFactors,
+    tpDiagnostics?: TpCalculationDiagnostics
   ): ScoringResult {
     return {
       isValid: false,
@@ -1172,6 +1227,7 @@ export class ScoringEngine {
       tp1,
       tp2,
       tp3,
+      tpDiagnostics,
       riskRewardRatio,
       grossRR: riskRewardRatio,
       primaryRR: primaryRR || riskRewardRatio,
@@ -1198,7 +1254,7 @@ export class ScoringEngine {
         suggestedRiskAmount: 0,
         suggestedPositionSize: 0,
       },
-      factors: {
+      factors: factors || {
         higherTfTrendScore: 0,
         marketStructureScore: 0,
         momentumScore: 0,

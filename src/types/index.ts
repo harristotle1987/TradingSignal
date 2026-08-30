@@ -238,6 +238,7 @@ export interface TradingSignal {
   monteCarloSimulationStatus?: 'INSUFFICIENT_DATA' | 'ROBUST_STABLE' | 'ELEVATED_DRAWDOWN_RISK' | 'HIGH_RUIN_RISK';
   expiresAt?: number;
   notifiedStates?: string[];
+  factors?: any;
 }
 
 export interface ScannerFunnelCounters {
