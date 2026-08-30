@@ -927,7 +927,7 @@ export async function runStagedPipeline(
 
       if (!gate8Eval.isTradeable) {
         const failedGates: StandardFailedGate[] = [];
-        if (gate8Eval.finalScore < (thresholds.signalThreshold || 72) || gate8Eval.finalScore < 72) {
+        if (gate8Eval.finalScore < (thresholds.signalThreshold || 70) || gate8Eval.finalScore < 70) {
           failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
         }
         const factors: any = gate8Eval.factors || {};
@@ -941,7 +941,7 @@ export async function runStagedPipeline(
         if (factors.rrQuality !== undefined && factors.rrQuality < 3.5) failedGates.push(StandardFailedGate.RR);
 
         if (failedGates.length === 0) {
-          if (gate8Eval.finalScore < 72) {
+          if (gate8Eval.finalScore < (thresholds.signalThreshold || 70)) {
             failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
           } else {
             failedGates.push(StandardFailedGate.DATA_INTEGRITY);
@@ -1240,7 +1240,7 @@ export async function runStagedPipeline(
       rejectionTracker.recordCandidate({
         symbol: sig.symbol,
         direction: sig.direction,
-        score: sig.score || 72,
+        score: sig.score || (thresholds.signalThreshold || 70),
         primaryRejectionReason: 'All mandatory gates passed and qualified for dispatch',
         failedGates: [],
         finalDecision: 'DISPATCHED',
@@ -1341,7 +1341,7 @@ export async function runStagedPipeline(
     logger.info(`  * Gate 5 Deep Selection (Rank / Cluster Cap): ${rejGate5}`);
     logger.info(`  * Gate 6 Layer 1 MTF (15m/1h Disagreement): ${rejGate6L1}`);
     logger.info(`  * Gate 6 Layer 2 MTF (5m/4h Structure / ATR): ${rejGate6L2}`);
-    logger.info(`  * Stage 2 Scoring (<72 Score or Setup Mismatch): ${rejStage2}`);
+    logger.info(`  * Stage 2 Scoring (<${thresholds.signalThreshold || 70} Score or Setup Mismatch): ${rejStage2}`);
     logger.info(`  * Stage 3 Gate 7 (13 Mandatory Hard Gates): ${rejGate7}`);
     logger.info(`  * Gate 8 Final Score Threshold (<${thresholds.signalThreshold}): ${rejGate8}`);
     logger.info(`  * Gate 9 Signal Cap (Excess over max 3): ${rejGate9}`);
@@ -1362,8 +1362,8 @@ export async function runStagedPipeline(
 
     profiler.endStage('Stage 3: Final Trade Validation', finalSignals.length);
 
-    const candidates72PlusCount = allCandidateScores.filter((s) => s.score >= 72).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= 72 || r.compositeMtfScore >= 72)).length;
-    const rejected72PlusCount = allCandidateScores.filter((s) => s.score >= 72 && !s.passed).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= 72 || r.compositeMtfScore >= 72)).length;
+    const candidates72PlusCount = allCandidateScores.filter((s) => s.score >= (thresholds.signalThreshold || 70)).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= (thresholds.signalThreshold || 70) || r.compositeMtfScore >= (thresholds.signalThreshold || 70))).length;
+    const rejected72PlusCount = allCandidateScores.filter((s) => s.score >= (thresholds.signalThreshold || 70) && !s.passed).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= (thresholds.signalThreshold || 70) || r.compositeMtfScore >= (thresholds.signalThreshold || 70))).length;
 
     profiler.setFunnelMetrics({
       preliminaryCandidates: stage1OutputCount,

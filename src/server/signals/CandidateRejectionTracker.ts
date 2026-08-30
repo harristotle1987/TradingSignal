@@ -29,6 +29,7 @@
  */
 
 import { logger } from '../logger.js';
+import { serverConfig } from '../config.js';
 
 export enum StandardFailedGate {
   FINAL_SCORE_UNREACHABLE = 'FINAL_SCORE_UNREACHABLE',
@@ -120,7 +121,8 @@ export class CandidateRejectionTracker {
     }
 
     if (clean.includes('SCORE_BELOW_THRESHOLD') || clean.includes('Composite signal score')) {
-      return `Signal score (${score}/100) is below the minimum tradeability threshold of 72.`;
+      const minThreshold = serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 70;
+      return `Signal score (${score}/100) is below the minimum tradeability threshold of ${minThreshold}.`;
     }
 
     if (clean.includes('Exceeded max allowed signals')) {
@@ -146,8 +148,9 @@ export class CandidateRejectionTracker {
    * Records or updates a candidate's evaluation and rejection audit.
    */
   public recordCandidate(audit: CandidateRejectionAudit): void {
+    const minThreshold = serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 70;
     const effectiveScore = audit.finalScore ?? audit.score ?? audit.scoreBeforeGate6 ?? 0;
-    const is72Plus = (effectiveScore >= 72 || (audit.scoreBeforeGate6 ?? 0) >= 72 || audit.is72PlusRejected === true) && audit.finalDecision === 'REJECTED';
+    const is72Plus = (effectiveScore >= minThreshold || (audit.scoreBeforeGate6 ?? 0) >= minThreshold || audit.is72PlusRejected === true) && audit.finalDecision === 'REJECTED';
     const statusText = audit.finalDecision === 'REJECTED' ? 'REJECTED — NOT TRADEABLE' : (audit.statusText || 'TRADEABLE');
     const rejectionSummary = audit.rejectionSummary || CandidateRejectionTracker.formatHumanReadableSummary(audit.primaryRejectionReason, audit.failedGates, effectiveScore);
     const timestamp = audit.timestamp || Date.now();
@@ -176,8 +179,8 @@ export class CandidateRejectionTracker {
       // because of a prior evaluation being merged in. The 72+ visibility
       // flag is tracked independently ("was this ever a 72+ candidate")
       // and never overwrites the live score.
-      const everReached72Plus = (existing.score >= 72) || (existing.scoreBeforeGate6 ?? 0) >= 72 || is72Plus;
-      const isStill72Plus = (everReached72Plus || effectiveScore >= 72) && cleanAudit.finalDecision === 'REJECTED';
+      const everReached72Plus = (existing.score >= minThreshold) || (existing.scoreBeforeGate6 ?? 0) >= minThreshold || is72Plus;
+      const isStill72Plus = (everReached72Plus || effectiveScore >= minThreshold) && cleanAudit.finalDecision === 'REJECTED';
 
       this.records.set(audit.symbol, {
         ...existing,
@@ -287,12 +290,13 @@ export class CandidateRejectionTracker {
             lowerReason.includes('mtf') ||
             lowerReason.includes('timeframe'));
 
+        const minThreshold = serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 70;
         const isScore =
           record.failedGates.includes(StandardFailedGate.FINAL_SCORE_BELOW_72) ||
           record.failedGates.includes(StandardFailedGate.FINAL_SCORE_UNREACHABLE) ||
           lowerReason.includes('score') ||
-          (record.finalScore !== undefined && record.finalScore < 72) ||
-          (record.score > 0 && record.score < 72);
+          (record.finalScore !== undefined && record.finalScore < minThreshold) ||
+          (record.score > 0 && record.score < minThreshold);
 
         const isRR =
           record.failedGates.includes(StandardFailedGate.RR) ||
@@ -415,8 +419,9 @@ export class CandidateRejectionTracker {
       gates.add(CandidateRejectionTracker.mapGate7Code(code));
     }
 
-    // A candidate scoring >= 72 MUST NOT receive FINAL_SCORE_BELOW_72
-    if (score < 72 && (score > 0 || rejectionReason.toLowerCase().includes('score'))) {
+    const minThreshold = serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 70;
+    // A candidate scoring >= minThreshold MUST NOT receive FINAL_SCORE_BELOW_72
+    if (score < minThreshold && (score > 0 || rejectionReason.toLowerCase().includes('score'))) {
       gates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
     }
 
@@ -437,10 +442,11 @@ export class CandidateRejectionTracker {
     const failedGates = new Set<StandardFailedGate>();
     const lower = (reason || '').toLowerCase();
 
+    const minThreshold = serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 70;
     // The authoritative rule:
-    // score < 72 → FINAL_SCORE_BELOW_72
-    // score >= 72 → score gate PASSED. MUST NOT receive FINAL_SCORE_BELOW_72.
-    if (score < 72 && (score > 0 || lower.includes('score') || lower.includes('final_score') || lower.includes('hurdle') || lower.includes('tradeability threshold') || lower.includes('scoring criteria'))) {
+    // score < minThreshold → FINAL_SCORE_BELOW_72
+    // score >= minThreshold → score gate PASSED. MUST NOT receive FINAL_SCORE_BELOW_72.
+    if (score < minThreshold && (score > 0 || lower.includes('score') || lower.includes('final_score') || lower.includes('hurdle') || lower.includes('tradeability threshold') || lower.includes('scoring criteria'))) {
       failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
     }
 
@@ -574,9 +580,9 @@ export class CandidateRejectionTracker {
     const failedGates: Set<StandardFailedGate> = new Set();
     const reason = scoring.rejectionReason || '';
     const reasonLower = reason.toLowerCase();
-    const targetScoreThreshold = thresholds.signalThreshold || 72;
+    const targetScoreThreshold = thresholds.signalThreshold || 70;
 
-    if (scoring.score < targetScoreThreshold || scoring.score < 72) {
+    if (scoring.score < targetScoreThreshold || scoring.score < 70) {
       failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
     }
     if (reasonLower.includes('directional') || reasonLower.includes('trend') || 
@@ -615,7 +621,7 @@ export class CandidateRejectionTracker {
     }
 
     if (failedGates.size === 0) {
-      if (scoring.score < 72) {
+      if (scoring.score < (thresholds.signalThreshold || 70)) {
         failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
       } else {
         failedGates.add(StandardFailedGate.DATA_INTEGRITY);
@@ -633,7 +639,7 @@ export class CandidateRejectionTracker {
    */
   public static extractGate8FailedGates(
     gate8Eval: { finalScore: number; rejectionReason?: string; factors?: Record<string, number> },
-    threshold = 72
+    threshold = 70
   ): { primaryReason: string; failedGates: StandardFailedGate[] } {
     const failedGates: Set<StandardFailedGate> = new Set();
 

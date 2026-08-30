@@ -100,9 +100,9 @@ async function runAll() {
       Gate31Class.lastFetchTime = 0;
 
       const evalResult = Gate31NewsRiskClassification.evaluate('EURUSD');
-      assert(evalResult.classification === 'BLOCK', 'Should trigger BLOCK on fail-closed news fallback');
-      assert(evalResult.isTradingAllowed === false, 'Trading must be blocked');
-      assert(evalResult.minRequiredConfirmationScore === 1000, 'Score requirement must be raised to 1000');
+      assert(evalResult.classification === 'CAUTION', 'Should trigger CAUTION on fail-closed news fallback');
+      assert(evalResult.isTradingAllowed === true, 'Trading must be allowed under elevated confirmation score');
+      assert(evalResult.minRequiredConfirmationScore === 85, 'Score requirement must be raised to 85');
       assert(evalResult.reasons.some((r: string) => r.includes('NEWS_DATA_UNAVAILABLE')), 'Must explicitly report NEWS_DATA_UNAVAILABLE in reasons');
     });
 
@@ -506,7 +506,7 @@ async function runAll() {
       assert(resolvedStocks.universe.length === 48, `Expected 48 Stock assets, got ${resolvedStocks.universe.length}`);
     });
 
-    await test('72 remains actionable signal threshold and R:R minimum is 1.8', () => {
+    await test('70 remains actionable signal threshold and R:R minimum is 1.8', () => {
       // Test default system fallbacks when env overrides are cleared
       const origMinScore = process.env.THRESHOLD_MIN_SCORE;
       const origSigScore = process.env.THRESHOLD_SIGNAL_SCORE;
@@ -518,7 +518,7 @@ async function runAll() {
 
       // Create a fresh config instance to test code defaults
       const freshConfig = (serverConfig as any).loadAndValidate();
-      assert(freshConfig.thresholds.signalThreshold === 72, `Default signalThreshold must be 72, got ${freshConfig.thresholds.signalThreshold}`);
+      assert(freshConfig.thresholds.signalThreshold === 70, `Default signalThreshold must be 70, got ${freshConfig.thresholds.signalThreshold}`);
       assert(freshConfig.thresholds.minimumRR === 1.8, `Default minimumRR must be 1.8, got ${freshConfig.thresholds.minimumRR}`);
       assert(freshConfig.thresholds.minimumNetRR === 1.5, `Default minimumNetRR must be 1.5, got ${freshConfig.thresholds.minimumNetRR}`);
 

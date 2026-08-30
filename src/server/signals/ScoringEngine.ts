@@ -613,7 +613,7 @@ export class ScoringEngine {
       throw new Error(`Invalid direction value: ${direction}`);
     }
 
-    const profile = this.getAssetExecutionProfile(cleanSymbol, entryPrice, atr_15m);
+    const profile = this.getAssetExecutionProfile(cleanSymbol, entryPrice, Math.max(atr_15m, atr_1h));
     const precision = profile.precision;
 
     let stopLoss = 0;
@@ -622,8 +622,9 @@ export class ScoringEngine {
     let tp2 = 0;
     let tp3 = 0;
 
-    // 1. Structural anchor & 2. Minimum-safe floor
-    const minSafeDistance = Math.max(profile.minPracticalStopDistance, atr_15m * 0.85);
+    // 1. Structural anchor & 2. Minimum-safe floor (must respect the 0.85 * ATR noise floor of both 15m and 1h)
+    const effectiveAtrForNoiseFloor = atr_1h > 0 ? Math.max(atr_15m, atr_1h) : atr_15m;
+    const minSafeDistance = Math.max(profile.minPracticalStopDistance, effectiveAtrForNoiseFloor * 0.85);
     let rawStopDistance = 0;
     if (direction === 'BUY') {
       const structuralSlPrice = support15m - atr_15m * 0.4;
@@ -633,10 +634,10 @@ export class ScoringEngine {
       rawStopDistance = Math.max(structuralSlPrice - entryPrice, minSafeDistance);
     }
 
-    // 3. Maximum stop cap
+    // 3. Maximum stop cap (never compressed below minSafeDistance)
     const normalizedAsset = profile.assetClass === 'STOCK' ? 'STOCKS' : profile.assetClass.toUpperCase();
     const guardrails = ASSET_CLASS_GUARDRAILS[normalizedAsset] || ASSET_CLASS_GUARDRAILS.DEFAULT;
-    const maxStopDistance = entryPrice * (guardrails.tp3.maxPct / 100);
+    const maxStopDistance = Math.max(minSafeDistance, entryPrice * (guardrails.tp3.maxPct / 100));
     const finalStopDistance = Math.min(rawStopDistance, maxStopDistance);
 
     // 4. Round final SL
