@@ -160,7 +160,33 @@ async function buildCronResponseBody(options: {
   const providerRequestsStoppedByBudget = lastScan?.providerRequestsStoppedByBudget ?? false;
 
   const latestTelemetry = await ScannerPersistence.getLatestTimingTelemetry();
-  const timingTelemetry = lastScan?.timingTelemetry ?? latestTelemetry ?? null;
+  let timingTelemetry: any = lastScan?.timingTelemetry ?? latestTelemetry ?? null;
+
+  // Gate 3: Avoid exposing stale/incorrect timing telemetry on skipped or error responses
+  const isCurrentlyActive = options.status === 'DISPATCHED' || options.status === 'COMPLETED';
+  if (!isCurrentlyActive) {
+    timingTelemetry = {
+      dispatchStartedAt: options.requestStartTime,
+      dispatchCompletedAt: now,
+      cronRequestDurationMs: now - options.requestStartTime,
+      cronResponseDurationMs: now - options.requestStartTime,
+      dispatchDurationMs: now - options.requestStartTime,
+      lockWaitMs: 0,
+      backgroundStartedAt: 0,
+      backgroundCompletedAt: 0,
+      backgroundScanDurationMs: 0,
+      totalScanDurationMs: 0,
+      scanDurationMs: 0,
+      timeBudgetExceeded: false,
+      providerRequestsStoppedByBudget: false,
+      lockAcquired: false,
+      instanceId: 'none',
+      status: options.status,
+      diagnosticClassification: 'OK',
+      diagnosticMessage: options.message,
+      timestamp: now,
+    };
+  }
 
   // Outbound Provider & Cache Telemetry
   const tel = providerTelemetry.getSummary();
@@ -505,23 +531,9 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
       return res.status(200).json(body);
     }
 
-    // Check configured interval elapsed
-    const settings = ScannerPersistence.getSettings();
-    const validIntervals = [15, 30, 45, 60];
-    const intervalMinutes = validIntervals.includes(Number(settings.intervalMinutes)) ? Number(settings.intervalMinutes) : 30;
-    const intervalMs = intervalMinutes * 60 * 1000;
-    const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || 0;
-
-    if (lastAutomatedScan > 0 && (now - lastAutomatedScan) < (intervalMs - 5000) && !force) {
-      const body = await buildCronResponseBody({
-        status: 'SKIPPED_NOT_DUE',
-        message: 'Automated scan skipped because the configured scan interval has not elapsed.',
-        success: true,
-        requestStartTime,
-        isScanning: false,
-      });
-      return res.status(200).json(body);
-    }
+    // External scheduler ownership: The application-owned scan interval restriction is removed
+    // to allow external scheduling events from cron-job.org to execute scans immediately,
+    // subject only to active running state, concurrency lock, and daily signal cap controls.
 
     // Refresh cron status in background without blocking response
     CronJobOrgService.getJobStatus(false).catch((err) => {
