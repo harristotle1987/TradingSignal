@@ -110,7 +110,9 @@ export class BitgetAdapter implements IMarketDataProvider {
     } catch (err: unknown) {
       clearTimeout(timeoutId);
       const msg = err instanceof Error ? err.message : String(err);
-      return this.createErrorTicker(appSymbol, providerSymbol, assetType, `Bitget connection failed: ${msg}`);
+      const isAbort = (err instanceof Error && err.name === 'AbortError') || msg.toLowerCase().includes('aborted');
+      const finalMsg = isAbort ? `Bitget request timed out (${timeoutMs}ms)` : `Bitget connection failed: ${msg}`;
+      return this.createErrorTicker(appSymbol, providerSymbol, assetType, finalMsg);
     }
   }
 

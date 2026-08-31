@@ -417,7 +417,8 @@ export class MarketDataManager {
         getActiveProfiler()?.recordNetworkRequest(providerId, 'fetchPrice', latency);
         const success = result.status === 'OK' && result.price > 0;
         const is429 = result.errorMessage?.includes('429') || false;
-        const isTimeout = result.errorMessage?.toLowerCase().includes('timeout') || false;
+        const errLower = result.errorMessage?.toLowerCase() || '';
+        const isTimeout = errLower.includes('timeout') || errLower.includes('aborted') || errLower.includes('aborterror');
         quotaManager.recordResponse(
           providerId,
           success ? 200 : (is429 ? 429 : 500),
@@ -431,8 +432,9 @@ export class MarketDataManager {
         getActiveProfiler()?.recordProviderRequest(latency);
         getActiveProfiler()?.recordNetworkRequest(providerId, 'fetchPrice', latency);
         const errMsg = String(err);
+        const errMsgLower = errMsg.toLowerCase();
         const is429 = errMsg.includes('429') || errMsg.includes('rate limit');
-        const isTimeout = errMsg.toLowerCase().includes('timeout');
+        const isTimeout = errMsgLower.includes('timeout') || errMsgLower.includes('aborted') || errMsgLower.includes('aborterror');
         quotaManager.recordResponse(
           providerId,
           is429 ? 429 : 500,
@@ -715,8 +717,9 @@ export class MarketDataManager {
               getActiveProfiler()?.recordProviderRequest(latency);
               getActiveProfiler()?.recordNetworkRequest(primaryProviderId, `fetchCandles:${timeframe}`, latency);
               const errMsg = String(err);
+              const errMsgLower = errMsg.toLowerCase();
               const is429 = errMsg.includes('429') || errMsg.includes('rate limit');
-              const isTimeout = errMsg.toLowerCase().includes('timeout');
+              const isTimeout = errMsgLower.includes('timeout') || errMsgLower.includes('aborted') || errMsgLower.includes('aborterror');
               quotaManager.recordResponse(primaryProviderId, is429 ? 429 : 500, latency, isTimeout, errMsg);
               logger.info(`Primary provider '${primaryProviderId}' candle fetch unavailable for ${cleanSymbol} (${timeframe}): ${errMsg}`);
               return [];
@@ -753,8 +756,9 @@ export class MarketDataManager {
                 getActiveProfiler()?.recordProviderRequest(latency);
                 getActiveProfiler()?.recordNetworkRequest(fallbackId, `fetchCandles:${timeframe}`, latency);
                 const errMsg = String(err);
+                const errMsgLower = errMsg.toLowerCase();
                 const is429 = errMsg.includes('429') || errMsg.includes('rate limit');
-                const isTimeout = errMsg.toLowerCase().includes('timeout');
+                const isTimeout = errMsgLower.includes('timeout') || errMsgLower.includes('aborted') || errMsgLower.includes('aborterror');
                 quotaManager.recordResponse(fallbackId, is429 ? 429 : 500, latency, isTimeout, errMsg);
                 logger.info(`Fallback provider '${fallbackId}' candle fetch unavailable for ${cleanSymbol} (${timeframe}): ${errMsg}`);
                 return [];

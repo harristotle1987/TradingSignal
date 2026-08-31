@@ -29,6 +29,12 @@
  *    - Sends NO TRADE notification only if configured.
  */
 
+import {
+  OPERATIONAL_SCAN_BUDGET_MS,
+  HARD_SCAN_DEADLINE_MS,
+  CRON_DISPATCH_TIMEOUT_MS,
+  SCANNER_LOCK_TIMEOUT_MS,
+} from './ScannerConstants.js';
 import { signalEngine } from './SignalEngine.js';
 import { getDynamicPrecision } from '../../utils/formatters.js';
 import { TradeRankingEngine } from './TradeRankingEngine.js';
@@ -70,7 +76,9 @@ export interface DispatchResult {
   message: string;
   dispatchStartedAt: number;
   dispatchCompletedAt: number;
+  cronRequestDurationMs: number;
   cronResponseDurationMs: number;
+  dispatchDurationMs: number;
   lockWaitMs: number;
   instanceId?: string;
   timestamp: number;
@@ -133,6 +141,10 @@ export interface ManualScanResult {
 export class HourlyScannerService {
   private isScanning = false;
 
+  public getIsScanning(): boolean {
+    return this.isScanning;
+  }
+
   constructor() {
     ScannerPersistence.init();
   }
@@ -192,10 +204,14 @@ export class HourlyScannerService {
       await ScannerPersistence.recordTimingTelemetry({
         dispatchStartedAt,
         dispatchCompletedAt,
+        cronRequestDurationMs: cronResponseDurationMs,
         cronResponseDurationMs,
+        dispatchDurationMs: cronResponseDurationMs,
         lockWaitMs: 0,
         backgroundStartedAt: 0,
         backgroundCompletedAt: 0,
+        backgroundScanDurationMs: 0,
+        totalScanDurationMs: 0,
         scanDurationMs: 0,
         timeBudgetExceeded: false,
         providerRequestsStoppedByBudget: false,
@@ -212,7 +228,9 @@ export class HourlyScannerService {
         message: 'REJECTED: PRODUCTION_PERSISTENCE_UNAVAILABLE. Firebase Service Account required for automated scanner dispatch in production.',
         dispatchStartedAt,
         dispatchCompletedAt,
+        cronRequestDurationMs: cronResponseDurationMs,
         cronResponseDurationMs,
+        dispatchDurationMs: cronResponseDurationMs,
         lockWaitMs: 0,
         timestamp: Date.now(),
         lastScanTime: capState.lastScanTime,
@@ -233,10 +251,14 @@ export class HourlyScannerService {
       await ScannerPersistence.recordTimingTelemetry({
         dispatchStartedAt,
         dispatchCompletedAt,
+        cronRequestDurationMs: cronResponseDurationMs,
         cronResponseDurationMs,
+        dispatchDurationMs: cronResponseDurationMs,
         lockWaitMs: 0,
         backgroundStartedAt: 0,
         backgroundCompletedAt: 0,
+        backgroundScanDurationMs: 0,
+        totalScanDurationMs: 0,
         scanDurationMs: 0,
         timeBudgetExceeded: false,
         providerRequestsStoppedByBudget: false,
@@ -253,7 +275,9 @@ export class HourlyScannerService {
         message: `REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving risk limits.`,
         dispatchStartedAt,
         dispatchCompletedAt,
+        cronRequestDurationMs: cronResponseDurationMs,
         cronResponseDurationMs,
+        dispatchDurationMs: cronResponseDurationMs,
         lockWaitMs: 0,
         timestamp: Date.now(),
         lastScanTime: capState.lastAutomatedScan || capState.lastScanTime || 0,
@@ -264,7 +288,7 @@ export class HourlyScannerService {
 
     // 3. Check and acquire distributed lock
     const instanceId = Math.random().toString(36).substring(2, 9);
-    const lockResult = await ScannerPersistence.tryAcquireLock(instanceId, 60000);
+    const lockResult = await ScannerPersistence.tryAcquireLock(instanceId, SCANNER_LOCK_TIMEOUT_MS);
     const lockWaitMs = lockResult.lockWaitMs || 0;
 
     if (!lockResult.acquired) {
@@ -274,10 +298,14 @@ export class HourlyScannerService {
       await ScannerPersistence.recordTimingTelemetry({
         dispatchStartedAt,
         dispatchCompletedAt,
+        cronRequestDurationMs: cronResponseDurationMs,
         cronResponseDurationMs,
+        dispatchDurationMs: cronResponseDurationMs,
         lockWaitMs,
         backgroundStartedAt: 0,
         backgroundCompletedAt: 0,
+        backgroundScanDurationMs: 0,
+        totalScanDurationMs: 0,
         scanDurationMs: 0,
         timeBudgetExceeded: false,
         providerRequestsStoppedByBudget: false,
@@ -294,7 +322,9 @@ export class HourlyScannerService {
         message: `REJECTED: SCAN_ALREADY_RUNNING. Another scan cycle is currently in progress (${lockResult.reason || 'Locked'}).`,
         dispatchStartedAt,
         dispatchCompletedAt,
+        cronRequestDurationMs: cronResponseDurationMs,
         cronResponseDurationMs,
+        dispatchDurationMs: cronResponseDurationMs,
         lockWaitMs,
         timestamp: Date.now(),
         lastScanTime: capState.lastScanTime,
@@ -310,8 +340,8 @@ export class HourlyScannerService {
     const backgroundStartMs = Date.now();
     this.executeBackgroundScan(instanceId, isExternal, {
       scanStartedAt: backgroundStartMs,
-      operationalBudgetMs: 18000,
-      hardDeadlineMs: 20000,
+      operationalBudgetMs: OPERATIONAL_SCAN_BUDGET_MS,
+      hardDeadlineMs: HARD_SCAN_DEADLINE_MS,
       dispatchStartedAt,
       dispatchCompletedAt,
       cronResponseDurationMs,
@@ -328,7 +358,9 @@ export class HourlyScannerService {
       message: 'Automated scan successfully dispatched in background.',
       dispatchStartedAt,
       dispatchCompletedAt,
+      cronRequestDurationMs: cronResponseDurationMs,
       cronResponseDurationMs,
+      dispatchDurationMs: cronResponseDurationMs,
       lockWaitMs,
       instanceId,
       timestamp: Date.now(),
@@ -391,14 +423,15 @@ export class HourlyScannerService {
 
     const backgroundCompletedAt = Date.now();
     const scanDurationMs = backgroundCompletedAt - backgroundStartedAt;
+    const totalScanDurationMs = scanDurationMs;
 
     // Diagnostic classification
     let diagnosticClassification: 'OK' | 'CRON_HTTP_SLOW' | 'BACKGROUND_SCAN_SLOW' | 'LOCK_CONTENTION' | 'SERVERLESS_COLD_START' | 'PROVIDER_API_DELAY' = 'OK';
     let diagnosticMessage = 'Normal background scan execution';
 
-    if (options.cronResponseDurationMs > 2000) {
+    if (options.cronResponseDurationMs > CRON_DISPATCH_TIMEOUT_MS) {
       diagnosticClassification = 'CRON_HTTP_SLOW';
-      diagnosticMessage = `Cron HTTP response latency high (${options.cronResponseDurationMs}ms > 2000ms)`;
+      diagnosticMessage = `Cron HTTP response latency high (${options.cronResponseDurationMs}ms > ${CRON_DISPATCH_TIMEOUT_MS}ms)`;
     } else if (scanDurationMs > options.hardDeadlineMs) {
       diagnosticClassification = 'BACKGROUND_SCAN_SLOW';
       diagnosticMessage = `Background scan duration exceeded hard deadline (${scanDurationMs}ms > ${options.hardDeadlineMs}ms)`;
@@ -413,10 +446,14 @@ export class HourlyScannerService {
     await ScannerPersistence.recordTimingTelemetry({
       dispatchStartedAt: options.dispatchStartedAt,
       dispatchCompletedAt: options.dispatchCompletedAt,
+      cronRequestDurationMs: options.cronResponseDurationMs,
       cronResponseDurationMs: options.cronResponseDurationMs,
+      dispatchDurationMs: options.cronResponseDurationMs,
       lockWaitMs: options.lockWaitMs,
       backgroundStartedAt,
       backgroundCompletedAt,
+      backgroundScanDurationMs: scanDurationMs,
+      totalScanDurationMs,
       scanDurationMs,
       timeBudgetExceeded: scanResult.timeBudgetExceeded ?? false,
       providerRequestsStoppedByBudget: scanResult.providerRequestsStoppedByBudget ?? false,
@@ -445,7 +482,7 @@ export class HourlyScannerService {
       const { marketCache } = await import('../market/CacheStore.js');
       marketCache.clearExpired();
       marketCache.clearTickers();
-      return await this.executeIntelligentScan(isExternal, scanStartTime ? { scanStartedAt: scanStartTime, globalScanBudgetMs: 18000 } : { globalScanBudgetMs: 18000 });
+      return await this.executeIntelligentScan(isExternal, scanStartTime ? { scanStartedAt: scanStartTime, globalScanBudgetMs: OPERATIONAL_SCAN_BUDGET_MS } : { globalScanBudgetMs: OPERATIONAL_SCAN_BUDGET_MS });
     }
     return await this.dispatchAutomatedScan(isExternal, scanStartTime ?? Date.now());
   }
@@ -460,7 +497,7 @@ export class HourlyScannerService {
   ): Promise<ManualScanResult> {
     const scanStartTime = options?.scanStartedAt ?? Date.now();
     const globalScanStartMs = scanStartTime;
-    const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 18000;
+    const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? OPERATIONAL_SCAN_BUDGET_MS;
     const globalScanDeadlineMs = globalScanStartMs + GLOBAL_SCAN_BUDGET_MS;
     logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime} | deadline: ${globalScanDeadlineMs}`);
 
@@ -1380,6 +1417,9 @@ export class HourlyScannerService {
           candidatesRejectedFinal: totalCandidatesRejectedFinalCombined,
           signalsGenerated: totalSignalsGenerated,
           signalsAccepted: dispatchedCount,
+          deepCandidates: totalPreliminaryCandidatesFound,
+          signalsRejected: totalCandidatesRejectedFinalCombined,
+          rejectionReasons: aggregatedRejectionCounts,
         });
       }
 

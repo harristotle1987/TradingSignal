@@ -48,6 +48,9 @@ export interface DailyCapState {
   candidatesRejectedFinal?: number;
   signalsGenerated?: number;
   signalsAccepted?: number;
+  deepCandidates?: number;
+  signalsRejected?: number;
+  rejectionReasons?: Record<string, number>;
 
   // Backward compatibility fields
   lastScanTime: number;
@@ -148,10 +151,14 @@ export interface PersistedNotification {
 export interface ScannerTimingTelemetry {
   dispatchStartedAt: number;
   dispatchCompletedAt: number;
+  cronRequestDurationMs: number;
   cronResponseDurationMs: number;
+  dispatchDurationMs: number;
   lockWaitMs: number;
   backgroundStartedAt: number;
   backgroundCompletedAt: number;
+  backgroundScanDurationMs: number;
+  totalScanDurationMs: number;
   scanDurationMs: number;
   timeBudgetExceeded: boolean;
   providerRequestsStoppedByBudget: boolean;
@@ -1575,6 +1582,9 @@ export class ScannerPersistence {
     candidatesRejectedFinal?: number;
     signalsGenerated?: number;
     signalsAccepted?: number;
+    deepCandidates?: number;
+    signalsRejected?: number;
+    rejectionReasons?: Record<string, number>;
   }): Promise<void> {
     this.init();
     logger.info(`[ScannerPersistence] WRITING lastAutomatedScan metrics:`, metrics);
@@ -1594,6 +1604,9 @@ export class ScannerPersistence {
     if (metrics.candidatesRejectedFinal !== undefined) this.localData.capState.candidatesRejectedFinal = metrics.candidatesRejectedFinal;
     if (metrics.signalsGenerated !== undefined) this.localData.capState.signalsGenerated = metrics.signalsGenerated;
     if (metrics.signalsAccepted !== undefined) this.localData.capState.signalsAccepted = metrics.signalsAccepted;
+    if (metrics.deepCandidates !== undefined) this.localData.capState.deepCandidates = metrics.deepCandidates;
+    if (metrics.signalsRejected !== undefined) this.localData.capState.signalsRejected = metrics.signalsRejected;
+    if (metrics.rejectionReasons !== undefined) this.localData.capState.rejectionReasons = metrics.rejectionReasons;
 
     this.saveLocalData();
 
@@ -1616,6 +1629,9 @@ export class ScannerPersistence {
         if (metrics.candidatesRejectedFinal !== undefined) payload.candidatesRejectedFinal = metrics.candidatesRejectedFinal;
         if (metrics.signalsGenerated !== undefined) payload.signalsGenerated = metrics.signalsGenerated;
         if (metrics.signalsAccepted !== undefined) payload.signalsAccepted = metrics.signalsAccepted;
+        if (metrics.deepCandidates !== undefined) payload.deepCandidates = metrics.deepCandidates;
+        if (metrics.signalsRejected !== undefined) payload.signalsRejected = metrics.signalsRejected;
+        if (metrics.rejectionReasons !== undefined) payload.rejectionReasons = metrics.rejectionReasons;
 
         await firestore.doc(FIRESTORE_CAP_DOC).set(payload, { merge: true });
         logger.info(`[ScannerPersistence] Firestore lastAutomatedScan metrics successfully synchronized.`);
@@ -1625,6 +1641,15 @@ export class ScannerPersistence {
     } else if (this.isProductionMode()) {
       logger.error('[ScannerPersistence] FAIL CLOSED: Cannot update scan metrics without Firestore in production.');
     }
+  }
+
+  /**
+   * Synchronously or quickly checks if scanner lock is held locally.
+   */
+  static isLockHeld(lockTimeoutMs = 60000): boolean {
+    this.init();
+    const now = Date.now();
+    return this.localLock.isScanning && (now - this.localLock.lockAcquiredAt < lockTimeoutMs);
   }
 
   /**

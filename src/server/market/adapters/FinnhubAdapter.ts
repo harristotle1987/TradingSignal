@@ -124,6 +124,7 @@ export class FinnhubAdapter implements IMarketDataProvider {
           symbol: SymbolNormalizer.normalizeAppSymbol(appSymbol),
           rawSymbol: providerSymbol,
           provider: this.id,
+          dataSource: this.id,
           assetType,
           bid: null,
           ask: null,
@@ -137,11 +138,14 @@ export class FinnhubAdapter implements IMarketDataProvider {
       } catch (err: unknown) {
         clearTimeout(timeoutId);
         const msg = err instanceof Error ? err.message : String(err);
-        lastErrorMsg = `Finnhub connection failed: ${msg}`;
+        const isAbort = (err instanceof Error && err.name === 'AbortError') || msg.toLowerCase().includes('aborted');
 
-        if (msg.includes('TIMEOUT')) {
-          throw err;
+        if (msg.includes('TIMEOUT') || isAbort) {
+          lastErrorMsg = `Finnhub request timed out (${timeoutMs}ms)`;
+          return this.createErrorTicker(appSymbol, providerSymbol, assetType, lastErrorMsg);
         }
+
+        lastErrorMsg = `Finnhub connection failed: ${msg}`;
 
         if (attempt < maxRetries) {
           const backoffMs = 200 * (attempt + 1);
@@ -312,7 +316,9 @@ export class FinnhubAdapter implements IMarketDataProvider {
           candles.push({
             symbol: normSymbol,
             provider: this.id,
+            source: this.id,
             timeframe,
+            interval: timeframe,
             open,
             high,
             low,
@@ -342,6 +348,7 @@ export class FinnhubAdapter implements IMarketDataProvider {
       symbol: SymbolNormalizer.normalizeAppSymbol(appSymbol),
       rawSymbol,
       provider: this.id,
+      dataSource: this.id,
       assetType,
       bid: null,
       ask: null,

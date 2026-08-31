@@ -24,6 +24,7 @@ export class ExchangeRateAdapter implements IMarketDataProvider {
     const receivedAt = Date.now();
     let providerSymbol = appSymbol;
 
+    let timeoutId: NodeJS.Timeout | null = null;
     try {
       const norm = SymbolNormalizer.normalizeAppSymbol(appSymbol);
       if (!norm || norm.length < 6) {
@@ -46,7 +47,7 @@ export class ExchangeRateAdapter implements IMarketDataProvider {
       }
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
       const url = `https://open.er-api.com/v6/latest/${base}`;
       const response = await fetch(url, {
@@ -54,7 +55,10 @@ export class ExchangeRateAdapter implements IMarketDataProvider {
         headers: { 'Accept': 'application/json' },
       });
 
-      clearTimeout(timeoutId);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
 
       if (!response.ok) {
         return this.createErrorTicker(appSymbol, providerSymbol, `ExchangeRate API returned HTTP ${response.status}`);
@@ -87,11 +91,16 @@ export class ExchangeRateAdapter implements IMarketDataProvider {
         status: 'OK',
       };
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('TIMEOUT') || msg.includes('AbortError')) {
-        throw err;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
       }
-      return this.createErrorTicker(appSymbol, providerSymbol, `ExchangeRate fetch failed: ${msg}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      const isAbort = (err instanceof Error && err.name === 'AbortError') || msg.toLowerCase().includes('aborted');
+      const finalMsg = (msg.includes('TIMEOUT') || isAbort)
+        ? `ExchangeRate request timed out`
+        : `ExchangeRate fetch failed: ${msg}`;
+      return this.createErrorTicker(appSymbol, providerSymbol, finalMsg);
     }
   }
 

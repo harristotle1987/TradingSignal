@@ -23,6 +23,7 @@ export interface ProviderReadiness {
   finnhubConfigured: boolean;
   bitgetConfigured: boolean;
   twelvedataConfigured: boolean;
+  tiingoConfigured: boolean;
 }
 
 export interface SignalThresholds {
@@ -104,6 +105,7 @@ class ConfigService {
       process.env.BITGET_PASSPHRASE
     );
     const twelvedataConfigured = Boolean(process.env.TWELVE_DATA_API_KEY && process.env.TWELVE_DATA_API_KEY.trim().length > 0);
+    const tiingoConfigured = Boolean(process.env.TIINGO_API_KEY && process.env.TIINGO_API_KEY.trim().length > 0);
 
     const authoritativeMinScore = parseInt(process.env.THRESHOLD_MIN_SCORE || process.env.THRESHOLD_SIGNAL_SCORE || '70', 10);
     const rawWinProb = parseFloat(process.env.THRESHOLD_MIN_WIN_PROB || '55');
@@ -134,6 +136,7 @@ class ConfigService {
       finnhubConfigured,
       bitgetConfigured,
       twelvedataConfigured,
+      tiingoConfigured,
     };
 
     const persistenceReady = isProductionPersistenceReady();

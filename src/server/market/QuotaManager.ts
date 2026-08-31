@@ -58,8 +58,9 @@ export class QuotaManager {
 
   // Configured limits & reserved quotas per provider
   private providerQuotas: Record<string, ProviderQuotaConfig> = {
-    twelvedata: { maxPerMinute: 8, maxPerSecond: 2, lowThreshold: 5, reservedRequests: 2 },
+    tiingo: { maxPerMinute: 30, maxPerSecond: 5, lowThreshold: 22, reservedRequests: 3 },
     finnhub: { maxPerMinute: 30, maxPerSecond: 5, lowThreshold: 24, reservedRequests: 3 },
+    twelvedata: { maxPerMinute: 8, maxPerSecond: 2, lowThreshold: 5, reservedRequests: 2 },
     bitget: { maxPerMinute: 120, maxPerSecond: 10, lowThreshold: 90, reservedRequests: 5 },
     exchangerate: { maxPerMinute: 10, maxPerSecond: 2, lowThreshold: 7, reservedRequests: 2 },
   };

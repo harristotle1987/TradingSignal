@@ -188,11 +188,13 @@ export class TwelveDataAdapter implements IMarketDataProvider {
 
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      const isAbort = (err instanceof Error && err.name === 'AbortError') || msg.toLowerCase().includes('aborted');
+      const finalMsg = isAbort ? `Twelve Data request timed out (${timeoutMs}ms)` : `Twelve Data connection failed: ${msg}`;
       return this.createErrorTicker(
         appSymbol,
         providerSymbol,
         assetType,
-        `Twelve Data connection failed: ${msg}`
+        finalMsg
       );
     }
   }

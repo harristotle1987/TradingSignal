@@ -1,3 +1,4 @@
+import { OPERATIONAL_SCAN_BUDGET_MS, HARD_SCAN_DEADLINE_MS } from './ScannerConstants.js';
 import { TradingSignal, SignalGenerationResponse, NormalizedCandle, SignalDirection } from '../../types/index.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
 import { quotaManager } from '../market/QuotaManager.js';
@@ -87,8 +88,8 @@ export async function runStagedPipeline(
   const cleanSymbol = symbol.trim().toUpperCase();
   const now = Date.now();
   const globalScanStartMs = options?.scanStartedAt ?? Date.now();
-  const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 18000;
-  const GLOBAL_HARD_DEADLINE_MS = options?.hardDeadlineMs ?? 20000;
+  const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? OPERATIONAL_SCAN_BUDGET_MS;
+  const GLOBAL_HARD_DEADLINE_MS = options?.hardDeadlineMs ?? HARD_SCAN_DEADLINE_MS;
   const globalScanDeadlineMs = globalScanStartMs + GLOBAL_SCAN_BUDGET_MS;
   const globalHardDeadlineMs = globalScanStartMs + GLOBAL_HARD_DEADLINE_MS;
   let timeBudgetExceeded = false;

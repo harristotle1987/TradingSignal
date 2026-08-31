@@ -37,8 +37,172 @@ import { ScannerPersistence, PersistedSentSignal } from '../signals/ScannerPersi
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { adminAuthMiddleware } from '../middleware/adminAuth.js';
 import { CronJobOrgService } from '../cron/CronJobOrgService.js';
+import { providerTelemetry } from '../market/ProviderTelemetry.js';
 
 const router = Router();
+
+/**
+ * Helper to construct the detailed cron JSON response body.
+ */
+async function buildCronResponseBody(options: {
+  status: 'DISPATCHED' | 'SKIPPED_NOT_DUE' | 'SKIPPED_BUSY' | 'SKIPPED_DAILY_CAP' | 'UNAUTHORIZED' | 'ERROR' | string;
+  message: string;
+  success?: boolean;
+  requestStartTime: number;
+  executionId?: string;
+  isScanning?: boolean;
+}) {
+  const now = Date.now();
+  const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
+  const settings = ScannerPersistence.getSettings();
+
+  const validIntervals = [15, 30, 45, 60];
+  const intervalMinutes = validIntervals.includes(Number(settings.intervalMinutes))
+    ? Number(settings.intervalMinutes)
+    : 30;
+  const configuredInterval = intervalMinutes * 60; // in seconds (e.g. 1800s for 30 minutes)
+  const schedule = `Every ${intervalMinutes} minutes`;
+
+  const dailySignalCap = capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap || 10;
+  const signalsToday = capState.dailySignalCount || 0;
+  const remainingSignals = Math.max(0, dailySignalCap - signalsToday);
+
+  const lastCronExecution = capState.lastCronExecution || now;
+  const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || null;
+  const lastScanCompletedAt = capState.lastScanCompletedAt || null;
+  const lastScanDuration = capState.lastScanDuration !== undefined && capState.lastScanDuration !== null ? capState.lastScanDuration : null;
+
+  const isScanning = options.isScanning !== undefined
+    ? options.isScanning
+    : (hourlyScanner.getIsScanning() || ScannerPersistence.isLockHeld());
+
+  const scanInProgress = options.status === 'DISPATCHED' || isScanning;
+
+  let scannerStatus = 'IDLE';
+  if (scanInProgress) {
+    scannerStatus = 'RUNNING';
+  } else if (!settings.enabled) {
+    scannerStatus = 'DISABLED';
+  } else if (signalsToday >= dailySignalCap) {
+    scannerStatus = 'CAP_REACHED';
+  }
+
+  const nextEligibleScan = lastAutomatedScan
+    ? lastAutomatedScan + configuredInterval * 1000
+    : now + configuredInterval * 1000;
+
+  // Funnel / Scan statistics from last completed scan
+  const universeSymbolsScanned = capState.universeSymbolsScanned !== undefined ? capState.universeSymbolsScanned : null;
+  const candidatesEvaluated = capState.candidatesEvaluated !== undefined ? capState.candidatesEvaluated : null;
+  const deepCandidates = capState.deepCandidates !== undefined
+    ? capState.deepCandidates
+    : (capState.preliminaryCandidatesFound !== undefined ? capState.preliminaryCandidatesFound : null);
+  const signalsFound = capState.signalsGenerated !== undefined
+    ? capState.signalsGenerated
+    : (capState.lastSignalsFound !== undefined ? capState.lastSignalsFound : null);
+  const signalsAccepted = capState.signalsAccepted !== undefined
+    ? capState.signalsAccepted
+    : (capState.lastAcceptedSignals !== undefined ? capState.lastAcceptedSignals : null);
+  const signalsRejected = capState.signalsRejected !== undefined
+    ? capState.signalsRejected
+    : (capState.candidatesRejectedFinal !== undefined ? capState.candidatesRejectedFinal : null);
+
+  const defaultRejectionReasons: Record<string, number> = {
+    RR: 0,
+    MTF_ALIGNMENT: 0,
+    FINAL_SCORE_BELOW_THRESHOLD: 0,
+    MARKET_STRUCTURE: 0,
+  };
+
+  const rejectionReasons = capState.rejectionReasons && Object.keys(capState.rejectionReasons).length > 0
+    ? capState.rejectionReasons
+    : (signalsRejected !== null ? defaultRejectionReasons : null);
+
+  // Outbound Provider & Cache Telemetry
+  const tel = providerTelemetry.getSummary();
+  const providerSummary: Record<string, { requests: number; successes: number; rateLimited: number; errors: number }> = {};
+
+  for (const [pId, stats] of Object.entries(tel.providers)) {
+    let providerKey = pId.toLowerCase();
+    if (providerKey === 'twelvedata') providerKey = 'twelveData';
+
+    providerSummary[providerKey] = {
+      requests: stats.requests,
+      successes: stats.successes,
+      rateLimited: stats.http429Count,
+      errors: stats.timeoutCount + stats.otherErrors,
+    };
+  }
+
+  const totalCacheOps = tel.cacheHits + tel.cacheMisses;
+  const hitRate = totalCacheOps > 0
+    ? Number(((tel.cacheHits / totalCacheOps) * 100).toFixed(1))
+    : 100.0;
+
+  const cacheSummary = {
+    hits: tel.cacheHits,
+    misses: tel.cacheMisses,
+    hitRate,
+  };
+
+  const failoverCount = tel.totalFailovers || 0;
+
+  const executionId = options.executionId || (
+    options.status === 'DISPATCHED'
+      ? `scan-${now}-${Math.random().toString(36).substring(2, 7)}`
+      : `cron-${now}-${Math.random().toString(36).substring(2, 7)}`
+  );
+
+  const isSuccess = options.success !== undefined
+    ? options.success
+    : (options.status !== 'UNAUTHORIZED' && options.status !== 'ERROR' && !options.status.includes('FAIL'));
+
+  const dispatchCompletedAt = Date.now();
+  const durationMs = dispatchCompletedAt - options.requestStartTime;
+
+  return {
+    success: isSuccess,
+    status: options.status,
+    message: options.message,
+    timestamp: now,
+    lastCronExecution,
+    lastAutomatedScan,
+    lastScanCompletedAt,
+    lastScanDuration,
+    scannerStatus,
+    schedule,
+    configuredInterval,
+    dailySignalCap,
+    signalsToday,
+    remainingSignals,
+    universeSymbolsScanned,
+    candidatesEvaluated,
+    deepCandidates,
+    signalsFound,
+    signalsAccepted,
+    signalsRejected,
+    rejectionReasons,
+    providerSummary,
+    cacheSummary,
+    failoverCount,
+    scanInProgress,
+    nextEligibleScan,
+    executionId,
+
+    // Backward compatibility fields
+    dispatchStartedAt: options.requestStartTime,
+    dispatchCompletedAt,
+    cronRequestDurationMs: durationMs,
+    cronResponseDurationMs: durationMs,
+    dispatchDurationMs: durationMs,
+    lockWaitMs: 0,
+    lastScanTime: lastAutomatedScan || 0,
+    nextScanTime: nextEligibleScan,
+    capState,
+    external_hourly_scan_status: options.status === 'DISPATCHED' ? 'DISPATCHED_IN_BACKGROUND' : options.status,
+    intervalMinutes,
+  };
+}
 
 /**
  * GET /api/scanner/settings
@@ -186,88 +350,149 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
 
   if (!isAuthenticated) {
     logger.warn(`[Scanner Trigger] UNAUTHORIZED_TRIGGER_ATTEMPT | duration: ${authDurationMs}ms`);
-    return res.status(401).json({
-      success: false,
+    const body = await buildCronResponseBody({
       status: 'UNAUTHORIZED',
       message: 'Unauthorized: Invalid or missing SCANNER_CRON_SECRET token.',
-      timestamp: Date.now(),
-      dispatchStartedAt: requestStartTime,
-      dispatchCompletedAt: Date.now(),
-      cronResponseDurationMs: Date.now() - requestStartTime,
-      lockWaitMs: 0,
-      candidatesEvaluated: 0,
-      acceptedSignalsCount: 0,
-      signalsFound: 0,
-      rejectedCount: 0,
-      rejectionReasons: ['Unauthorized: Request missing valid Bearer or x-cron-secret token.'],
+      success: false,
+      requestStartTime,
     });
+    return res.status(401).json(body);
   }
 
   logger.info(`[Scanner Trigger] AUTHENTICATED | duration: ${authDurationMs}ms`);
 
-  // 1. Log external scan start with full UTC / Unix timezone diagnostics and record cron execution timestamp
   const now = Date.now();
   await ScannerPersistence.updateLastCronExecution(now);
   const configuredTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   logger.info(`[Scanner Diagnostic] EXTERNAL_HOURLY_SCAN_TRIGGERED | Date.now(): ${now} | ISO UTC: ${new Date(now).toISOString()} | Runtime TZ: ${configuredTz}`);
 
   try {
-    // Check if synchronous execution was explicitly requested (e.g. for deterministic testing)
     const isSync = req.query?.sync === 'true' || req.body?.sync === true;
-
     if (isSync) {
       const syncResult = await hourlyScanner.triggerAutomatedScan(true, requestStartTime, true);
       const httpCode = syncResult.status === 'ERROR' ? 500 : 200;
       return res.status(httpCode).json(syncResult);
     }
 
-    // GATE 1: Strictly non-blocking dispatch flow
-    const dispatchResult = await hourlyScanner.dispatchAutomatedScan(true, requestStartTime);
+    const force = req.query?.force === 'true' || req.body?.force === true;
 
-    // Refresh cron status in background without blocking the trigger API response
+    // Check lock / busy status
+    const isScanning = hourlyScanner.getIsScanning() || ScannerPersistence.isLockHeld();
+    if (isScanning && !force) {
+      const body = await buildCronResponseBody({
+        status: 'SKIPPED_BUSY',
+        message: 'Automated scan skipped because another scan is currently running.',
+        success: true,
+        requestStartTime,
+        isScanning: true,
+      });
+      return res.status(200).json(body);
+    }
+
+    // Check daily cap
+    const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
+    const dailyCap = capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap;
+    if (capState.dailySignalCount >= dailyCap && !force) {
+      const body = await buildCronResponseBody({
+        status: 'SKIPPED_DAILY_CAP',
+        message: `Automated scan skipped because the daily signal cap has been reached (${capState.dailySignalCount}/${dailyCap}).`,
+        success: true,
+        requestStartTime,
+        isScanning: false,
+      });
+      return res.status(200).json(body);
+    }
+
+    // Check configured interval elapsed
+    const settings = ScannerPersistence.getSettings();
+    const validIntervals = [15, 30, 45, 60];
+    const intervalMinutes = validIntervals.includes(Number(settings.intervalMinutes)) ? Number(settings.intervalMinutes) : 30;
+    const intervalMs = intervalMinutes * 60 * 1000;
+    const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || 0;
+
+    if (lastAutomatedScan > 0 && (now - lastAutomatedScan) < (intervalMs - 5000) && !force) {
+      const body = await buildCronResponseBody({
+        status: 'SKIPPED_NOT_DUE',
+        message: 'Automated scan skipped because the configured scan interval has not elapsed.',
+        success: true,
+        requestStartTime,
+        isScanning: false,
+      });
+      return res.status(200).json(body);
+    }
+
+    // Refresh cron status in background without blocking response
     CronJobOrgService.getJobStatus(false).catch((err) => {
       logger.debug('[Scanner Route] Background cron status update deferred', { error: String(err) });
     });
 
-    const settings = ScannerPersistence.getSettings();
-    const intervalMinutes = [15, 30, 45, 60].includes(Number(settings.intervalMinutes))
-      ? Number(settings.intervalMinutes)
-      : 30;
-    const cachedCron = CronJobOrgService.getCachedStatus();
-    const nextCronExecution = cachedCron?.nextExecution?.timestamp || (dispatchResult.lastScanTime + intervalMinutes * 60 * 1000);
+    // Dispatch background scan
+    const dispatchResult = await hourlyScanner.dispatchAutomatedScan(true, requestStartTime);
 
-    const httpCode = dispatchResult.status === 'DISPATCHED' ? 202 : (dispatchResult.status === 'ERROR' ? 500 : 200);
+    if (dispatchResult.status === 'SKIPPED_SCAN_ALREADY_RUNNING') {
+      const body = await buildCronResponseBody({
+        status: 'SKIPPED_BUSY',
+        message: 'Automated scan skipped because another scan is currently running.',
+        success: true,
+        requestStartTime,
+        isScanning: true,
+      });
+      return res.status(200).json(body);
+    }
 
-    return res.status(httpCode).json({
-      ...dispatchResult,
-      nextCronExecution,
-      nextScanTime: nextCronExecution,
-      intervalMinutes,
-      external_hourly_scan_status: dispatchResult.status === 'DISPATCHED' ? 'DISPATCHED_IN_BACKGROUND' : dispatchResult.status,
+    if (dispatchResult.status === 'SKIPPED_CAP_REACHED') {
+      const body = await buildCronResponseBody({
+        status: 'SKIPPED_DAILY_CAP',
+        message: 'Automated scan skipped because the daily signal cap has been reached.',
+        success: true,
+        requestStartTime,
+        isScanning: false,
+      });
+      return res.status(200).json(body);
+    }
+
+    if (dispatchResult.status === 'PERSISTENCE_UNAVAILABLE_DEGRADED' || !dispatchResult.success) {
+      const body = await buildCronResponseBody({
+        status: 'ERROR',
+        message: dispatchResult.message || 'Failed to dispatch hourly scanner trigger',
+        success: false,
+        requestStartTime,
+        isScanning: false,
+      });
+      return res.status(500).json(body);
+    }
+
+    const execId = dispatchResult.instanceId ? `scan-${now}-${dispatchResult.instanceId}` : undefined;
+    const body = await buildCronResponseBody({
+      status: 'DISPATCHED',
+      message: 'Automated market scan dispatched successfully.',
+      success: true,
+      requestStartTime,
+      executionId: execId,
+      isScanning: true,
     });
+
+    return res.status(202).json(body);
   } catch (err: unknown) {
     logger.error('EXTERNAL_HOURLY_SCAN_DISPATCH_FAILED');
     const msg = err instanceof Error ? err.message : String(err);
-    const totalRequestDurationMs = Date.now() - requestStartTime;
-    return res.status(500).json({
-      success: false,
+    const body = await buildCronResponseBody({
       status: 'ERROR',
-      message: 'Failed to dispatch hourly scanner trigger',
-      external_hourly_scan_status: 'EXTERNAL_HOURLY_SCAN_FAILED',
-      timestamp: Date.now(),
-      dispatchStartedAt: requestStartTime,
-      dispatchCompletedAt: Date.now(),
-      cronResponseDurationMs: totalRequestDurationMs,
-      lockWaitMs: 0,
-      lastScanTime: 0,
-      nextScanTime: 0,
-      rejectionReasons: [msg],
+      message: `Failed to dispatch hourly scanner trigger: ${msg}`,
+      success: false,
+      requestStartTime,
+      isScanning: false,
     });
+    return res.status(500).json(body);
   }
 };
 
 router.post('/scanner/trigger', handleScannerTrigger);
 router.get('/scanner/trigger', handleScannerTrigger);
+router.post('/cron', handleScannerTrigger);
+router.get('/cron', handleScannerTrigger);
+router.post('/cron/trigger', handleScannerTrigger);
+router.get('/cron/trigger', handleScannerTrigger);
 
 /**
  * GET /api/scanner/telemetry

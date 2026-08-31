@@ -16,6 +16,7 @@
  * 5. Every rejection records exact structural and mathematical failure reasons.
  */
 
+import { OPERATIONAL_SCAN_BUDGET_MS, HARD_SCAN_DEADLINE_MS } from './ScannerConstants.js';
 import { NormalizedCandle, SignalDirection } from '../../types/index.js';
 import { TechnicalIndicators, MACDResult } from './TechnicalIndicators.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
@@ -680,7 +681,7 @@ export class Gate6ProgressiveMTF {
     globalScanDeadlineMs?: number
   ): Promise<Gate6ProgressiveAnalysisResult> {
     const startMs = globalScanStartMs ?? Date.now();
-    const deadlineMs = globalScanDeadlineMs ?? (startMs + 24000);
+    const deadlineMs = globalScanDeadlineMs ?? (startMs + OPERATIONAL_SCAN_BUDGET_MS);
     const gate6StartMs = Date.now();
 
     let timeBudgetExceeded = false;

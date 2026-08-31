@@ -10,7 +10,7 @@ export type MarketDataStatus = 'OK' | 'STALE' | 'MARKET_DATA_UNAVAILABLE';
 export interface NormalizedTicker {
   symbol: string;             // Normalized application symbol e.g. "BTCUSDT"
   rawSymbol: string;          // Provider native symbol e.g. "BTCUSDT" or "BINANCE:BTCUSDT"
-  provider: string;           // Provider ID e.g. "bitget", "finnhub", "twelvedata", "forex"
+  provider: string;           // Provider ID e.g. "tiingo", "finnhub", "twelvedata", "bitget"
   assetType: AssetType;
   bid: number | null;         // Null if not supplied by provider
   ask: number | null;         // Null if not supplied by provider
@@ -18,6 +18,7 @@ export interface NormalizedTicker {
   timestamp: number;          // Data timestamp from provider (ms)
   receivedAt: number;         // Server reception timestamp (ms)
   source: 'LIVE' | 'CACHE';
+  dataSource?: string;        // Underlying active provider source e.g. "tiingo", "finnhub", "twelvedata"
   isFresh: boolean;           // True if within max age threshold
   status: MarketDataStatus;
   errorMessage?: string;
@@ -26,7 +27,9 @@ export interface NormalizedTicker {
 export interface NormalizedCandle {
   symbol: string;
   provider: string;
+  source?: string;            // Standardized source alias
   timeframe: string;
+  interval?: string;          // Standardized interval alias
   open: number;
   high: number;
   low: number;
@@ -71,6 +74,7 @@ export interface TruthfulMarketHealth {
     bitget: ProviderHealthDetail;
     twelvedata: ProviderHealthDetail;
     finnhub: ProviderHealthDetail;
+    tiingo: ProviderHealthDetail;
     exchangerate: ProviderHealthDetail;
   };
   assetClasses: {

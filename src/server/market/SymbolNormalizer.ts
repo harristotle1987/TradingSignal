@@ -154,6 +154,36 @@ export class SymbolNormalizer {
         };
       }
 
+      case 'tiingo': {
+        const assetType = this.getAssetClassification(clean);
+        if (assetType === 'FOREX') {
+          // Tiingo FX pairs format: lowercase eurusd
+          return { providerSymbol: clean.toLowerCase(), assetType: 'FOREX' };
+        }
+        if (assetType === 'CRYPTO') {
+          // Tiingo Crypto format: lowercase btcusdt
+          const cryptoPair = clean.endsWith('USDT') ? clean : `${clean}USDT`;
+          return { providerSymbol: cryptoPair.toLowerCase(), assetType: 'CRYPTO' };
+        }
+        // Stock: uppercase AAPL
+        return { providerSymbol: clean.toUpperCase(), assetType: 'STOCK' };
+      }
+
+      case 'exchangerate': {
+        let base = 'EUR';
+        let quote = 'USD';
+        if (clean.length === 6) {
+          base = clean.slice(0, 3);
+          quote = clean.slice(3, 6);
+        }
+        return {
+          providerSymbol: `${base}/${quote}`,
+          assetType: 'FOREX',
+          baseCurrency: base,
+          quoteCurrency: quote,
+        };
+      }
+
       default:
         throw new Error(`Unsupported provider: ${providerId}`);
     }
