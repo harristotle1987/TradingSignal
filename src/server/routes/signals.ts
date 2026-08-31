@@ -583,7 +583,7 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
       success: true,
       requestStartTime,
       executionId: execId,
-      isScanning: false, // Since dispatch was awaited and completed successfully, the scanner is no longer active
+      isScanning: true, // Scanner is active in the background
     });
 
     return res.status(200).json(body);

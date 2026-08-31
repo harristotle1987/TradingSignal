@@ -337,23 +337,23 @@ export class HourlyScannerService {
     const dispatchCompletedAt = Date.now();
     const cronResponseDurationMs = dispatchCompletedAt - dispatchStartedAt;
 
-    // 4. Launch background execution (awaited inside dispatch to keep the container/runtime alive and active on Cloud Run)
+    // 4. Launch background execution detached from the HTTP response
     const backgroundStartMs = Date.now();
-    await this.executeBackgroundScan(instanceId, isExternal, {
-      scanStartedAt: backgroundStartMs,
-      operationalBudgetMs: OPERATIONAL_SCAN_BUDGET_MS,
-      hardDeadlineMs: HARD_SCAN_DEADLINE_MS,
-      dispatchStartedAt,
-      dispatchCompletedAt,
-      cronResponseDurationMs,
-      lockWaitMs,
-    }).catch((err) => {
-      logger.error('[Hourly Scanner] Background scan uncaught exception:', { error: String(err) });
+    setImmediate(() => {
+      this.executeBackgroundScan(instanceId, isExternal, {
+        scanStartedAt: backgroundStartMs,
+        operationalBudgetMs: OPERATIONAL_SCAN_BUDGET_MS,
+        hardDeadlineMs: HARD_SCAN_DEADLINE_MS,
+        dispatchStartedAt,
+        dispatchCompletedAt,
+        cronResponseDurationMs,
+        lockWaitMs,
+      }).catch((err) => {
+        logger.error('[Hourly Scanner] Background scan uncaught exception:', { error: String(err) });
+      });
     });
 
     logger.info(`[Hourly Scanner] DISPATCH_COMPLETED | duration: ${cronResponseDurationMs}ms | instanceId: ${instanceId}`);
-
-    const freshCapState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
 
     return {
       success: true,
@@ -367,9 +367,9 @@ export class HourlyScannerService {
       lockWaitMs,
       instanceId,
       timestamp: Date.now(),
-      lastScanTime: freshCapState.lastAutomatedScan || freshCapState.lastScanTime || 0,
+      lastScanTime: capState.lastAutomatedScan || capState.lastScanTime || 0,
       nextScanTime: 0,
-      capState: freshCapState,
+      capState: capState,
     };
   }
 
