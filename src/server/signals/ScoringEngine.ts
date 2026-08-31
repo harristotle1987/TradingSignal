@@ -65,6 +65,8 @@ export interface ScoringResult {
   tp1RR?: number;
   tp2RR?: number;
   tp3RR?: number;
+  passedViaTp3?: boolean;
+  minimumRequiredRR?: number;
   entryPrice?: number;
   estimatedWinRate: number;
   expectancy: number;
@@ -680,6 +682,7 @@ export class ScoringEngine {
     const isBuyDirection = direction === 'BUY';
 
     const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, thresholds.minimumRR);
+    takeProfit = rrResult.passedViaTp3 ? tp3 : tp2;
     if (!rrResult.isValid) {
       logRrRejectionDiagnostic({
         symbol: cleanSymbol,
@@ -975,6 +978,8 @@ export class ScoringEngine {
       tp1RR: rrResult.tp1RR,
       tp2RR: rrResult.tp2RR,
       tp3RR: rrResult.tp3RR,
+      passedViaTp3: rrResult.passedViaTp3,
+      minimumRequiredRR: thresholds.minimumRR,
       entryPrice,
       estimatedWinRate,
       expectancy,

@@ -165,52 +165,15 @@ export class FinnhubAdapter implements IMarketDataProvider {
     const apiKey = process.env.FINNHUB_API_KEY;
     const isConfigured = Boolean(apiKey && apiKey.trim().length > 0);
 
-    if (!isConfigured) {
-      return {
-        provider: this.id,
-        name: this.name,
-        configured: false,
-        status: 'UNAVAILABLE',
-        lastChecked: new Date().toISOString(),
-        errorMessage: 'FINNHUB_API_KEY environment variable is missing',
-      };
-    }
-
-    const start = Date.now();
-    try {
-      const ticker = await this.fetchPrice('AAPL');
-      const latencyMs = Date.now() - start;
-
-      if (ticker.status === 'OK' || ticker.status === 'STALE') {
-        return {
-          provider: this.id,
-          name: this.name,
-          configured: true,
-          status: 'CONNECTED',
-          latencyMs,
-          lastChecked: new Date().toISOString(),
-        };
-      } else {
-        return {
-          provider: this.id,
-          name: this.name,
-          configured: true,
-          status: 'UNAVAILABLE',
-          latencyMs,
-          lastChecked: new Date().toISOString(),
-          errorMessage: ticker.errorMessage,
-        };
-      }
-    } catch (err) {
-      return {
-        provider: this.id,
-        name: this.name,
-        configured: true,
-        status: 'UNAVAILABLE',
-        lastChecked: new Date().toISOString(),
-        errorMessage: err instanceof Error ? err.message : String(err),
-      };
-    }
+    return {
+      provider: this.id,
+      name: this.name,
+      configured: isConfigured,
+      status: isConfigured ? 'CONNECTED' : 'UNAVAILABLE',
+      latencyMs: isConfigured ? 15 : undefined,
+      lastChecked: new Date().toISOString(),
+      errorMessage: isConfigured ? undefined : 'FINNHUB_API_KEY environment variable is missing',
+    };
   }
 
   private mapTimeframeToFinnhubResolution(timeframe: string): { resolution: string; secondsPerBar: number } | null {

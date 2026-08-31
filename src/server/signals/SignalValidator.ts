@@ -479,9 +479,11 @@ export class SignalValidator {
     }
 
     // Use 0.85 * ATR as the minimum noise hurdle to prevent tight SL hit by normal market noise
+    const thresholds = serverConfig.getConfig().thresholds;
     const minSafeStopDistance = 0.85 * atr;
-    // Use 1.80 * ATR as the minimum take-profit expansion to ensure meaningful profit after fees/slippage
-    const minSafeTargetDistance = 1.80 * atr;
+    // Use minimumRR * ATR as the minimum take-profit expansion to ensure meaningful profit after fees/slippage
+    const minRR = thresholds.minimumRR ?? 1.50;
+    const minSafeTargetDistance = minRR * atr;
 
     if (risk < minSafeStopDistance) {
       return {
@@ -499,26 +501,26 @@ export class SignalValidator {
       if (tp1Dist < minSafeTargetDistance * 0.5) {
         return {
           isValid: false,
-          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP1 distance (${tp1Dist.toFixed(precision)}) is below minimum conservative target distance (${(minSafeTargetDistance * 0.5).toFixed(precision)}, derived as 0.5 * 1.80 * ATR)`,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP1 distance (${tp1Dist.toFixed(precision)}) is below minimum conservative target distance (${(minSafeTargetDistance * 0.5).toFixed(precision)}, derived as 0.5 * ${minRR} * ATR)`,
         };
       }
       if (tp2Dist < minSafeTargetDistance) {
         return {
           isValid: false,
-          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP2 distance (${tp2Dist.toFixed(precision)}) is below minimum primary target distance (${minSafeTargetDistance.toFixed(precision)}, derived as 1.80 * ATR)`,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP2 distance (${tp2Dist.toFixed(precision)}) is below minimum primary target distance (${minSafeTargetDistance.toFixed(precision)}, derived as ${minRR} * ATR)`,
         };
       }
       if (tp3Dist < minSafeTargetDistance * 1.5) {
         return {
           isValid: false,
-          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP3 distance (${tp3Dist.toFixed(precision)}) is below minimum extended target distance (${(minSafeTargetDistance * 1.5).toFixed(precision)}, derived as 1.5 * 1.80 * ATR)`,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP3 distance (${tp3Dist.toFixed(precision)}) is below minimum extended target distance (${(minSafeTargetDistance * 1.5).toFixed(precision)}, derived as 1.5 * ${minRR} * ATR)`,
         };
       }
     } else {
       if (reward < minSafeTargetDistance) {
         return {
           isValid: false,
-          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected take-profit distance (${reward.toFixed(precision)}) is below minimum volatility profit expansion hurdle (${minSafeTargetDistance.toFixed(precision)}, derived as 1.80 * ATR of ${atr.toFixed(precision)})`,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected take-profit distance (${reward.toFixed(precision)}) is below minimum volatility profit expansion hurdle (${minSafeTargetDistance.toFixed(precision)}, derived as ${minRR} * ATR of ${atr.toFixed(precision)})`,
         };
       }
     }
@@ -542,7 +544,6 @@ export class SignalValidator {
     }
 
     // 5. Gross Risk / Reward Ratio Check: Minimum acceptable GROSS R:R from config using RiskRewardCalculator canonical module
-    const thresholds = serverConfig.getConfig().thresholds;
     const rrResult = RiskRewardCalculator.calculate(livePrice, adjustedSL, adjustedTp1 ?? adjustedTP, adjustedTp2 ?? adjustedTP, adjustedTp3 ?? adjustedTP, direction, thresholds.minimumRR);
     const rawRR = rrResult.effectiveGrossRR;
     if (rawRR < thresholds.minimumRR || !rrResult.isValid) {

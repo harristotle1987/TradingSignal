@@ -177,6 +177,7 @@ export interface ScannerPersistenceData {
   notifications: PersistedNotification[];
   deletedSignals?: string[];
   latestTimingTelemetry?: ScannerTimingTelemetry;
+  lastCompletedScanResult?: Record<string, any>;
   settings: {
     enabled: boolean;
     notificationsEnabled: boolean;
@@ -191,6 +192,7 @@ const LOCAL_PERSISTENCE_PATH = path.join(process.cwd(), 'scanner_persistence.jso
 const FIRESTORE_CAP_DOC = 'scanner/cap_state';
 const FIRESTORE_LOCK_DOC = 'scanner/lock_state';
 const FIRESTORE_TELEMETRY_DOC = 'scanner/latest_telemetry';
+const FIRESTORE_LAST_SCAN_DOC = 'scanner/last_completed_scan';
 const FIRESTORE_SIGNALS_COL = 'scanner_sent_signals';
 const FIRESTORE_REJECTIONS_COL = 'scanner_rejected_candidates';
 const FIRESTORE_NOTIFICATIONS_COL = 'scanner_notifications';
@@ -208,6 +210,7 @@ export class ScannerPersistence {
     lockAcquiredAt: 0,
   };
   private static latestTimingTelemetry: ScannerTimingTelemetry | null = null;
+  private static lastCompletedScanResult: Record<string, any> | null = null;
 
   public static localData: ScannerPersistenceData = {
     capState: {
@@ -1856,5 +1859,50 @@ export class ScannerPersistence {
     }
 
     return this.localData.latestTimingTelemetry || null;
+  }
+
+  /**
+   * Persists the complete result of the latest completed automated scan.
+   */
+  static async recordLastCompletedScanResult(result: Record<string, any>): Promise<void> {
+    this.init();
+    this.lastCompletedScanResult = result;
+    this.localData.lastCompletedScanResult = result;
+    this.saveLocalData();
+
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      try {
+        await firestore.doc(FIRESTORE_LAST_SCAN_DOC).set(result, { merge: true });
+        logger.info('[ScannerPersistence] Firestore recordLastCompletedScanResult successfully synchronized.');
+      } catch (err) {
+        logger.warn('[ScannerPersistence] Firestore recordLastCompletedScanResult error:', { error: String(err) });
+      }
+    }
+  }
+
+  /**
+   * Retrieves the complete result of the latest completed automated scan.
+   */
+  static async getLastCompletedScanResult(): Promise<Record<string, any> | null> {
+    this.init();
+    if (this.lastCompletedScanResult) {
+      return this.lastCompletedScanResult;
+    }
+
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      try {
+        const snap = await firestore.doc(FIRESTORE_LAST_SCAN_DOC).get();
+        if (snap.exists) {
+          this.lastCompletedScanResult = snap.data() as Record<string, any>;
+          return this.lastCompletedScanResult;
+        }
+      } catch (err) {
+        logger.warn('[ScannerPersistence] Firestore getLastCompletedScanResult error:', { error: String(err) });
+      }
+    }
+
+    return this.localData.lastCompletedScanResult || null;
   }
 }

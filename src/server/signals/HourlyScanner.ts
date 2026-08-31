@@ -548,50 +548,59 @@ export class HourlyScannerService {
 
     this.isScanning = true;
 
+    const scanType: 'MANUAL' | 'CRON' | 'AI' = isExternal ? 'CRON' : 'MANUAL';
+    const scanExecutionId = `${scanType.toLowerCase()}_${scanStartTime}_${instanceId}`;
+    const scanContext = {
+      scanExecutionId,
+      scanType,
+      scanStartedAt: scanStartTime,
+    };
+
     logger.info('================================================================');
-    logger.info('[Hourly Intelligent Scanner] Initiating Multi-Asset Scan Cycle...');
-    logger.info('================================================================');
+    logger.info(`[Hourly Intelligent Scanner] Initiating Multi-Asset Scan Cycle (${scanExecutionId})...`);
     logger.info('================================================================');
 
     try {
-      // 0. Evaluate active signals lifecycle (TP/SL/Expiration hits) and Adaptive Opportunity Funnel
-      const lifecycleStart = Date.now();
-      const lifecycleEval = await SignalLifecycleManager.evaluateActiveSignals();
-      if (lifecycleEval.evaluatedCount > 0) {
-        logger.info(`[Hourly Scanner] Lifecycle evaluation complete: ${lifecycleEval.evaluatedCount} active signals evaluated. TP Hits: ${lifecycleEval.tpHitCount}, SL Hits: ${lifecycleEval.slHitCount}, Expired: ${lifecycleEval.expiredCount}.`);
-      }
+      return await marketDataManager.runInScanContext(scanContext, async () => {
+        try {
+        // 0. Evaluate active signals lifecycle (TP/SL/Expiration hits) and Adaptive Opportunity Funnel
+        const lifecycleStart = Date.now();
+        const lifecycleEval = await SignalLifecycleManager.evaluateActiveSignals();
+        if (lifecycleEval.evaluatedCount > 0) {
+          logger.info(`[Hourly Scanner] Lifecycle evaluation complete: ${lifecycleEval.evaluatedCount} active signals evaluated. TP Hits: ${lifecycleEval.tpHitCount}, SL Hits: ${lifecycleEval.slHitCount}, Expired: ${lifecycleEval.expiredCount}.`);
+        }
 
-      // Evaluate Opportunity Funnel items (Gate 26)
-      const funnelReport = OpportunityFunnelStore.evaluateAll();
-      if (funnelReport.totalActive > 0) {
-        logger.info(`[Hourly Scanner] Opportunity Funnel evaluation: ${funnelReport.totalActive} active tracked candidates (${funnelReport.watchingCount} watching, ${funnelReport.qualifiedCount} qualified, ${funnelReport.promotedCount} promoted).`);
-      }
-      const lifecycleDurationMs = Date.now() - lifecycleStart;
-      logger.info(`[Scanner Telemetry] LIFECYCLE_EVALUATION | duration: ${lifecycleDurationMs}ms`);
+        // Evaluate Opportunity Funnel items (Gate 26)
+        const funnelReport = OpportunityFunnelStore.evaluateAll();
+        if (funnelReport.totalActive > 0) {
+          logger.info(`[Hourly Scanner] Opportunity Funnel evaluation: ${funnelReport.totalActive} active tracked candidates (${funnelReport.watchingCount} watching, ${funnelReport.qualifiedCount} qualified, ${funnelReport.promotedCount} promoted).`);
+        }
+        const lifecycleDurationMs = Date.now() - lifecycleStart;
+        logger.info(`[Scanner Telemetry] LIFECYCLE_EVALUATION | duration: ${lifecycleDurationMs}ms`);
 
-      // 1. Check current Daily Cap state
-      const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
-      const currentDailyCount = capState.dailySignalCount;
-      const dailyCap = capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap;
+        // 1. Check current Daily Cap state
+        const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
+        const currentDailyCount = capState.dailySignalCount;
+        const dailyCap = capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap;
 
-      if (currentDailyCount >= dailyCap) {
-        logger.info(`[Hourly Scanner] Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Scanning skipped to preserve portfolio limits.`);
-        return {
-          success: true,
-          status: 'SKIPPED_CAP_REACHED',
-          message: `REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving risk limits.`,
-          timestamp: Date.now(),
-          lastScanTime: capState.lastAutomatedScan || capState.lastScanTime || 0,
-          candidatesEvaluated: 0,
-          acceptedSignalsCount: 0,
-          acceptedSignals: [],
-          signalsFound: 0,
-          qualifiedSetups: [],
-          rejectedCount: 0,
-          rejectionReasons: [`REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving portfolio risk limits.`],
-          capState,
-        };
-      }
+        if (currentDailyCount >= dailyCap) {
+          logger.info(`[Hourly Scanner] Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Scanning skipped to preserve portfolio limits.`);
+          return {
+            success: true,
+            status: 'SKIPPED_CAP_REACHED',
+            message: `REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving risk limits.`,
+            timestamp: Date.now(),
+            lastScanTime: capState.lastAutomatedScan || capState.lastScanTime || 0,
+            candidatesEvaluated: 0,
+            acceptedSignalsCount: 0,
+            acceptedSignals: [],
+            signalsFound: 0,
+            qualifiedSetups: [],
+            rejectedCount: 0,
+            rejectionReasons: [`REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving portfolio risk limits.`],
+            capState,
+          };
+        }
 
       const remainingAllowance = dailyCap - currentDailyCount;
       logger.info(`[Hourly Scanner] Daily Cap status: ${currentDailyCount}/${dailyCap} used. Remaining allowance: ${remainingAllowance}`);
@@ -630,6 +639,11 @@ export class HourlyScannerService {
       let totalCandidatesEvaluated = 0;
       let totalCandidatesRejectedFinal = 0;
       let totalSignalsGenerated = 0;
+      let totalCandidatesRejectedBeforeMTF = 0;
+      let totalCandidatesRejectedByMTF = 0;
+      let totalCandidatesRejectedByScore = 0;
+      let totalCandidatesRejectedByRR = 0;
+      let totalCandidatesRejectedByStructure = 0;
       const aggregatedRejectionCounts: Record<string, number> = {};
       const allCandidateRejectionDetails: any[] = [];
 
@@ -653,6 +667,11 @@ export class HourlyScannerService {
           }
           if (tel.timeBudgetExceeded) aggregatedTimeBudgetExceeded = true;
           if (tel.providerRequestsStoppedByBudget) aggregatedProviderRequestsStoppedByBudget = true;
+          if (typeof tel.candidatesRejectedBeforeMTF === 'number') totalCandidatesRejectedBeforeMTF += tel.candidatesRejectedBeforeMTF;
+          if (typeof tel.candidatesRejectedByMTF === 'number') totalCandidatesRejectedByMTF += tel.candidatesRejectedByMTF;
+          if (typeof tel.candidatesRejectedByScore === 'number') totalCandidatesRejectedByScore += tel.candidatesRejectedByScore;
+          if (typeof tel.candidatesRejectedByRR === 'number') totalCandidatesRejectedByRR += tel.candidatesRejectedByRR;
+          if (typeof tel.candidatesRejectedByStructure === 'number') totalCandidatesRejectedByStructure += tel.candidatesRejectedByStructure;
         }
 
         totalUniverseSymbolsScanned += universeSymbolsScanned;
@@ -1456,7 +1475,7 @@ export class HourlyScannerService {
         providerRequestsStoppedByBudget: aggregatedProviderRequestsStoppedByBudget,
       };
 
-      return {
+      const completedResult = {
         success: true,
         status: 'COMPLETED',
         message:
@@ -1477,6 +1496,11 @@ export class HourlyScannerService {
         signalsFound: totalSignalsGenerated,
         qualifiedSetups: selectedSetups,
         rejectedCount: rejectedDuringScan.length,
+        candidatesRejectedBeforeMTF: totalCandidatesRejectedBeforeMTF,
+        candidatesRejectedByMTF: totalCandidatesRejectedByMTF,
+        candidatesRejectedByScore: totalCandidatesRejectedByScore,
+        candidatesRejectedByRR: totalCandidatesRejectedByRR,
+        candidatesRejectedByStructure: totalCandidatesRejectedByStructure,
         rejectionReasons: rejectionReasonStrings,
         rejectionReasonsAggregated: aggregatedRejectionCounts,
         rejectionReasonsCounts: aggregatedRejectionCounts,
@@ -1495,6 +1519,10 @@ export class HourlyScannerService {
         timeBudgetExceeded: aggregatedTimeBudgetExceeded,
         providerRequestsStoppedByBudget: aggregatedProviderRequestsStoppedByBudget,
       };
+
+      await ScannerPersistence.recordLastCompletedScanResult(completedResult);
+
+      return completedResult;
     } catch (err) {
       logger.error('[Hourly Scanner] Critical failure during scan execution:', { error: String(err) });
       if (isExternal) {
@@ -1528,6 +1556,8 @@ export class HourlyScannerService {
         rejectionReasons: [`REJECTED: SCAN_ERROR. Scan execution error: ${errMsg}`],
         capState,
       };
+    }
+    });
     } finally {
       this.isScanning = false;
       await ScannerPersistence.releaseLock(instanceId);

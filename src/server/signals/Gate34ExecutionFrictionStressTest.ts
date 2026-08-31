@@ -59,7 +59,7 @@ export interface FrictionStressTestResult {
 }
 
 export interface FrictionTestThresholds {
-  minimumRR?: number;                 // Minimum acceptable GROSS R:R (default: 1.8)
+  minimumRR?: number;                 // Minimum acceptable GROSS R:R (default: 1.5)
   minimumNetRR?: number;              // Minimum acceptable NET R:R (default: 1.5)
   minimumAdverseNetRR?: number;       // Optional stress-test floor (default: 1.0)
   enforceAdverseNetRRHardGate?: boolean; // Whether adverse net RR is a hard gate (default: false)
@@ -99,7 +99,7 @@ export class Gate34ExecutionFrictionStressTest {
 
     const direction = stopLoss < entryPrice ? 'BUY' : 'SELL';
     const cfg = serverConfig.getConfig().thresholds;
-    const minGrossRR = thresholdOverrides?.minimumRR ?? cfg.minimumRR ?? 1.80;
+    const minGrossRR = thresholdOverrides?.minimumRR ?? cfg.minimumRR ?? 1.50;
 
     const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, minGrossRR);
     const rawRisk = rrResult.riskDistance;

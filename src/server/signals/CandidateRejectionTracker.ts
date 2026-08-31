@@ -115,7 +115,7 @@ export class CandidateRejectionTracker {
       if (match) {
         return `Risk/reward only ${match[1]}:1; minimum required is ${match[2]}:1.`;
       }
-      return 'Risk/reward ratio below required minimum threshold (1.8:1).';
+      return 'Risk/reward ratio below required minimum threshold (1.5:1).';
     }
 
     if (clean.includes('Entry too close to major resistance') || clean.includes('resistance')) {

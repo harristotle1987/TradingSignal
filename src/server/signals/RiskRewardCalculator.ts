@@ -50,7 +50,7 @@ export function logRrRejectionDiagnostic(input: RrDiagnosticInput): void {
 
   const riskDistance = Math.abs(entryPrice - stopLoss);
   const isBuy = direction === 'BUY';
-  const required1_8RTarget = isBuy ? entryPrice + (riskDistance * 1.8) : entryPrice - (riskDistance * 1.8);
+  const required1_5RTarget = isBuy ? entryPrice + (riskDistance * 1.5) : entryPrice - (riskDistance * 1.5);
 
   const distTP1 = Math.abs(tp1 - entryPrice);
   const distTP2 = Math.abs(tp2 - entryPrice);
@@ -58,9 +58,9 @@ export function logRrRejectionDiagnostic(input: RrDiagnosticInput): void {
 
   const nearestAnchor = structural1h > 0 ? structural1h : (structural15m > 0 ? structural15m : 0);
 
-  let is1_8RBeyondNearestAnchor = false;
+  let is1_5RBeyondNearestAnchor = false;
   if (nearestAnchor > 0) {
-    is1_8RBeyondNearestAnchor = isBuy ? required1_8RTarget > nearestAnchor : required1_8RTarget < nearestAnchor;
+    is1_5RBeyondNearestAnchor = isBuy ? required1_5RTarget > nearestAnchor : required1_5RTarget < nearestAnchor;
   }
 
   // Read exact TP3 max percentage guardrail ceiling from ASSET_CLASS_GUARDRAILS
@@ -74,24 +74,24 @@ export function logRrRejectionDiagnostic(input: RrDiagnosticInput): void {
   const maxTp3Pct = ASSET_CLASS_GUARDRAILS[guardrailKey]?.tp3.maxPct ?? ASSET_CLASS_GUARDRAILS.DEFAULT.tp3.maxPct;
   const maxTp3AllowedDistance = entryPrice * (maxTp3Pct / 100);
 
-  const fartherTargetExists = (riskDistance * 1.8) <= maxTp3AllowedDistance;
+  const fartherTargetExists = (riskDistance * 1.5) <= maxTp3AllowedDistance;
 
-  let fartherTargetRejectionReason = 'No structural/liquidity target achieves 1.8R within maximum TP guardrails.';
+  let fartherTargetRejectionReason = 'No structural/liquidity target achieves 1.5R within maximum TP guardrails.';
   if (!fartherTargetExists) {
-    fartherTargetRejectionReason = `Required 1.8R distance (${(riskDistance * 1.8).toFixed(4)}) exceeds maximum allowed TP3 guardrail distance (${maxTp3AllowedDistance.toFixed(4)}, ${maxTp3Pct}% of entry).`;
-  } else if (distTP3 / (riskDistance || 1) < 1.8) {
-    fartherTargetRejectionReason = `Generated TP3 R:R (${(distTP3 / (riskDistance || 1)).toFixed(2)}:1) remains below 1.8:1 minimum requirement even at maximum structural/ATR expansion.`;
+    fartherTargetRejectionReason = `Required 1.5R distance (${(riskDistance * 1.5).toFixed(4)}) exceeds maximum allowed TP3 guardrail distance (${maxTp3AllowedDistance.toFixed(4)}, ${maxTp3Pct}% of entry).`;
+  } else if (distTP3 / (riskDistance || 1) < 1.5) {
+    fartherTargetRejectionReason = `Generated TP3 R:R (${(distTP3 / (riskDistance || 1)).toFixed(2)}:1) remains below 1.5:1 minimum requirement even at maximum structural/ATR expansion.`;
   }
 
   logger.info(`[R:R REJECTION DIAGNOSTIC] Symbol: ${symbol} (${direction})
   1. Entry Price: ${entryPrice}
   2. Final SL: ${stopLoss}
   3. Risk Distance: ${riskDistance.toFixed(6)}
-  4. Required 1.8R Target: ${required1_8RTarget.toFixed(6)}
+  4. Required 1.5R Target: ${required1_5RTarget.toFixed(6)}
   5. Targets: TP1=${tp1}, TP2=${tp2}, TP3=${tp3}
   6. Target Distances: TP1=${distTP1.toFixed(6)}, TP2=${distTP2.toFixed(6)}, TP3=${distTP3.toFixed(6)}
   7. Structural Levels Used: 15m=${structural15m}, 1h=${structural1h}
-  8. 1.8R Target Beyond Nearest Anchor: ${is1_8RBeyondNearestAnchor} (anchor=${nearestAnchor})
+  8. 1.5R Target Beyond Nearest Anchor: ${is1_5RBeyondNearestAnchor} (anchor=${nearestAnchor})
   9. Farther Target Exists Within Max TP3 Guardrail (${maxTp3Pct}%): ${fartherTargetExists}
  10. Farther Target Rejection Reason: ${fartherTargetRejectionReason}`);
 }
@@ -101,8 +101,8 @@ export class RiskRewardCalculator {
    * Calculates gross R:R and individual target R:R ratios canonically.
    * Pure local calculation with zero API/provider requests.
    * Multi-target R:R gate evaluation:
-   *  Condition 1: TP2 R:R >= minRR (e.g. 1.80)
-   *  Condition 2: TP3 R:R >= minRR (e.g. 1.80) AND TP3 is structurally valid/reachable according to TP validation rules.
+   *  Condition 1: TP2 R:R >= minRR (e.g. 1.50)
+   *  Condition 2: TP3 R:R >= minRR (e.g. 1.50) AND TP3 is structurally valid/reachable according to TP validation rules.
    */
   public static calculate(
     entryPrice: number,
@@ -111,7 +111,7 @@ export class RiskRewardCalculator {
     tp2: number,
     tp3: number,
     direction: SignalDirection,
-    minRR: number = 1.80
+    minRR: number = 1.50
   ): RiskRewardResult {
     const invalidResult: RiskRewardResult = {
       riskDistance: 0,

@@ -146,7 +146,7 @@ export const GATE_EXPLANATIONS: Record<string, { title: string; desc: string }> 
   },
   RR: {
     title: 'Minimum acceptable Risk/Reward Ratio',
-    desc: 'Strictly enforces that the gross risk-to-reward ratio meets the system-wide safety threshold (minimum 1.8:1).',
+    desc: 'Strictly enforces that the gross risk-to-reward ratio meets the system-wide safety threshold (minimum 1.5:1).',
   },
   COOLDOWN: {
     title: 'Asset and Strategy Cooldown',
@@ -353,7 +353,7 @@ export const AcceptanceBreakdown: React.FC<{ signal: AcceptedSignal }> = ({ sign
 
   const score = signal.score ?? signal.confidenceScore ?? 70;
   const winRate = signal.estimatedWinRate ?? 60;
-  const rr = signal.riskRewardRatio ?? 1.8;
+  const rr = signal.riskRewardRatio ?? 1.5;
 
   // Derive rating classification based on score
   let rating = 'Standard';

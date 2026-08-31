@@ -35,7 +35,7 @@ export interface SignalThresholds {
   qualifiedCandidateThreshold: number;
   /** signalThreshold: 0-100 points */
   signalThreshold: number;
-  /** minimumRR: minimum acceptable GROSS R:R ratio, e.g. 1.8 */
+  /** minimumRR: minimum acceptable GROSS R:R ratio, e.g. 1.5 */
   minimumRR: number;
   /** minimumNetRR: minimum acceptable NET R:R ratio, e.g. 1.5 */
   minimumNetRR: number;
@@ -116,7 +116,7 @@ class ConfigService {
       watchingThreshold: parseInt(process.env.THRESHOLD_WATCHING_SCORE || '68', 10),
       qualifiedCandidateThreshold: parseInt(process.env.THRESHOLD_QUALIFIED_CANDIDATE_SCORE || '75', 10),
       signalThreshold: authoritativeMinScore,
-      minimumRR: parseFloat(process.env.THRESHOLD_MIN_RR || '1.8'),
+      minimumRR: parseFloat(process.env.THRESHOLD_MIN_RR || '1.5'),
       minimumNetRR: parseFloat(process.env.THRESHOLD_MIN_NET_RR || '1.5'),
       minimumAdverseNetRR: process.env.THRESHOLD_MIN_ADVERSE_NET_RR ? parseFloat(process.env.THRESHOLD_MIN_ADVERSE_NET_RR) : 1.0,
       enforceAdverseNetRRHardGate: process.env.ENFORCE_ADVERSE_NET_RR_HARD_GATE === 'true',

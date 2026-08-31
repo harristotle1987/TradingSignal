@@ -1011,9 +1011,8 @@ export async function runStagedPipeline(
       const safeTp1 = tpEnforced.tp1;
       const safeTp2 = tpEnforced.tp2;
       const safeTp3 = tpEnforced.tp3;
-      const safeTakeProfit = tpEnforced.takeProfit;
-
       const rrResult = RiskRewardCalculator.calculate(finalEntry, finalSL, safeTp1, safeTp2, safeTp3, scoring.direction);
+      const safeTakeProfit = rrResult.passedViaTp3 ? safeTp3 : safeTp2;
       const tp1Rr = rrResult.tp1RR;
       const tp2Rr = rrResult.tp2RR;
       const tp3Rr = rrResult.tp3RR;
@@ -1037,6 +1036,7 @@ export async function runStagedPipeline(
         probabilitySourceUsed: serverConfig.getConfig().thresholds.probabilitySource,
         isEmpiricallyCalibrated: false, isAiValidated: false, stopLoss: finalSL,
         takeProfit: safeTakeProfit, tp1: safeTp1, tp2: safeTp2, tp3: safeTp3, tp1Rr, tp2Rr, tp3Rr,
+        passedViaTp3: rrResult.passedViaTp3, minimumRequiredRR: serverConfig.getConfig().thresholds.minimumRR,
         riskRewardRatio: exactPrimaryRr, grossRiskRewardRatio: scoring.estimatedFriction?.grossRiskRewardRatio ?? exactPrimaryRr,
         netRiskRewardRatio: scoring.estimatedFriction?.netRiskRewardRatio,
         adverseNetRiskRewardRatio: scoring.estimatedFriction?.adverseNetRiskRewardRatio,

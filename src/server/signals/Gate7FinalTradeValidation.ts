@@ -86,7 +86,7 @@ export class Gate7FinalTradeValidation {
   public static get REQUIRED_MIN_SCORE(): number {
     return serverConfig?.getConfig?.()?.thresholds?.minimumScore ?? serverConfig?.getConfig?.()?.thresholds?.signalThreshold ?? 70;
   }
-  public static readonly DEFAULT_MIN_RR = 1.3;
+  public static readonly DEFAULT_MIN_RR = 1.5;
   public static readonly MAX_DATA_AGE_SECONDS = 180; // 3 minutes
 
   /**
@@ -580,7 +580,7 @@ export class Gate7FinalTradeValidation {
       validatedAt: now,
       adjustedEntryPrice: ctx.entryPrice,
       adjustedStopLoss: ctx.stopLoss,
-      adjustedTakeProfit: tp1,
+      adjustedTakeProfit: canonicalRR.passedViaTp3 ? tp3 : tp2,
       adjustedNetRR: canonicalRR.grossRR,
     };
   }

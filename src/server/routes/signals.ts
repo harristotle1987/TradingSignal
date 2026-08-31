@@ -55,6 +55,7 @@ async function buildCronResponseBody(options: {
   const now = Date.now();
   const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
   const settings = ScannerPersistence.getSettings();
+  const lastScan = await ScannerPersistence.getLastCompletedScanResult();
 
   const validIntervals = [15, 30, 45, 60];
   const intervalMinutes = validIntervals.includes(Number(settings.intervalMinutes))
@@ -78,6 +79,10 @@ async function buildCronResponseBody(options: {
 
   const scanInProgress = options.status === 'DISPATCHED' || isScanning;
 
+  const isCompleted = options.status === 'COMPLETED';
+  const metricsSource = isCompleted ? 'CURRENT_COMPLETED_SCAN' : 'LAST_COMPLETED_SCAN';
+  const currentScanMetricsAvailable = isCompleted;
+
   let scannerStatus = 'IDLE';
   if (scanInProgress) {
     scannerStatus = 'RUNNING';
@@ -90,22 +95,33 @@ async function buildCronResponseBody(options: {
   const nextEligibleScan = lastAutomatedScan
     ? lastAutomatedScan + configuredInterval * 1000
     : now + configuredInterval * 1000;
+  const nextCronExecution = nextEligibleScan;
+  const nextScanTime = nextEligibleScan;
+  const lastScanTime = lastAutomatedScan || 0;
 
-  // Funnel / Scan statistics from last completed scan
-  const universeSymbolsScanned = capState.universeSymbolsScanned !== undefined ? capState.universeSymbolsScanned : null;
-  const candidatesEvaluated = capState.candidatesEvaluated !== undefined ? capState.candidatesEvaluated : null;
-  const deepCandidates = capState.deepCandidates !== undefined
-    ? capState.deepCandidates
-    : (capState.preliminaryCandidatesFound !== undefined ? capState.preliminaryCandidatesFound : null);
-  const signalsFound = capState.signalsGenerated !== undefined
-    ? capState.signalsGenerated
-    : (capState.lastSignalsFound !== undefined ? capState.lastSignalsFound : null);
-  const signalsAccepted = capState.signalsAccepted !== undefined
-    ? capState.signalsAccepted
-    : (capState.lastAcceptedSignals !== undefined ? capState.lastAcceptedSignals : null);
-  const signalsRejected = capState.signalsRejected !== undefined
-    ? capState.signalsRejected
-    : (capState.candidatesRejectedFinal !== undefined ? capState.candidatesRejectedFinal : null);
+  // Funnel / Scan statistics from last completed scan or capState
+  const universeSymbolsScanned = lastScan?.universeSymbolsScanned ?? capState.universeSymbolsScanned ?? 0;
+  const preliminaryCandidatesFound = lastScan?.preliminaryCandidatesFound ?? capState.preliminaryCandidatesFound ?? 0;
+  const candidatesRejectedPreliminary = lastScan?.candidatesRejectedPreliminary ?? capState.candidatesRejectedPreliminary ?? 0;
+  const candidatesEvaluated = lastScan?.candidatesEvaluated ?? capState.candidatesEvaluated ?? 0;
+  const candidatesRejectedFinal = lastScan?.candidatesRejectedFinal ?? capState.candidatesRejectedFinal ?? 0;
+
+  const signalsGenerated = lastScan?.signalsGenerated ?? capState.signalsGenerated ?? 0;
+  const signalsAccepted = lastScan?.signalsAccepted ?? capState.signalsAccepted ?? 0;
+
+  const lastCandidatesEvaluated = candidatesEvaluated;
+  const lastSignalsFound = signalsGenerated;
+  const lastAcceptedSignals = signalsAccepted;
+
+  const signalsFound = signalsGenerated;
+  const acceptedSignalsCount = signalsAccepted;
+
+  const rejectedCount = lastScan?.rejectedCount ?? Math.max(0, universeSymbolsScanned - signalsAccepted);
+  const candidatesRejectedBeforeMTF = lastScan?.candidatesRejectedBeforeMTF ?? 0;
+  const candidatesRejectedByMTF = lastScan?.candidatesRejectedByMTF ?? 0;
+  const candidatesRejectedByScore = lastScan?.candidatesRejectedByScore ?? 0;
+  const candidatesRejectedByRR = lastScan?.candidatesRejectedByRR ?? 0;
+  const candidatesRejectedByStructure = lastScan?.candidatesRejectedByStructure ?? 0;
 
   const defaultRejectionReasons: Record<string, number> = {
     RR: 0,
@@ -114,30 +130,61 @@ async function buildCronResponseBody(options: {
     MARKET_STRUCTURE: 0,
   };
 
-  const rejectionReasons = capState.rejectionReasons && Object.keys(capState.rejectionReasons).length > 0
-    ? capState.rejectionReasons
-    : (signalsRejected !== null ? defaultRejectionReasons : null);
+  const rejectionReasons = lastScan?.rejectionReasons ?? capState.rejectionReasons ?? defaultRejectionReasons;
+  const rejectionReasonsCounts = lastScan?.rejectionReasonsCounts ?? lastScan?.rejectionReasonsAggregated ?? rejectionReasons;
+  const candidateRejectionDetails = lastScan?.candidateRejectionDetails ?? [];
+
+  const diagnosticsCount = lastScan?.diagnosticsCount ?? lastScan?.diagnostics?.length ?? 0;
+  const diagnostics = lastScan?.diagnostics ?? [];
+
+  const scanDurationMs = lastScan?.scanDurationMs ?? lastScan?.scanDuration ?? capState.lastScanDuration ?? 0;
+  const scanDuration = scanDurationMs;
+  const totalDurationMs = scanDurationMs;
+
+  const globalScanStartMs = lastScan?.globalScanStartMs ?? (lastAutomatedScan ? lastAutomatedScan - scanDurationMs : 0);
+  const globalScanDeadlineMs = lastScan?.globalScanDeadlineMs ?? (globalScanStartMs ? globalScanStartMs + 25000 : 0);
+  const currentElapsedMs = lastScan?.currentElapsedMs ?? scanDurationMs;
+  const remainingBudgetMs = lastScan?.remainingBudgetMs ?? Math.max(0, 25000 - currentElapsedMs);
+
+  const gate6ElapsedMs = lastScan?.gate6ElapsedMs ?? 0;
+  const stage3ElapsedMs = lastScan?.stage3ElapsedMs ?? 0;
+
+  const timeBudgetExceeded = lastScan?.timeBudgetExceeded ?? false;
+  const providerRequestsStoppedByBudget = lastScan?.providerRequestsStoppedByBudget ?? false;
+
+  const latestTelemetry = await ScannerPersistence.getLatestTimingTelemetry();
+  const timingTelemetry = lastScan?.timingTelemetry ?? latestTelemetry ?? null;
 
   // Outbound Provider & Cache Telemetry
   const tel = providerTelemetry.getSummary();
-  const providerSummary: Record<string, { requests: number; successes: number; rateLimited: number; errors: number }> = {};
+  const requiredProviders = ['tiingo', 'finnhub', 'twelveData', 'bitget', 'exchangerate'];
+  const providerSummary: Record<string, { requests: number; successes: number; rateLimited: number; errors: number; timeouts: number; latencyMs: number }> = {};
 
-  for (const [pId, stats] of Object.entries(tel.providers)) {
-    let providerKey = pId.toLowerCase();
-    if (providerKey === 'twelvedata') providerKey = 'twelveData';
+  for (const pKey of requiredProviders) {
+    const lookupKey = pKey.toLowerCase();
+    const stats = tel.providers[lookupKey] || {
+      requests: 0,
+      successes: 0,
+      http429Count: 0,
+      timeoutCount: 0,
+      otherErrors: 0,
+      avgLatencyMs: 0,
+    };
 
-    providerSummary[providerKey] = {
-      requests: stats.requests,
-      successes: stats.successes,
-      rateLimited: stats.http429Count,
-      errors: stats.timeoutCount + stats.otherErrors,
+    providerSummary[pKey] = {
+      requests: stats.requests || 0,
+      successes: stats.successes || 0,
+      rateLimited: stats.http429Count || 0,
+      errors: stats.otherErrors || 0,
+      timeouts: stats.timeoutCount || 0,
+      latencyMs: stats.avgLatencyMs || 0,
     };
   }
 
   const totalCacheOps = tel.cacheHits + tel.cacheMisses;
   const hitRate = totalCacheOps > 0
     ? Number(((tel.cacheHits / totalCacheOps) * 100).toFixed(1))
-    : 100.0;
+    : null; // Rule: Never report 100% when there were zero cache operations!
 
   const cacheSummary = {
     hits: tel.cacheHits,
@@ -165,42 +212,90 @@ async function buildCronResponseBody(options: {
     status: options.status,
     message: options.message,
     timestamp: now,
+
     lastCronExecution,
     lastAutomatedScan,
     lastScanCompletedAt,
     lastScanDuration,
+
+    universeSymbolsScanned,
+    preliminaryCandidatesFound,
+    candidatesRejectedPreliminary,
+    candidatesEvaluated,
+    candidatesRejectedFinal,
+
+    signalsGenerated,
+    signalsAccepted,
+
+    lastCandidatesEvaluated,
+    lastSignalsFound,
+    lastAcceptedSignals,
+
+    signalsFound,
+    acceptedSignalsCount,
+
+    nextCronExecution,
+    lastScanTime,
+    nextScanTime,
+    intervalMinutes,
+
+    rejectedCount,
+    candidatesRejectedBeforeMTF,
+    candidatesRejectedByMTF,
+    candidatesRejectedByScore,
+    candidatesRejectedByRR,
+    candidatesRejectedByStructure,
+
+    rejectionReasons,
+    rejectionReasonsCounts,
+    candidateRejectionDetails,
+
+    diagnosticsCount,
+    diagnostics,
+
+    scanDurationMs,
+    scanDuration,
+    totalDurationMs,
+
+    globalScanStartMs,
+    globalScanDeadlineMs,
+    currentElapsedMs,
+    remainingBudgetMs,
+
+    gate6ElapsedMs,
+    stage3ElapsedMs,
+
+    timeBudgetExceeded,
+    providerRequestsStoppedByBudget,
+    timingTelemetry,
+
+    external_hourly_scan_status: options.status === 'DISPATCHED' ? 'DISPATCHED_IN_BACKGROUND' : options.status,
+
+    providerSummary,
+    cacheSummary,
+    failoverCount,
+
     scannerStatus,
+    scanInProgress,
+    metricsSource,
+    currentScanMetricsAvailable,
+
     schedule,
     configuredInterval,
     dailySignalCap,
     signalsToday,
     remainingSignals,
-    universeSymbolsScanned,
-    candidatesEvaluated,
-    deepCandidates,
-    signalsFound,
-    signalsAccepted,
-    signalsRejected,
-    rejectionReasons,
-    providerSummary,
-    cacheSummary,
-    failoverCount,
-    scanInProgress,
     nextEligibleScan,
     executionId,
 
-    // Backward compatibility fields
+    // Backward compatibility telemetry fields
     dispatchStartedAt: options.requestStartTime,
     dispatchCompletedAt,
     cronRequestDurationMs: durationMs,
     cronResponseDurationMs: durationMs,
     dispatchDurationMs: durationMs,
     lockWaitMs: 0,
-    lastScanTime: lastAutomatedScan || 0,
-    nextScanTime: nextEligibleScan,
     capState,
-    external_hourly_scan_status: options.status === 'DISPATCHED' ? 'DISPATCHED_IN_BACKGROUND' : options.status,
-    intervalMinutes,
   };
 }
 

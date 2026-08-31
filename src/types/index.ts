@@ -149,6 +149,8 @@ export interface TradingSignal {
   tp1Rr?: number;
   tp2Rr?: number;
   tp3Rr?: number;
+  passedViaTp3?: boolean;
+  minimumRequiredRR?: number;
   riskRewardRatio: number;
   grossRiskRewardRatio?: number;
   netRiskRewardRatio?: number;
