@@ -146,12 +146,12 @@ async function buildCronResponseBody(options: {
 
   const scanDurationMs = lastScan?.scanDurationMs ?? lastScan?.scanDuration ?? capState.lastScanDuration ?? 0;
   const scanDuration = scanDurationMs;
-  const totalDurationMs = scanDurationMs;
 
   const globalScanStartMs = lastScan?.globalScanStartMs ?? (lastAutomatedScan ? lastAutomatedScan - scanDurationMs : 0);
   const globalScanDeadlineMs = lastScan?.globalScanDeadlineMs ?? (globalScanStartMs ? globalScanStartMs + 25000 : 0);
-  const currentElapsedMs = lastScan?.currentElapsedMs ?? scanDurationMs;
-  const remainingBudgetMs = lastScan?.remainingBudgetMs ?? Math.max(0, 25000 - currentElapsedMs);
+  const currentElapsedMs = globalScanStartMs ? (now - globalScanStartMs) : scanDurationMs;
+  const remainingBudgetMs = globalScanDeadlineMs ? Math.max(0, globalScanDeadlineMs - now) : 0;
+  const totalDurationMs = globalScanStartMs ? (now - globalScanStartMs) : scanDurationMs;
 
   const gate6ElapsedMs = lastScan?.gate6ElapsedMs ?? 0;
   const stage3ElapsedMs = lastScan?.stage3ElapsedMs ?? 0;
@@ -574,6 +574,19 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
         isScanning: false,
       });
       return res.status(500).json(body);
+    }
+
+    if (dispatchResult.status === 'COMPLETED') {
+      const execId = dispatchResult.instanceId ? `scan-${now}-${dispatchResult.instanceId}` : undefined;
+      const body = await buildCronResponseBody({
+        status: 'COMPLETED',
+        message: dispatchResult.message,
+        success: true,
+        requestStartTime,
+        executionId: execId,
+        isScanning: false,
+      });
+      return res.status(200).json(body);
     }
 
     const execId = dispatchResult.instanceId ? `scan-${now}-${dispatchResult.instanceId}` : undefined;

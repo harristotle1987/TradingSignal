@@ -337,40 +337,21 @@ export class HourlyScannerService {
     const dispatchCompletedAt = Date.now();
     const cronResponseDurationMs = dispatchCompletedAt - dispatchStartedAt;
 
-    // 4. Launch background execution detached from the HTTP response
+    // 4. Run background execution synchronously (awaited to return full completed scan results in HTTP response)
     const backgroundStartMs = Date.now();
-    setImmediate(() => {
-      this.executeBackgroundScan(instanceId, isExternal, {
-        scanStartedAt: backgroundStartMs,
-        operationalBudgetMs: OPERATIONAL_SCAN_BUDGET_MS,
-        hardDeadlineMs: HARD_SCAN_DEADLINE_MS,
-        dispatchStartedAt,
-        dispatchCompletedAt,
-        cronResponseDurationMs,
-        lockWaitMs,
-      }).catch((err) => {
-        logger.error('[Hourly Scanner] Background scan uncaught exception:', { error: String(err) });
-      });
+    const scanResult = await this.executeBackgroundScan(instanceId, isExternal, {
+      scanStartedAt: backgroundStartMs,
+      operationalBudgetMs: OPERATIONAL_SCAN_BUDGET_MS,
+      hardDeadlineMs: HARD_SCAN_DEADLINE_MS,
+      dispatchStartedAt,
+      dispatchCompletedAt,
+      cronResponseDurationMs,
+      lockWaitMs,
     });
 
     logger.info(`[Hourly Scanner] DISPATCH_COMPLETED | duration: ${cronResponseDurationMs}ms | instanceId: ${instanceId}`);
 
-    return {
-      success: true,
-      status: 'DISPATCHED',
-      message: 'Automated scan successfully dispatched in background.',
-      dispatchStartedAt,
-      dispatchCompletedAt,
-      cronRequestDurationMs: cronResponseDurationMs,
-      cronResponseDurationMs,
-      dispatchDurationMs: cronResponseDurationMs,
-      lockWaitMs,
-      instanceId,
-      timestamp: Date.now(),
-      lastScanTime: capState.lastAutomatedScan || capState.lastScanTime || 0,
-      nextScanTime: 0,
-      capState: capState,
-    };
+    return scanResult;
   }
 
   /**
@@ -473,6 +454,7 @@ export class HourlyScannerService {
 
     logger.info(`[Hourly Scanner] BACKGROUND_SCAN_COMPLETED | duration: ${scanDurationMs}ms | classification: ${diagnosticClassification} | signals: ${scanResult.acceptedSignalsCount}`);
 
+    (scanResult as any).instanceId = instanceId;
     return scanResult;
   }
 
