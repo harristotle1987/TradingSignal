@@ -363,7 +363,7 @@ export class Gate7FinalTradeValidation {
     let g9Reason: string | undefined;
 
     
-    const canonicalRR = RiskRewardCalculator.calculate(ctx.entryPrice, ctx.stopLoss, tp1, tp2, tp3, ctx.direction, minRR);
+    const canonicalRR = RiskRewardCalculator.calculate(ctx.entryPrice, ctx.stopLoss, tp1, tp2, tp3, ctx.direction, minRR, ctx.symbol);
     const effectiveRR = canonicalRR.effectiveGrossRR;
 
     if (isNaN(effectiveRR) || !isFinite(effectiveRR) || effectiveRR < minRR) {

@@ -472,6 +472,9 @@ export class MarketDataManager {
     reason: 'USER_CLICK' | 'AUTOMATED_SCANNER' = 'USER_CLICK',
     globalScanDeadlineMs?: number
   ): Promise<NormalizedTicker> {
+    if (globalScanDeadlineMs && globalScanDeadlineMs - Date.now() <= 0) {
+      throw new Error('TIMEOUT: Global scanner deadline reached before starting request');
+    }
     const cleanSymbol = SymbolNormalizer.normalizeAppSymbol(appSymbol);
     if (!cleanSymbol) {
       return this.createErrorTicker(

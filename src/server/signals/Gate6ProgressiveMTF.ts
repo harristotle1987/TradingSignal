@@ -749,12 +749,12 @@ export class Gate6ProgressiveMTF {
       const remainingMs = deadlineMs - Date.now();
       const currentElapsedMs = Date.now() - startMs;
 
-      // Rule 2: Gate 6 must stop starting expensive work when remainingMs <= 1500ms OR currentElapsedMs >= 22500ms
-      if (remainingMs <= 1500 || currentElapsedMs >= 22500) {
+      // Rule 2: Gate 6 must stop starting expensive work when remainingMs <= 1500ms OR currentElapsedMs >= 16500ms
+      if (remainingMs <= 1500 || currentElapsedMs >= 16500) {
         timeBudgetExceeded = true;
         providerRequestsStoppedByBudget = true;
         logger.warn(
-          `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (22500ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 1 candidate processing.`
+          `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (16500ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 1 candidate processing.`
         );
         break;
       }
@@ -906,11 +906,11 @@ export class Gate6ProgressiveMTF {
         const currentElapsedMs = Date.now() - startMs;
 
         // Stop starting expensive work if deadline is near
-        if (remainingMs <= 1500 || currentElapsedMs >= 22500) {
+        if (remainingMs <= 1500 || currentElapsedMs >= 16500) {
           timeBudgetExceeded = true;
           providerRequestsStoppedByBudget = true;
           logger.warn(
-            `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (22500ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 2 candidate processing.`
+            `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (16500ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 2 candidate processing.`
           );
         } else {
           const l2Evaluations = await Promise.all(

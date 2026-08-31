@@ -96,6 +96,9 @@ export class ExchangeRateAdapter implements IMarketDataProvider {
         timeoutId = null;
       }
       const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('TIMEOUT: Global scanner deadline reached')) {
+        throw err;
+      }
       const isAbort = (err instanceof Error && err.name === 'AbortError') || msg.toLowerCase().includes('aborted');
       const finalMsg = (msg.includes('TIMEOUT') || isAbort)
         ? `ExchangeRate request timed out`

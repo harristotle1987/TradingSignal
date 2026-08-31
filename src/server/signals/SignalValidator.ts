@@ -544,7 +544,7 @@ export class SignalValidator {
     }
 
     // 5. Gross Risk / Reward Ratio Check: Minimum acceptable GROSS R:R from config using RiskRewardCalculator canonical module
-    const rrResult = RiskRewardCalculator.calculate(livePrice, adjustedSL, adjustedTp1 ?? adjustedTP, adjustedTp2 ?? adjustedTP, adjustedTp3 ?? adjustedTP, direction, thresholds.minimumRR);
+    const rrResult = RiskRewardCalculator.calculate(livePrice, adjustedSL, adjustedTp1 ?? adjustedTP, adjustedTp2 ?? adjustedTP, adjustedTp3 ?? adjustedTP, direction, thresholds.minimumRR, symbol);
     const rawRR = rrResult.effectiveGrossRR;
     if (rawRR < thresholds.minimumRR || !rrResult.isValid) {
       logRrRejectionDiagnostic({
@@ -685,7 +685,7 @@ export class SignalValidator {
     const tp1Dist = Math.abs(tp1 - entryPrice);
 
     // 3. Check risk/reward (TP2 primary or TP3 multi-target) using RiskRewardCalculator
-    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction);
+    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, undefined, assetClass);
     const rr = rrResult.primaryRR;
 
     // If valid, return original values
@@ -710,7 +710,7 @@ export class SignalValidator {
       isAggressive,
     });
 
-    const newRrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, atrGen.tp1, atrGen.tp2, atrGen.tp3, direction);
+    const newRrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, atrGen.tp1, atrGen.tp2, atrGen.tp3, direction, undefined, assetClass);
     const newRR = newRrResult.primaryRR;
 
     return {

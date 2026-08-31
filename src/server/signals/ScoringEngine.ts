@@ -681,7 +681,7 @@ export class ScoringEngine {
 
     const isBuyDirection = direction === 'BUY';
 
-    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, thresholds.minimumRR);
+    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, thresholds.minimumRR, cleanSymbol);
     takeProfit = rrResult.passedViaTp3 ? tp3 : tp2;
     if (!rrResult.isValid) {
       logRrRejectionDiagnostic({

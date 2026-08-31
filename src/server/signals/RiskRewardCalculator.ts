@@ -1,6 +1,7 @@
 import { SignalDirection } from '../../types/index.js';
 import { logger } from '../logger.js';
 import { ASSET_CLASS_GUARDRAILS } from './AtrTpGenerator.js';
+import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 
 export interface RiskRewardResult {
   riskDistance: number;
@@ -98,11 +99,73 @@ export function logRrRejectionDiagnostic(input: RrDiagnosticInput): void {
 
 export class RiskRewardCalculator {
   /**
+   * Calculates baseline (normal) execution friction profile for the asset.
+   * Pure local calculation with zero API/provider requests.
+   */
+  public static calculateFriction(
+    symbol: string | undefined,
+    entryPrice: number,
+    rawReward: number,
+    rawRisk: number
+  ): { totalFrictionPrice: number; netReward: number; netRisk: number; netRR: number } {
+    if (!symbol) {
+      return {
+        totalFrictionPrice: 0,
+        netReward: rawReward,
+        netRisk: rawRisk,
+        netRR: rawRisk > 0 ? parseFloat((rawReward / rawRisk).toFixed(2)) : 0
+      };
+    }
+    const cleanSymbol = symbol ? (SymbolNormalizer.normalizeAppSymbol(symbol) || symbol.trim().toUpperCase()) : 'DEFAULT';
+    const assetClassUpper = symbol ? SymbolNormalizer.getAssetClassification(cleanSymbol).toUpperCase() : 'STOCKS';
+
+    const assetClass: 'FOREX' | 'CRYPTO' | 'STOCKS' | 'INDEX' =
+      assetClassUpper === 'FOREX' ? 'FOREX' :
+      assetClassUpper === 'CRYPTO' ? 'CRYPTO' :
+      assetClassUpper === 'INDEX' ? 'INDEX' : 'STOCKS';
+
+    let spread = 0;
+    let slippage = 0;        // NEVER zero!
+    let fees = 0;
+    let latencyBuffer = 0;
+
+    if (assetClass === 'FOREX') {
+      const isJPY = cleanSymbol.includes('JPY');
+      const pipMult = isJPY ? 100 : 10000;
+      spread = (isJPY ? 2.0 : 1.2) / pipMult;
+      slippage = (isJPY ? 0.8 : 0.5) / pipMult;        // Mandatory non-zero slippage
+      fees = (isJPY ? 0.5 : 0.3) / pipMult;            // Broker commission
+      latencyBuffer = (isJPY ? 0.5 : 0.3) / pipMult;   // Execution lag
+    } else if (assetClass === 'CRYPTO') {
+      spread = entryPrice * 0.0004;         // 0.04%
+      slippage = entryPrice * 0.0005;       // 0.05% mandatory slippage
+      fees = entryPrice * 0.0012;           // 0.12% (2x 0.06% taker fee)
+      latencyBuffer = entryPrice * 0.0004;  // 0.04%
+    } else {
+      // STOCKS / INDEX
+      spread = Math.max(0.03, entryPrice * 0.0003);
+      slippage = Math.max(0.02, entryPrice * 0.0002);  // Mandatory non-zero slippage
+      fees = Math.max(0.01, entryPrice * 0.0001);      // SEC/FINRA clearing
+      latencyBuffer = Math.max(0.02, entryPrice * 0.0002);
+    }
+
+    const totalFrictionPrice = spread + slippage + fees + latencyBuffer;
+    const netReward = Math.max(0, rawReward - totalFrictionPrice);
+    const netRisk = rawRisk + totalFrictionPrice;
+    const netRR = netRisk > 0 ? parseFloat((netReward / netRisk).toFixed(2)) : 0;
+
+    return {
+      totalFrictionPrice,
+      netReward,
+      netRisk,
+      netRR,
+    };
+  }
+
+  /**
    * Calculates gross R:R and individual target R:R ratios canonically.
    * Pure local calculation with zero API/provider requests.
-   * Multi-target R:R gate evaluation:
-   *  Condition 1: TP2 R:R >= minRR (e.g. 1.50)
-   *  Condition 2: TP3 R:R >= minRR (e.g. 1.50) AND TP3 is structurally valid/reachable according to TP validation rules.
+   * Multi-target R:R gate evaluation using Net R:R.
    */
   public static calculate(
     entryPrice: number,
@@ -111,7 +174,8 @@ export class RiskRewardCalculator {
     tp2: number,
     tp3: number,
     direction: SignalDirection,
-    minRR: number = 1.50
+    minRR: number = 1.50,
+    symbol?: string
   ): RiskRewardResult {
     const invalidResult: RiskRewardResult = {
       riskDistance: 0,
@@ -155,19 +219,19 @@ export class RiskRewardCalculator {
       };
     }
 
-    let tp1RR = 0;
-    let tp2RR = 0;
-    let tp3RR = 0;
+    const rawTp1Reward = Math.abs(tp1 - entryPrice);
+    const rawTp2Reward = Math.abs(tp2 - entryPrice);
+    const rawTp3Reward = Math.abs(tp3 - entryPrice);
 
-    if (direction === 'BUY') {
-      tp1RR = Number((Math.abs(tp1 - entryPrice) / riskDistance).toFixed(2));
-      tp2RR = Number((Math.abs(tp2 - entryPrice) / riskDistance).toFixed(2));
-      tp3RR = Number((Math.abs(tp3 - entryPrice) / riskDistance).toFixed(2));
-    } else {
-      tp1RR = Number((Math.abs(entryPrice - tp1) / riskDistance).toFixed(2));
-      tp2RR = Number((Math.abs(entryPrice - tp2) / riskDistance).toFixed(2));
-      tp3RR = Number((Math.abs(entryPrice - tp3) / riskDistance).toFixed(2));
-    }
+    // Calculate individual targets' Gross R:R
+    const tp1GrossRR = Number((rawTp1Reward / riskDistance).toFixed(2));
+    const tp2GrossRR = Number((rawTp2Reward / riskDistance).toFixed(2));
+    const tp3GrossRR = Number((rawTp3Reward / riskDistance).toFixed(2));
+
+    // Calculate individual targets' Net R:R using authoritative friction calculations
+    const tp1NetRR = this.calculateFriction(symbol, entryPrice, rawTp1Reward, riskDistance).netRR;
+    const tp2NetRR = this.calculateFriction(symbol, entryPrice, rawTp2Reward, riskDistance).netRR;
+    const tp3NetRR = this.calculateFriction(symbol, entryPrice, rawTp3Reward, riskDistance).netRR;
 
     // Validate logical positioning and strict target ordering relative to direction
     const isOrdered = direction === 'BUY'
@@ -178,12 +242,12 @@ export class RiskRewardCalculator {
       return {
         riskDistance: Number(riskDistance.toFixed(4)),
         rewardDistance: Number(Math.abs(tp2 - entryPrice).toFixed(4)),
-        grossRR: tp2RR,
-        effectiveGrossRR: tp2RR,
-        tp1RR,
-        tp2RR,
-        tp3RR,
-        primaryRR: tp2RR,
+        grossRR: tp2GrossRR,
+        effectiveGrossRR: tp2GrossRR,
+        tp1RR: tp1NetRR,
+        tp2RR: tp2NetRR,
+        tp3RR: tp3NetRR,
+        primaryRR: tp2NetRR,
         passedGrossRR: false,
         isValid: false,
         passedViaTp3: false,
@@ -191,41 +255,52 @@ export class RiskRewardCalculator {
       };
     }
 
-    // Multi-target R:R gate evaluation
-    // Condition 1: TP2 R:R >= minRR
-    // Condition 2: TP3 R:R >= minRR AND TP3 is structurally valid / ordered
+    // A candidate passes the R:R gate when:
+    // TP2 NET R:R >= 1.5
+    // OR
+    // TP3 NET R:R >= 1.5
+    // TP1 is informational and must not independently qualify a trade.
     let passedViaTp3 = false;
-    let effectiveGrossRR = tp2RR;
-    let evaluatedRewardDistance = Math.abs(tp2 - entryPrice);
+    let selectedTakeProfit = tp2;
+    let primaryRR = tp2NetRR;
+    let grossRR = tp2GrossRR;
+    let evaluatedRewardDistance = rawTp2Reward;
 
-    if (tp2RR >= minRR) {
-      effectiveGrossRR = tp2RR;
+    if (tp2NetRR >= minRR) {
+      selectedTakeProfit = tp2;
+      primaryRR = tp2NetRR;
+      grossRR = tp2GrossRR;
       passedViaTp3 = false;
-      evaluatedRewardDistance = Math.abs(tp2 - entryPrice);
-    } else if (tp3RR >= minRR) {
-      effectiveGrossRR = tp3RR;
+      evaluatedRewardDistance = rawTp2Reward;
+    } else if (tp3NetRR >= minRR) {
+      selectedTakeProfit = tp3;
+      primaryRR = tp3NetRR;
+      grossRR = tp3GrossRR;
       passedViaTp3 = true;
-      evaluatedRewardDistance = Math.abs(tp3 - entryPrice);
+      evaluatedRewardDistance = rawTp3Reward;
     } else {
-      effectiveGrossRR = tp2RR;
+      selectedTakeProfit = tp2;
+      primaryRR = tp2NetRR;
+      grossRR = tp2GrossRR;
       passedViaTp3 = false;
-      evaluatedRewardDistance = Math.abs(tp2 - entryPrice);
+      evaluatedRewardDistance = rawTp2Reward;
     }
 
-    const passedGrossRR = isOrdered && effectiveGrossRR >= minRR;
+    const passedGrossRR = isOrdered && (tp2NetRR >= minRR || tp3NetRR >= minRR);
 
     return {
       riskDistance: Number(riskDistance.toFixed(4)),
       rewardDistance: Number(evaluatedRewardDistance.toFixed(4)),
-      grossRR: effectiveGrossRR,
-      effectiveGrossRR,
-      tp1RR,
-      tp2RR,
-      tp3RR,
-      primaryRR: effectiveGrossRR,
+      grossRR, // Expose selected target's gross R:R
+      effectiveGrossRR: primaryRR, // Keep for backward compatibility with Gate 9 checks
+      tp1RR: tp1NetRR, // Expose Net R:R values
+      tp2RR: tp2NetRR,
+      tp3RR: tp3NetRR,
+      primaryRR, // Expose chosen Net R:R
       passedGrossRR,
       isValid: true,
       passedViaTp3,
+      takeProfit: selectedTakeProfit,
     };
   }
 

@@ -148,7 +148,7 @@ async function buildCronResponseBody(options: {
   const scanDuration = scanDurationMs;
 
   const globalScanStartMs = lastScan?.globalScanStartMs ?? (lastAutomatedScan ? lastAutomatedScan - scanDurationMs : 0);
-  const globalScanDeadlineMs = lastScan?.globalScanDeadlineMs ?? (globalScanStartMs ? globalScanStartMs + 25000 : 0);
+  const globalScanDeadlineMs = lastScan?.globalScanDeadlineMs ?? (globalScanStartMs ? globalScanStartMs + 18000 : 0);
   const currentElapsedMs = globalScanStartMs ? (now - globalScanStartMs) : scanDurationMs;
   const remainingBudgetMs = globalScanDeadlineMs ? Math.max(0, globalScanDeadlineMs - now) : 0;
   const totalDurationMs = globalScanStartMs ? (now - globalScanStartMs) : scanDurationMs;
