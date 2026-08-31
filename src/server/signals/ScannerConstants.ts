@@ -4,16 +4,16 @@
  */
 
 /**
- * Normal operational budget: Stop initiating new expensive provider/API work at 18 seconds
+ * Normal operational budget: Stop initiating new expensive provider/API work at 14 seconds
  * and prioritize finalizing existing candidates.
  */
-export const OPERATIONAL_SCAN_BUDGET_MS = 18000;
+export const OPERATIONAL_SCAN_BUDGET_MS = 14000;
 
 /**
- * Absolute hard deadline: Hard stop any further scanner processing at 20 seconds
+ * Absolute hard deadline: Hard stop any further scanner processing at 17 seconds
  * and finalize/persist available results.
  */
-export const HARD_SCAN_DEADLINE_MS = 20000;
+export const HARD_SCAN_DEADLINE_MS = 17000;
 
 /**
  * Target maximum duration for the cron HTTP dispatch response (<2 seconds).

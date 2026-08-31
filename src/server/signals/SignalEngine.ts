@@ -149,7 +149,7 @@ export class SignalEngine {
     symbol = 'EURUSD',
     category?: string,
     persistAndActivate: boolean = true,
-    options?: { scanStartedAt?: number; globalScanBudgetMs?: number }
+    options?: { scanStartedAt?: number; globalScanBudgetMs?: number; hardDeadlineMs?: number }
   ): Promise<SignalGenerationResponse> {
     const { runStagedPipeline } = await import('./StagedScannerPipeline.js');
     const existingContext = marketDataManager.getActiveScanContext();

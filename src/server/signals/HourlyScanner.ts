@@ -337,9 +337,11 @@ export class HourlyScannerService {
     const dispatchCompletedAt = Date.now();
     const cronResponseDurationMs = dispatchCompletedAt - dispatchStartedAt;
 
-    // 4. Run background execution synchronously (awaited to return full completed scan results in HTTP response)
+    // 4. Fire the scan in the background WITHOUT awaiting it, so the
+    // HTTP response returns immediately and never risks the external
+    // cron scheduler's request timeout.
     const backgroundStartMs = Date.now();
-    const scanResult = await this.executeBackgroundScan(instanceId, isExternal, {
+    this.executeBackgroundScan(instanceId, isExternal, {
       scanStartedAt: backgroundStartMs,
       operationalBudgetMs: OPERATIONAL_SCAN_BUDGET_MS,
       hardDeadlineMs: HARD_SCAN_DEADLINE_MS,
@@ -347,11 +349,28 @@ export class HourlyScannerService {
       dispatchCompletedAt,
       cronResponseDurationMs,
       lockWaitMs,
+    }).catch((err) => {
+      logger.error(`[Hourly Scanner] BACKGROUND_SCAN_UNCAUGHT_ERROR | instanceId: ${instanceId} | error: ${err instanceof Error ? err.message : String(err)}`);
     });
 
     logger.info(`[Hourly Scanner] DISPATCH_COMPLETED | duration: ${cronResponseDurationMs}ms | instanceId: ${instanceId}`);
 
-    return scanResult;
+    return {
+      success: true,
+      status: 'DISPATCHED',
+      message: 'Automated market scan dispatched successfully (running in background).',
+      dispatchStartedAt,
+      dispatchCompletedAt,
+      cronRequestDurationMs: cronResponseDurationMs,
+      cronResponseDurationMs,
+      dispatchDurationMs: cronResponseDurationMs,
+      lockWaitMs,
+      timestamp: Date.now(),
+      lastScanTime: capState.lastScanTime,
+      nextScanTime: 0,
+      capState,
+      instanceId,
+    };
   }
 
   /**
@@ -381,6 +400,7 @@ export class HourlyScannerService {
         {
           scanStartedAt: backgroundStartedAt,
           globalScanBudgetMs: options.operationalBudgetMs,
+          hardDeadlineMs: options.hardDeadlineMs,
         },
         instanceId
       );
@@ -480,7 +500,7 @@ export class HourlyScannerService {
    */
   private async executeIntelligentScan(
     isExternal = false,
-    options?: { scanStartedAt?: number; globalScanBudgetMs?: number },
+    options?: { scanStartedAt?: number; globalScanBudgetMs?: number; hardDeadlineMs?: number },
     preAcquiredInstanceId?: string
   ): Promise<ManualScanResult> {
     const scanStartTime = options?.scanStartedAt ?? Date.now();
@@ -612,6 +632,7 @@ export class HourlyScannerService {
             const result = await signalEngine.generateSignal(category, category, false, {
               scanStartedAt: globalScanStartMs,
               globalScanBudgetMs: GLOBAL_SCAN_BUDGET_MS,
+              hardDeadlineMs: options?.hardDeadlineMs,
             });
             return { category, result };
           } catch (catErr) {
