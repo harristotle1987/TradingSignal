@@ -19,6 +19,7 @@
 import { NormalizedCandle, SignalDirection } from '../../types/index.js';
 import { TechnicalIndicators, MACDResult } from './TechnicalIndicators.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
+import { serverConfig } from '../config.js';
 import { logger } from '../logger.js';
 
 export interface Gate6Layer1Metrics {
@@ -679,7 +680,7 @@ export class Gate6ProgressiveMTF {
     globalScanDeadlineMs?: number
   ): Promise<Gate6ProgressiveAnalysisResult> {
     const startMs = globalScanStartMs ?? Date.now();
-    const deadlineMs = globalScanDeadlineMs ?? (startMs + 24000);
+    const deadlineMs = globalScanDeadlineMs ?? (startMs + 20000);
     const gate6StartMs = Date.now();
 
     let timeBudgetExceeded = false;
@@ -697,8 +698,10 @@ export class Gate6ProgressiveMTF {
     let analyzedCount = 0;
 
     // STEP 0: PRE-MTF SCORE AUDIT
+    const targetScoreThreshold = serverConfig.getConfig().thresholds.signalThreshold || 70;
+
     // Filter candidates entering Gate 6: determine whether candidates with a deterministic score
-    // already below 72 can mathematically reach 72 after remaining MTF analysis.
+    // already below required threshold can mathematically reach required threshold after remaining MTF analysis.
     const mtfEligibleCandidates: typeof candidates = [];
 
     for (const cand of candidates) {
@@ -707,15 +710,15 @@ export class Gate6ProgressiveMTF {
       const scoreAfterGate6 = scoreBeforeGate6;
       const finalScore = scoreBeforeGate6;
 
-      if (maximumPossibleScoreAfterRemainingAnalysis < 72) {
-        // Candidate cannot mathematically reach 72 -> Reject BEFORE expensive MTF requests!
+      if (maximumPossibleScoreAfterRemainingAnalysis < targetScoreThreshold) {
+        // Candidate cannot mathematically reach threshold -> Reject BEFORE expensive MTF requests!
         analyzedCount++;
         const auditTrail = [
-          `[Gate 6 Pre-Audit] REJECTED BEFORE MTF. Preliminary score (${scoreBeforeGate6}/100) yields maximum possible score of ${maximumPossibleScoreAfterRemainingAnalysis}/100 (< required threshold 72). Omitting 15m/5m/4h market data requests.`,
+          `[Gate 6 Pre-Audit] REJECTED BEFORE MTF. Preliminary score (${scoreBeforeGate6}/100) yields maximum possible score of ${maximumPossibleScoreAfterRemainingAnalysis}/100 (< required threshold ${targetScoreThreshold}). Omitting 15m/5m/4h market data requests.`,
         ];
 
         logger.info(
-          `[Gate 6 Early Audit Halt] ${cand.asset} rejected before MTF: preliminary score (${scoreBeforeGate6}/100) max reachable score (${maximumPossibleScoreAfterRemainingAnalysis}) < 72.`
+          `[Gate 6 Early Audit Halt] ${cand.asset} rejected before MTF: preliminary score (${scoreBeforeGate6}/100) max reachable score (${maximumPossibleScoreAfterRemainingAnalysis}) < ${targetScoreThreshold}.`
         );
 
         rejected.push({
@@ -725,7 +728,7 @@ export class Gate6ProgressiveMTF {
           stoppedAtLayer: 'BEFORE_MTF',
           compositeMtfScore: scoreBeforeGate6,
           candlesMap: { '1h': cand.htf1h },
-          rejectionReason: `FINAL_SCORE_UNREACHABLE: Score before Gate 6 (${scoreBeforeGate6}/100) yields maximum possible score of ${maximumPossibleScoreAfterRemainingAnalysis}/100, which cannot reach actionable threshold 72. Halting MTF requests.`,
+          rejectionReason: `FINAL_SCORE_UNREACHABLE: Score before Gate 6 (${scoreBeforeGate6}/100) yields maximum possible score of ${maximumPossibleScoreAfterRemainingAnalysis}/100, which cannot reach actionable threshold ${targetScoreThreshold}. Halting MTF requests.`,
           auditTrail,
           scoreBeforeGate6,
           maximumPossibleScoreAfterRemainingAnalysis,
@@ -745,12 +748,12 @@ export class Gate6ProgressiveMTF {
       const remainingMs = deadlineMs - Date.now();
       const currentElapsedMs = Date.now() - startMs;
 
-      // Rule 2: Gate 6 must stop starting expensive work when remainingMs <= 1500ms OR currentElapsedMs >= 22500ms
-      if (remainingMs <= 1500 || currentElapsedMs >= 22500) {
+      // Rule 2: Gate 6 must stop starting expensive work when remainingMs <= 1500ms OR currentElapsedMs >= 18500ms
+      if (remainingMs <= 1500 || currentElapsedMs >= 18500) {
         timeBudgetExceeded = true;
         providerRequestsStoppedByBudget = true;
         logger.warn(
-          `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (22500ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 1 candidate processing.`
+          `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (18500ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 1 candidate processing.`
         );
         break;
       }
@@ -840,9 +843,9 @@ export class Gate6ProgressiveMTF {
           const maxCompositeMtf = Math.round(l1Result.score * 0.6 + 100 * 0.4);
           const maximumPossibleScoreAfterRemainingAnalysis = Math.min(100, maxCompositeMtf + 15);
 
-          if (maximumPossibleScoreAfterRemainingAnalysis < 72) {
-            auditTrail.push(`[Gate 6 Post-L1 Audit REJECTED] Post-Layer 1 score (${l1Result.score}/100) yields maximum possible score of ${maximumPossibleScoreAfterRemainingAnalysis}/100 (< required threshold 72). Halting Layer 2 (5m & 4h) requests.`);
-            logger.info(`[Gate 6 Post-L1 Early Halt] ${asset} rejected before Layer 2: post-L1 max possible score (${maximumPossibleScoreAfterRemainingAnalysis}) < 72.`);
+          if (maximumPossibleScoreAfterRemainingAnalysis < targetScoreThreshold) {
+            auditTrail.push(`[Gate 6 Post-L1 Audit REJECTED] Post-Layer 1 score (${l1Result.score}/100) yields maximum possible score of ${maximumPossibleScoreAfterRemainingAnalysis}/100 (< required threshold ${targetScoreThreshold}). Halting Layer 2 (5m & 4h) requests.`);
+            logger.info(`[Gate 6 Post-L1 Early Halt] ${asset} rejected before Layer 2: post-L1 max possible score (${maximumPossibleScoreAfterRemainingAnalysis}) < ${targetScoreThreshold}.`);
 
             const evalPostL1Fail: Gate6CandidateEvaluation = {
               asset,
@@ -852,7 +855,7 @@ export class Gate6ProgressiveMTF {
               layer1: l1Result,
               compositeMtfScore: l1Result.score,
               candlesMap: { '1h': sorted1h, '15m': candles15m },
-              rejectionReason: `FINAL_SCORE_UNREACHABLE: Post-Layer 1 score (${l1Result.score}/100) yields maximum possible score of ${maximumPossibleScoreAfterRemainingAnalysis}/100, which cannot reach actionable threshold 72. Halting Layer 2 (5m & 4h) requests.`,
+              rejectionReason: `FINAL_SCORE_UNREACHABLE: Post-Layer 1 score (${l1Result.score}/100) yields maximum possible score of ${maximumPossibleScoreAfterRemainingAnalysis}/100, which cannot reach actionable threshold ${targetScoreThreshold}. Halting Layer 2 (5m & 4h) requests.`,
               auditTrail,
               scoreBeforeGate6,
               maximumPossibleScoreAfterRemainingAnalysis,
@@ -902,11 +905,11 @@ export class Gate6ProgressiveMTF {
         const currentElapsedMs = Date.now() - startMs;
 
         // Stop starting expensive work if deadline is near
-        if (remainingMs <= 1500 || currentElapsedMs >= 22500) {
+        if (remainingMs <= 1500 || currentElapsedMs >= 18500) {
           timeBudgetExceeded = true;
           providerRequestsStoppedByBudget = true;
           logger.warn(
-            `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (22500ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 2 candidate processing.`
+            `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (18500ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 2 candidate processing.`
           );
         } else {
           const l2Evaluations = await Promise.all(

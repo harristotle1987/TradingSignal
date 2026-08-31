@@ -683,9 +683,9 @@ export class SignalValidator {
 
     const tp1Dist = Math.abs(tp1 - entryPrice);
 
-    // 3. Check risk/reward (TP2 primary) using RiskRewardCalculator
+    // 3. Check risk/reward (TP2 primary or TP3 multi-target) using RiskRewardCalculator
     const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction);
-    const rr = rrResult.grossRR;
+    const rr = rrResult.primaryRR;
 
     // If valid, return original values
     if (isDistinct && isOrdered && tp1Dist > 0 && rrResult.isValid) {
@@ -693,7 +693,7 @@ export class SignalValidator {
         tp1,
         tp2,
         tp3,
-        takeProfit: tp2,
+        takeProfit: rrResult.passedViaTp3 ? tp3 : tp2,
         riskRewardRatio: Number(rr.toFixed(2)),
         wasRecalculated: false
       };
@@ -710,13 +710,13 @@ export class SignalValidator {
     });
 
     const newRrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, atrGen.tp1, atrGen.tp2, atrGen.tp3, direction);
-    const newRR = newRrResult.grossRR;
+    const newRR = newRrResult.primaryRR;
 
     return {
       tp1: atrGen.tp1,
       tp2: atrGen.tp2,
       tp3: atrGen.tp3,
-      takeProfit: atrGen.tp2,
+      takeProfit: newRrResult.passedViaTp3 ? atrGen.tp3 : atrGen.tp2,
       riskRewardRatio: Number(newRR.toFixed(2)),
       wasRecalculated: true
     };

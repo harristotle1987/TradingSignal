@@ -87,7 +87,7 @@ export async function runStagedPipeline(
   const cleanSymbol = symbol.trim().toUpperCase();
   const now = Date.now();
   const globalScanStartMs = options?.scanStartedAt ?? Date.now();
-  const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 24000;
+  const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 20000;
   const globalScanDeadlineMs = globalScanStartMs + GLOBAL_SCAN_BUDGET_MS;
   const scanStartTime = globalScanStartMs;
   let timeBudgetExceeded = false;
@@ -372,7 +372,8 @@ export async function runStagedPipeline(
         if (lowerReason.includes('structure') || lowerReason.includes('s&r') || lowerReason.includes('support')) {
           failedGates.push(StandardFailedGate.MARKET_STRUCTURE);
         }
-        if (rej.compositeMtfScore < 72 || rej.finalScore < 72) {
+        const sigThreshold = serverConfig.getConfig().thresholds.signalThreshold || 70;
+        if (rej.compositeMtfScore < sigThreshold || rej.finalScore < sigThreshold) {
           failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
         }
       }
@@ -831,7 +832,7 @@ export async function runStagedPipeline(
       if (winRate <= effectiveMinWinProb) {
         const reason = `Estimated win rate (${winRate}% <= ${effectiveMinWinProb}% threshold)`;
         const failedGates: StandardFailedGate[] = [StandardFailedGate.WIN_RATE_BELOW_THRESHOLD];
-        if ((scoring.score || 0) < 72) {
+        if ((scoring.score || 0) < (thresholds.signalThreshold || 70)) {
           failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
         }
         if (finalRR < thresholds.minimumRR) {
@@ -862,7 +863,7 @@ export async function runStagedPipeline(
       if (expectancy <= 0) {
         const reason = `Non-positive expectancy (${expectancy}R <= 0)`;
         const failedGates: StandardFailedGate[] = [StandardFailedGate.NEGATIVE_EXPECTANCY];
-        if ((scoring.score || 0) < 72) {
+        if ((scoring.score || 0) < (thresholds.signalThreshold || 70)) {
           failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
         }
         if (finalRR < thresholds.minimumRR) {
@@ -1013,7 +1014,7 @@ export async function runStagedPipeline(
       const tp1Rr = rrResult.tp1RR;
       const tp2Rr = rrResult.tp2RR;
       const tp3Rr = rrResult.tp3RR;
-      const exactPrimaryRr = rrResult.grossRR;
+      const exactPrimaryRr = rrResult.primaryRR;
 
       const tqResult = TargetQualityEvaluator.evaluate({
         direction: scoring.direction, entryPrice: finalEntry, stopLoss: finalSL,

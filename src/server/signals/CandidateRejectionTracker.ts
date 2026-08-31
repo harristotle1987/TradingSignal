@@ -506,7 +506,7 @@ export class CandidateRejectionTracker {
     }
 
     if (failedGates.size === 0) {
-      if (score < 72) {
+      if (score < 70) {
         failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
       } else {
         failedGates.add(StandardFailedGate.DATA_INTEGRITY);
@@ -555,7 +555,7 @@ export class CandidateRejectionTracker {
     }
 
     const score = rej.compositeMtfScore ?? rej.layer1?.score ?? 0;
-    if (score < 72) {
+    if (score < 70) {
       failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
     }
 

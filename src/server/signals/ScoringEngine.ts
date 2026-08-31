@@ -1345,10 +1345,10 @@ export class ScoringEngine {
         isWatching: true,
       };
     }
-    if (score >= (thresholds.signalThreshold || 72)) {
+    if (score >= (thresholds.signalThreshold || 70)) {
       return {
         tier: 'MODERATE_VALID' as const,
-        label: `Valid / Moderate setup (72-74)`,
+        label: `Valid / Moderate setup (${thresholds.signalThreshold || 70}-74)`,
         isActionable: true,
         isQualifiedCandidate: true,
         isWatching: true,
@@ -1357,7 +1357,7 @@ export class ScoringEngine {
     if (score >= thresholds.watchingThreshold) {
       return {
         tier: 'WATCHING' as const,
-        label: `WATCHING (${thresholds.watchingThreshold}-${(thresholds.signalThreshold || 72) - 1})`,
+        label: `WATCHING (${thresholds.watchingThreshold}-${(thresholds.signalThreshold || 70) - 1})`,
         isActionable: false,
         isQualifiedCandidate: false,
         isWatching: true,

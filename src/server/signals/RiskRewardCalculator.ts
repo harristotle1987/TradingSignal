@@ -1,5 +1,6 @@
 import { SignalDirection } from '../../types/index.js';
 import { logger } from '../logger.js';
+import { ASSET_CLASS_GUARDRAILS } from './AtrTpGenerator.js';
 
 export interface RiskRewardResult {
   riskDistance: number;
@@ -61,9 +62,15 @@ export function logRrRejectionDiagnostic(input: RrDiagnosticInput): void {
     is1_8RBeyondNearestAnchor = isBuy ? required1_8RTarget > nearestAnchor : required1_8RTarget < nearestAnchor;
   }
 
-  // Stock guardrail default: 15% max, Crypto: 25% max, Forex: 8% max, Default: 15%
+  // Read exact TP3 max percentage guardrail ceiling from ASSET_CLASS_GUARDRAILS
   const upperAsset = (assetClass || 'DEFAULT').toUpperCase();
-  const maxTp3Pct = upperAsset.includes('CRYPTO') ? 25 : (upperAsset.includes('FOREX') ? 8 : 15);
+  const guardrailKey = upperAsset.includes('CRYPTO') ? 'CRYPTO'
+    : upperAsset.includes('FOREX') ? 'FOREX'
+    : upperAsset.includes('STOCK') || upperAsset.includes('EQUITY') ? 'STOCKS'
+    : upperAsset.includes('COMMODITY') || upperAsset.includes('METAL') || upperAsset.includes('ENERGY') ? 'COMMODITIES'
+    : upperAsset.includes('INDEX') || upperAsset.includes('INDICES') ? 'INDICES'
+    : (ASSET_CLASS_GUARDRAILS[upperAsset] ? upperAsset : 'DEFAULT');
+  const maxTp3Pct = ASSET_CLASS_GUARDRAILS[guardrailKey]?.tp3.maxPct ?? ASSET_CLASS_GUARDRAILS.DEFAULT.tp3.maxPct;
   const maxTp3AllowedDistance = entryPrice * (maxTp3Pct / 100);
 
   const fartherTargetExists = (riskDistance * 1.8) <= maxTp3AllowedDistance;

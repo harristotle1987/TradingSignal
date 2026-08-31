@@ -73,7 +73,7 @@ export interface RegimeThresholdEvaluationLog {
 export class Gate27RegimeThresholds {
   private static policy: RegimeThresholdPolicyConfig = {
     regimeThresholds: {
-      STRONG_TREND: 72,
+      STRONG_TREND: 70,
       NORMAL_TREND: 70,
       RANGE_REVERSAL: 70,
       BREAKOUT: 70,

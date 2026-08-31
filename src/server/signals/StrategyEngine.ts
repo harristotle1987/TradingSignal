@@ -497,11 +497,11 @@ export class StrategyEngine {
     // Case C: Moderate 1H Trend Continuation
     else if (lastEma9_1h > lastEma21_1h && entryPrice > lastEma21_1h && slope21_1h >= 0) {
       direction = 'BUY';
-      score = 72;
+      score = 70;
       reasons.push(`Moderate trend alignment: Price holding above upward-sloping 1H EMA21`);
     } else if (lastEma9_1h < lastEma21_1h && entryPrice < lastEma21_1h && slope21_1h <= 0) {
       direction = 'SELL';
-      score = 72;
+      score = 70;
       reasons.push(`Moderate trend alignment: Price holding below downward-sloping 1H EMA21`);
     }
 
@@ -598,11 +598,11 @@ export class StrategyEngine {
       );
     } else if (zlMacd1h.macdLine > zlMacd1h.signalLine && lastRsi1h >= 50) {
       direction = 'BUY';
-      score = 72;
+      score = 70;
       reasons.push('1H Zero-Lag MACD confirms underlying upward momentum');
     } else if (zlMacd1h.macdLine < zlMacd1h.signalLine && lastRsi1h <= 50) {
       direction = 'SELL';
-      score = 72;
+      score = 70;
       reasons.push('1H Zero-Lag MACD confirms underlying downward momentum');
     }
 
