@@ -337,21 +337,41 @@ export class HourlyScannerService {
     const dispatchCompletedAt = Date.now();
     const cronResponseDurationMs = dispatchCompletedAt - dispatchStartedAt;
 
-    // 4. Run background execution synchronously (awaited to return full completed scan results in HTTP response)
+    // 4. Run background execution NON-BLOCKING (fire and forget)
     const backgroundStartMs = Date.now();
-    const scanResult = await this.executeBackgroundScan(instanceId, isExternal, {
-      scanStartedAt: backgroundStartMs,
-      operationalBudgetMs: OPERATIONAL_SCAN_BUDGET_MS,
-      hardDeadlineMs: HARD_SCAN_DEADLINE_MS,
-      dispatchStartedAt,
-      dispatchCompletedAt,
-      cronResponseDurationMs,
-      lockWaitMs,
+    
+    setImmediate(() => {
+      this.executeBackgroundScan(instanceId, isExternal, {
+        scanStartedAt: backgroundStartMs,
+        operationalBudgetMs: OPERATIONAL_SCAN_BUDGET_MS,
+        hardDeadlineMs: HARD_SCAN_DEADLINE_MS,
+        dispatchStartedAt,
+        dispatchCompletedAt,
+        cronResponseDurationMs,
+        lockWaitMs,
+      }).catch(e => {
+        logger.error(`[Hourly Scanner] Background scan failed unhandled: ${e}`);
+      });
     });
 
     logger.info(`[Hourly Scanner] DISPATCH_COMPLETED | duration: ${cronResponseDurationMs}ms | instanceId: ${instanceId}`);
 
-    return scanResult;
+    return {
+      success: true,
+      status: 'DISPATCHED',
+      message: 'OK. Automated scanner pipeline dispatched successfully in the background.',
+      dispatchStartedAt,
+      dispatchCompletedAt,
+      cronRequestDurationMs: cronResponseDurationMs,
+      cronResponseDurationMs,
+      dispatchDurationMs: cronResponseDurationMs,
+      lockWaitMs,
+      instanceId,
+      timestamp: Date.now(),
+      lastScanTime: capState.lastScanTime,
+      nextScanTime: 0,
+      capState,
+    };
   }
 
   /**
