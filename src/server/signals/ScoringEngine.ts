@@ -681,7 +681,7 @@ export class ScoringEngine {
 
     const isBuyDirection = direction === 'BUY';
 
-    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, thresholds.minimumRR, cleanSymbol);
+    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, thresholds.minimumRR, thresholds.minimumNetRR, cleanSymbol);
     takeProfit = rrResult.passedViaTp3 ? tp3 : tp2;
     if (!rrResult.isValid) {
       logRrRejectionDiagnostic({
@@ -708,7 +708,7 @@ export class ScoringEngine {
         tp1,
         tp2,
         tp3,
-        rrResult.effectiveGrossRR,
+        rrResult.grossRR,
         entryPrice,
         rrResult.primaryRR,
         rrResult.tp1RR,
@@ -718,7 +718,7 @@ export class ScoringEngine {
         tpSetup.diagnostics
       );
     }
-    const rawRR = rrResult.effectiveGrossRR;
+    const rawRR = rrResult.grossRR;
     const calculatedRisk = rrResult.riskDistance;
     const calculatedReward = rrResult.rewardDistance;
 
@@ -1082,6 +1082,9 @@ export class ScoringEngine {
     const riskDist = Math.abs(entryPrice - stopLoss);
     const req1_8RTarget = isBuy ? entryPrice + (riskDist * 1.8) : entryPrice - (riskDist * 1.8);
 
+    const minRR = thresholds.minimumRR || 1.8;
+    const minRiskTp2Dist = riskDist * minRR;
+
     if (isBuy) {
       // TP1: conservative
       let baseTp1 = entryPrice + (cleanAtr * tp1Mult);
@@ -1090,24 +1093,20 @@ export class ScoringEngine {
       }
       tp1 = Math.max(baseTp1, entryPrice + cleanMinDistance * 0.5);
 
-      // TP2: primary
-      let baseTp2 = entryPrice + (cleanAtr * tp2Mult);
+      // TP2: primary - must satisfy risk-distance R:R requirement (riskDist * minRR)
+      const minRiskTp2 = entryPrice + minRiskTp2Dist;
+      const atrTp2 = entryPrice + (cleanAtr * tp2Mult);
+      let baseTp2 = Math.max(atrTp2, minRiskTp2);
       if (majorResistance1h > entryPrice) {
-        if (majorResistance1h >= req1_8RTarget) {
-          baseTp2 = 0.3 * baseTp2 + 0.7 * (majorResistance1h - cleanAtr * 0.15);
-        } else {
-          // Nearest 1h structural anchor is closer than 1.8R.
-          // Do not force baseTp2 down to near anchor if pure ATR target is higher.
-          baseTp2 = Math.max(baseTp2, majorResistance1h - cleanAtr * 0.15);
+        if (majorResistance1h >= minRiskTp2) {
+          baseTp2 = Math.max(baseTp2, majorResistance1h);
         }
+        // If majorResistance1h is closer than minRiskTp2, do not move TP2 closer; adhere to risk-distance requirement.
       }
       tp2 = Math.max(baseTp2, tp1 + minStep);
 
-      // TP3: extended
-      let baseTp3 = entryPrice + (cleanAtr * tp3Mult);
-      if (majorResistance1h > entryPrice) {
-        baseTp3 = Math.max(baseTp3, majorResistance1h + cleanAtr * tp3Mult * 0.4);
-      }
+      // TP3: extended - farther than TP2
+      let baseTp3 = Math.max(entryPrice + (cleanAtr * tp3Mult), tp2 + minStep, majorResistance1h > entryPrice && majorResistance1h >= minRiskTp2 ? majorResistance1h + cleanAtr * 0.5 : tp2 + cleanAtr * 0.8);
       tp3 = Math.max(baseTp3, tp2 + minStep);
     } else {
       // TP1: conservative
@@ -1117,22 +1116,20 @@ export class ScoringEngine {
       }
       tp1 = Math.min(baseTp1, entryPrice - cleanMinDistance * 0.5);
 
-      // TP2: primary
-      let baseTp2 = entryPrice - (cleanAtr * tp2Mult);
+      // TP2: primary - must satisfy risk-distance R:R requirement (riskDist * minRR)
+      const minRiskTp2 = entryPrice - minRiskTp2Dist;
+      const atrTp2 = entryPrice - (cleanAtr * tp2Mult);
+      let baseTp2 = Math.min(atrTp2, minRiskTp2);
       if (majorSupport1h < entryPrice) {
-        if (majorSupport1h <= req1_8RTarget) {
-          baseTp2 = 0.3 * baseTp2 + 0.7 * (majorSupport1h + cleanAtr * 0.15);
-        } else {
-          baseTp2 = Math.min(baseTp2, majorSupport1h + cleanAtr * 0.15);
+        if (majorSupport1h <= minRiskTp2) {
+          baseTp2 = Math.min(baseTp2, majorSupport1h);
         }
+        // If majorSupport1h is closer than minRiskTp2, do not move TP2 closer; adhere to risk-distance requirement.
       }
       tp2 = Math.min(baseTp2, tp1 - minStep);
 
-      // TP3: extended
-      let baseTp3 = entryPrice - (cleanAtr * tp3Mult);
-      if (majorSupport1h < entryPrice) {
-        baseTp3 = Math.min(baseTp3, majorSupport1h - cleanAtr * tp3Mult * 0.4);
-      }
+      // TP3: extended - farther than TP2
+      let baseTp3 = Math.min(entryPrice - (cleanAtr * tp3Mult), tp2 - minStep, majorSupport1h < entryPrice && majorSupport1h <= minRiskTp2 ? majorSupport1h - cleanAtr * 0.5 : tp2 - cleanAtr * 0.8);
       tp3 = Math.min(baseTp3, tp2 - minStep);
     }
 

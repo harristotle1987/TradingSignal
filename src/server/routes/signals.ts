@@ -189,7 +189,29 @@ async function buildCronResponseBody(options: {
   } : null;
 
   const latestTelemetry = await ScannerPersistence.getLatestTimingTelemetry();
-  let timingTelemetry: any = lastScan?.timingTelemetry ?? latestTelemetry ?? null;
+  let timingTelemetry: any = isFreshDispatch
+    ? {
+        dispatchStartedAt: options.requestStartTime,
+        dispatchCompletedAt: now,
+        cronRequestDurationMs: now - options.requestStartTime,
+        cronResponseDurationMs: now - options.requestStartTime,
+        dispatchDurationMs: now - options.requestStartTime,
+        lockWaitMs: 0,
+        backgroundStartedAt: options.requestStartTime,
+        backgroundCompletedAt: 0,
+        backgroundScanDurationMs: 0,
+        totalScanDurationMs: now - options.requestStartTime,
+        scanDurationMs: 0,
+        timeBudgetExceeded: false,
+        providerRequestsStoppedByBudget: false,
+        lockAcquired: true,
+        instanceId: options.executionId || 'none',
+        status: 'DISPATCHED',
+        diagnosticClassification: 'OK',
+        diagnosticMessage: options.message,
+        timestamp: now,
+      }
+    : (lastScan?.timingTelemetry ?? latestTelemetry ?? null);
 
   // Gate 3: Avoid exposing stale/incorrect timing telemetry on skipped or error responses
   const isCurrentlyActive = options.status === 'DISPATCHED' || options.status === 'COMPLETED';
