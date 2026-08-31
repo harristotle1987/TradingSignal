@@ -152,7 +152,18 @@ export class SignalEngine {
     options?: { scanStartedAt?: number; globalScanBudgetMs?: number }
   ): Promise<SignalGenerationResponse> {
     const { runStagedPipeline } = await import('./StagedScannerPipeline.js');
-    return runStagedPipeline(this, symbol, category, persistAndActivate, options);
+    const existingContext = marketDataManager.getActiveScanContext();
+    if (existingContext) {
+      return runStagedPipeline(this, symbol, category, persistAndActivate, options);
+    }
+    const scanContext = {
+      scanExecutionId: `ai_scan_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      scanType: 'AI' as const,
+      scanStartedAt: Date.now(),
+    };
+    return marketDataManager.runInScanContext(scanContext, () =>
+      runStagedPipeline(this, symbol, category, persistAndActivate, options)
+    );
   }
 
   /**

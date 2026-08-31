@@ -92,9 +92,16 @@ async function buildCronResponseBody(options: {
     scannerStatus = 'CAP_REACHED';
   }
 
-  const nextEligibleScan = lastAutomatedScan
-    ? lastAutomatedScan + configuredInterval * 1000
-    : now + configuredInterval * 1000;
+  let nextEligibleScan = now + configuredInterval * 1000;
+  if (lastAutomatedScan) {
+    const elapsed = now - lastAutomatedScan;
+    const intervalMs = configuredInterval * 1000;
+    if (elapsed < intervalMs) {
+      nextEligibleScan = lastAutomatedScan + intervalMs;
+    } else {
+      nextEligibleScan = lastAutomatedScan + Math.ceil(elapsed / intervalMs) * intervalMs;
+    }
+  }
   const nextCronExecution = nextEligibleScan;
   const nextScanTime = nextEligibleScan;
   const lastScanTime = lastAutomatedScan || 0;

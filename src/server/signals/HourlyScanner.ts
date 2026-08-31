@@ -196,7 +196,7 @@ export class HourlyScannerService {
     }
 
     // 1. Check production persistence readiness
-    if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
+    if (ScannerPersistence.isProductionMode() && !ScannerPersistence.isProductionPersistenceReady()) {
       logger.error('[Hourly Scanner] AUTOMATED SCANNER DISPATCH DISABLED: Production persistence is unavailable (FIREBASE_SERVICE_ACCOUNT required).');
       const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
       const dispatchCompletedAt = Date.now();
@@ -501,7 +501,7 @@ export class HourlyScannerService {
     const globalScanDeadlineMs = globalScanStartMs + GLOBAL_SCAN_BUDGET_MS;
     logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime} | deadline: ${globalScanDeadlineMs}`);
 
-    if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
+    if (ScannerPersistence.isProductionMode() && !ScannerPersistence.isProductionPersistenceReady()) {
       logger.error('[Hourly Scanner] AUTOMATED SCANNER DISPATCH DISABLED: Production persistence is unavailable (FIREBASE_SERVICE_ACCOUNT required).');
       const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
       return {
@@ -1420,27 +1420,25 @@ export class HourlyScannerService {
       const scanDurationMs = Date.now() - scanStartTime;
       const totalCandidatesRejectedFinalCombined = totalCandidatesRejectedFinal + rejectedDuringScan.length;
 
-      // 10. Update authoritative lastAutomatedScan metrics ONLY if triggered externally from /api/scanner/trigger
-      if (isExternal) {
-        await ScannerPersistence.recordAutomatedScanMetrics({
-          lastAutomatedScan: scanStartTime,
-          lastScanCompletedAt: Date.now(),
-          lastScanDuration: scanDurationMs,
-          lastCandidatesEvaluated: totalCandidatesEvaluated,
-          lastSignalsFound: totalSignalsGenerated,
-          lastAcceptedSignals: dispatchedCount,
-          universeSymbolsScanned: totalUniverseSymbolsScanned,
-          preliminaryCandidatesFound: totalPreliminaryCandidatesFound,
-          candidatesRejectedPreliminary: totalCandidatesRejectedPreliminary,
-          candidatesEvaluated: totalCandidatesEvaluated,
-          candidatesRejectedFinal: totalCandidatesRejectedFinalCombined,
-          signalsGenerated: totalSignalsGenerated,
-          signalsAccepted: dispatchedCount,
-          deepCandidates: totalPreliminaryCandidatesFound,
-          signalsRejected: totalCandidatesRejectedFinalCombined,
-          rejectionReasons: aggregatedRejectionCounts,
-        });
-      }
+      // 10. Update authoritative lastAutomatedScan metrics for the completed scan
+      await ScannerPersistence.recordAutomatedScanMetrics({
+        lastAutomatedScan: scanStartTime,
+        lastScanCompletedAt: Date.now(),
+        lastScanDuration: scanDurationMs,
+        lastCandidatesEvaluated: totalCandidatesEvaluated,
+        lastSignalsFound: totalSignalsGenerated,
+        lastAcceptedSignals: dispatchedCount,
+        universeSymbolsScanned: totalUniverseSymbolsScanned,
+        preliminaryCandidatesFound: totalPreliminaryCandidatesFound,
+        candidatesRejectedPreliminary: totalCandidatesRejectedPreliminary,
+        candidatesEvaluated: totalCandidatesEvaluated,
+        candidatesRejectedFinal: totalCandidatesRejectedFinalCombined,
+        signalsGenerated: totalSignalsGenerated,
+        signalsAccepted: dispatchedCount,
+        deepCandidates: totalPreliminaryCandidatesFound,
+        signalsRejected: totalCandidatesRejectedFinalCombined,
+        rejectionReasons: aggregatedRejectionCounts,
+      });
 
       const persistenceDurationMs = Date.now() - persistenceStart;
       logger.info(`[Scanner Telemetry] PERSISTENCE | duration: ${persistenceDurationMs}ms`);
@@ -1606,7 +1604,22 @@ export class HourlyScannerService {
     // Authoritative cron-job.org job status
     const cronStatus = await CronJobOrgService.getJobStatus();
     const lastCronExecution = cronStatus.lastExecution?.timestamp || capState.lastCronExecution || 0;
-    const nextCronExecution = cronStatus.nextExecution?.timestamp || 0;
+    let nextCronExecution = cronStatus.nextExecution?.timestamp || 0;
+    if (nextCronExecution === 0) {
+      const now = Date.now();
+      const configuredInterval = intervalMinutes * 60;
+      let nextEligibleScan = now + configuredInterval * 1000;
+      if (lastAutomatedScan) {
+        const elapsed = now - lastAutomatedScan;
+        const intervalMs = configuredInterval * 1000;
+        if (elapsed < intervalMs) {
+          nextEligibleScan = lastAutomatedScan + intervalMs;
+        } else {
+          nextEligibleScan = lastAutomatedScan + Math.ceil(elapsed / intervalMs) * intervalMs;
+        }
+      }
+      nextCronExecution = nextEligibleScan;
+    }
     const nextScanTime = nextCronExecution;
 
     let scannerStatus: 'ACTIVE' | 'RUNNING' | 'DISABLED' | 'CAP_REACHED' = 'ACTIVE';

@@ -47,6 +47,19 @@ export async function createServer() {
   app.use('/api', signalsRouter);
   app.use('/api', notificationsRouter);
 
+  // Catch-all 404 JSON response for any unmatched /api routes (prevents Vite SPA fallback returning HTML 200 for API calls)
+  app.use('/api/*', (req, res) => {
+    res.status(404).json({
+      success: false,
+      error: {
+        code: 'NOT_FOUND',
+        message: `API endpoint ${req.method} ${req.originalUrl} not found`,
+        timestamp: new Date().toISOString(),
+        path: req.originalUrl,
+      },
+    });
+  });
+
   // Global Express Error Handler
   app.use(globalErrorHandler);
 

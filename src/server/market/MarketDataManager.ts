@@ -499,7 +499,7 @@ export class MarketDataManager {
       logger.info(`FOREX_PRICE_REQUEST reason=${validReason} symbol=${cleanSymbol}`);
     }
 
-    const activeContext = this.getActiveScanContext();
+    let activeContext = this.getActiveScanContext();
     const cacheTtlMs = serverConfig.getConfig().marketDataCacheTtlMs;
 
     // 1. CACHE LOOKUP: Always check cache first if not forceFresh
@@ -525,15 +525,15 @@ export class MarketDataManager {
       }
     }
 
-    // 2. ABSOLUTE SCAN CONTEXT BOUNDARY CHECK (GATE 3)
+    // 2. CONTEXT BOUNDARY CHECK: If no background scanner context exists, block external requests
     if (!activeContext) {
+      logger.warn(`[MarketDataManager] Rejecting provider price request outside scan context for ${cleanSymbol}`);
       this.preScanApiAttempts++;
-      logger.warn(`[MarketDataManager] REJECT_REQUEST reason: API_REQUEST_OUTSIDE_SCAN symbol=${cleanSymbol}`);
       return this.createErrorTicker(
         cleanSymbol,
-        cleanSymbol,
+        appSymbol,
         routing.primaryProvider,
-        routing.assetClass,
+        'ERROR',
         'REJECT_REQUEST: API_REQUEST_OUTSIDE_SCAN'
       );
     }
@@ -706,7 +706,7 @@ export class MarketDataManager {
     }
 
     const ttlMs = this.getTimeframeTtl(timeframe);
-    const activeContext = this.getActiveScanContext();
+    let activeContext = this.getActiveScanContext();
 
     // 1. CACHE LOOKUP: Check candles cache first
     const cachedCandles = marketCache.getCandles(primaryProviderId, cleanSymbol, timeframe);
@@ -729,11 +729,11 @@ export class MarketDataManager {
       }
     }
 
-    // 2. ABSOLUTE SCAN CONTEXT BOUNDARY CHECK (GATE 3)
+    // 2. CONTEXT BOUNDARY CHECK: If no background scanner context exists, block external requests
     if (!activeContext) {
+      logger.warn(`[MarketDataManager] Rejecting provider candles request outside scan context for ${cleanSymbol}`);
       this.preScanApiAttempts++;
-      logger.warn(`[MarketDataManager] REJECT_REQUEST reason: API_REQUEST_OUTSIDE_SCAN for getCandles symbol=${cleanSymbol}`);
-      return [];
+      throw new Error('REJECT_REQUEST: API_REQUEST_OUTSIDE_SCAN');
     }
 
     const telemetry = this.getOrCreateTelemetry(activeContext);

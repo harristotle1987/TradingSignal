@@ -241,7 +241,7 @@ export class ScannerPersistence {
   private static isInitialized = false;
 
   public static isProductionMode(): boolean {
-    return process.env.NODE_ENV === 'production';
+    return process.env.NODE_ENV === 'production' && !!process.env.FIREBASE_SERVICE_ACCOUNT;
   }
 
   public static isProductionPersistenceReady(): boolean {
