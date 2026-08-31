@@ -87,7 +87,7 @@ export async function runStagedPipeline(
   const cleanSymbol = symbol.trim().toUpperCase();
   const now = Date.now();
   const globalScanStartMs = options?.scanStartedAt ?? Date.now();
-  const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 20000;
+  const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 24000;
   const globalScanDeadlineMs = globalScanStartMs + GLOBAL_SCAN_BUDGET_MS;
   const scanStartTime = globalScanStartMs;
   let timeBudgetExceeded = false;

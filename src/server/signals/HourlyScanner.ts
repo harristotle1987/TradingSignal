@@ -66,7 +66,7 @@ export interface ScannerSettings {
 
 export interface ManualScanResult {
   success: boolean;
-  status: 'COMPLETED' | 'COMPLETED_WITH_BUDGET' | 'TIME_BUDGET_EXCEEDED' | 'DISPATCHED' | 'SKIPPED' | 'SCAN_ALREADY_RUNNING' | 'SKIPPED_CAP_REACHED' | 'SKIPPED_NOT_DUE' | 'PERSISTENCE_UNAVAILABLE_DEGRADED' | 'ERROR';
+  status: 'COMPLETED' | 'SCAN_ALREADY_RUNNING' | 'SKIPPED_CAP_REACHED' | 'SKIPPED_NOT_DUE' | 'PERSISTENCE_UNAVAILABLE_DEGRADED' | 'ERROR';
   message: string;
   timestamp: number;
   lastScanTime: number;
@@ -74,7 +74,6 @@ export interface ManualScanResult {
   preliminaryCandidatesFound?: number;
   candidatesRejectedPreliminary?: number;
   candidatesEvaluated: number;
-  deepCandidates?: number;
   candidatesRejectedFinal?: number;
   candidatesRejectedBeforeMTF?: number;
   candidatesRejectedByMTF?: number;
@@ -96,11 +95,6 @@ export interface ManualScanResult {
   diagnostics?: string[];
   capState: DailyCapState;
   scanDurationMs?: number;
-  timeBudgetMs?: number;
-  timeBudgetExceeded?: boolean;
-  providerRequestsStoppedByBudget?: boolean;
-  providerRequests?: number;
-  remainingBudgetMs?: number;
   timingTelemetry?: {
     globalScanStartMs: number;
     globalScanDeadlineMs: number;
@@ -114,16 +108,15 @@ export interface ManualScanResult {
   globalScanStartMs?: number;
   globalScanDeadlineMs?: number;
   currentElapsedMs?: number;
+  remainingBudgetMs?: number;
   gate6ElapsedMs?: number;
   stage3ElapsedMs?: number;
+  timeBudgetExceeded?: boolean;
+  providerRequestsStoppedByBudget?: boolean;
 }
 
 export class HourlyScannerService {
   private isScanning = false;
-
-  public isScanRunning(): boolean {
-    return this.isScanning;
-  }
 
   constructor() {
     ScannerPersistence.init();
@@ -179,7 +172,7 @@ export class HourlyScannerService {
   ): Promise<ManualScanResult> {
     const scanStartTime = options?.scanStartedAt ?? Date.now();
     const globalScanStartMs = scanStartTime;
-    const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 20000;
+    const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 24000;
     const globalScanDeadlineMs = globalScanStartMs + GLOBAL_SCAN_BUDGET_MS;
     logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime} | deadline: ${globalScanDeadlineMs}`);
 
@@ -307,8 +300,6 @@ export class HourlyScannerService {
       let totalPreliminaryCandidatesFound = 0;
       let totalCandidatesRejectedPreliminary = 0;
       let totalCandidatesEvaluated = 0;
-      let totalDeepCandidates = 0;
-      let totalProviderRequests = 0;
       let totalCandidatesRejectedFinal = 0;
       let totalSignalsGenerated = 0;
       const aggregatedRejectionCounts: Record<string, number> = {};
@@ -322,8 +313,6 @@ export class HourlyScannerService {
         const preliminaryCandidatesFound = tel?.preliminaryCandidatesFound ?? (result.success && Array.isArray(result.signals) ? result.signals.length : 0);
         const candidatesRejectedPreliminary = tel?.candidatesRejectedPreliminary ?? (universeSymbolsScanned - preliminaryCandidatesFound);
         const candidatesEvaluated = tel?.candidatesEvaluated ?? preliminaryCandidatesFound;
-        const deepCandidates = tel?.gate10Telemetry?.deepCandidatesEvaluated ?? tel?.deepCandidates ?? candidatesEvaluated;
-        const providerRequests = tel?.gate10Telemetry?.providerRequests ?? tel?.providerRequests ?? 0;
         const candidatesRejectedFinal = tel?.candidatesRejectedFinal ?? (candidatesEvaluated - (result.success && Array.isArray(result.signals) ? result.signals.length : 0));
         const signalsGenerated = tel?.signalsGenerated ?? (result.success && Array.isArray(result.signals) ? result.signals.length : 0);
 
@@ -342,8 +331,6 @@ export class HourlyScannerService {
         totalPreliminaryCandidatesFound += preliminaryCandidatesFound;
         totalCandidatesRejectedPreliminary += candidatesRejectedPreliminary;
         totalCandidatesEvaluated += candidatesEvaluated;
-        totalDeepCandidates += deepCandidates;
-        totalProviderRequests += providerRequests;
         totalCandidatesRejectedFinal += candidatesRejectedFinal;
         totalSignalsGenerated += signalsGenerated;
 
@@ -1138,11 +1125,9 @@ export class HourlyScannerService {
         providerRequestsStoppedByBudget: aggregatedProviderRequestsStoppedByBudget,
       };
 
-      const scanStatus: ManualScanResult['status'] = aggregatedTimeBudgetExceeded ? 'COMPLETED_WITH_BUDGET' : 'COMPLETED';
-
       return {
         success: true,
-        status: scanStatus,
+        status: 'COMPLETED',
         message:
           dispatchedCount > 0
             ? `Scan complete: Dispatched ${dispatchedCount} qualified automated setup(s). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`
@@ -1153,7 +1138,6 @@ export class HourlyScannerService {
         preliminaryCandidatesFound: totalPreliminaryCandidatesFound,
         candidatesRejectedPreliminary: totalCandidatesRejectedPreliminary,
         candidatesEvaluated: totalCandidatesEvaluated,
-        deepCandidates: totalDeepCandidates,
         candidatesRejectedFinal: totalCandidatesRejectedFinalCombined,
         signalsGenerated: totalSignalsGenerated,
         signalsAccepted: dispatchedCount,
@@ -1170,17 +1154,15 @@ export class HourlyScannerService {
         diagnostics: diagnosticStrings,
         capState: finalCapState,
         scanDurationMs,
-        timeBudgetMs: GLOBAL_SCAN_BUDGET_MS,
-        timeBudgetExceeded: aggregatedTimeBudgetExceeded,
-        providerRequestsStoppedByBudget: aggregatedProviderRequestsStoppedByBudget,
-        providerRequests: totalProviderRequests,
-        remainingBudgetMs,
         timingTelemetry,
         globalScanStartMs,
         globalScanDeadlineMs,
         currentElapsedMs,
+        remainingBudgetMs,
         gate6ElapsedMs: maxGate6ElapsedMs,
         stage3ElapsedMs: maxStage3ElapsedMs,
+        timeBudgetExceeded: aggregatedTimeBudgetExceeded,
+        providerRequestsStoppedByBudget: aggregatedProviderRequestsStoppedByBudget,
       };
     } catch (err) {
       logger.error('[Hourly Scanner] Critical failure during scan execution:', { error: String(err) });
