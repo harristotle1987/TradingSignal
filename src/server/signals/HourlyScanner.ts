@@ -336,9 +336,9 @@ export class HourlyScannerService {
     const dispatchCompletedAt = Date.now();
     const cronResponseDurationMs = dispatchCompletedAt - dispatchStartedAt;
 
-    // 4. Launch background execution detached from HTTP request lifecycle
+    // 4. Launch background execution (awaited inside dispatch to keep the container/runtime alive and active on Cloud Run)
     const backgroundStartMs = Date.now();
-    this.executeBackgroundScan(instanceId, isExternal, {
+    await this.executeBackgroundScan(instanceId, isExternal, {
       scanStartedAt: backgroundStartMs,
       operationalBudgetMs: OPERATIONAL_SCAN_BUDGET_MS,
       hardDeadlineMs: HARD_SCAN_DEADLINE_MS,
@@ -352,6 +352,8 @@ export class HourlyScannerService {
 
     logger.info(`[Hourly Scanner] DISPATCH_COMPLETED | duration: ${cronResponseDurationMs}ms | instanceId: ${instanceId}`);
 
+    const freshCapState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
+
     return {
       success: true,
       status: 'DISPATCHED',
@@ -364,9 +366,9 @@ export class HourlyScannerService {
       lockWaitMs,
       instanceId,
       timestamp: Date.now(),
-      lastScanTime: capState.lastAutomatedScan || capState.lastScanTime || 0,
+      lastScanTime: freshCapState.lastAutomatedScan || freshCapState.lastScanTime || 0,
       nextScanTime: 0,
-      capState,
+      capState: freshCapState,
     };
   }
 
@@ -426,10 +428,13 @@ export class HourlyScannerService {
     const totalScanDurationMs = scanDurationMs;
 
     // Diagnostic classification
-    let diagnosticClassification: 'OK' | 'CRON_HTTP_SLOW' | 'BACKGROUND_SCAN_SLOW' | 'LOCK_CONTENTION' | 'SERVERLESS_COLD_START' | 'PROVIDER_API_DELAY' = 'OK';
+    let diagnosticClassification: 'OK' | 'CRON_HTTP_SLOW' | 'BACKGROUND_SCAN_SLOW' | 'LOCK_CONTENTION' | 'SERVERLESS_COLD_START' | 'PROVIDER_API_DELAY' | 'SCAN_FAILED' = 'OK';
     let diagnosticMessage = 'Normal background scan execution';
 
-    if (options.cronResponseDurationMs > CRON_DISPATCH_TIMEOUT_MS) {
+    if (scanResult.status === 'ERROR' || !scanResult.success) {
+      diagnosticClassification = 'SCAN_FAILED';
+      diagnosticMessage = scanResult.message || 'Background scan execution failed';
+    } else if (options.cronResponseDurationMs > CRON_DISPATCH_TIMEOUT_MS) {
       diagnosticClassification = 'CRON_HTTP_SLOW';
       diagnosticMessage = `Cron HTTP response latency high (${options.cronResponseDurationMs}ms > ${CRON_DISPATCH_TIMEOUT_MS}ms)`;
     } else if (scanDurationMs > options.hardDeadlineMs) {

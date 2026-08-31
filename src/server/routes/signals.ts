@@ -571,10 +571,10 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
       success: true,
       requestStartTime,
       executionId: execId,
-      isScanning: true,
+      isScanning: false, // Since dispatch was awaited and completed successfully, the scanner is no longer active
     });
 
-    return res.status(202).json(body);
+    return res.status(200).json(body);
   } catch (err: unknown) {
     logger.error('EXTERNAL_HOURLY_SCAN_DISPATCH_FAILED');
     const msg = err instanceof Error ? err.message : String(err);

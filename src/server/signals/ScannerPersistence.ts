@@ -165,7 +165,7 @@ export interface ScannerTimingTelemetry {
   lockAcquired: boolean;
   instanceId: string;
   status: string;
-  diagnosticClassification: 'OK' | 'CRON_HTTP_SLOW' | 'BACKGROUND_SCAN_SLOW' | 'LOCK_CONTENTION' | 'SERVERLESS_COLD_START' | 'PROVIDER_API_DELAY';
+  diagnosticClassification: 'OK' | 'CRON_HTTP_SLOW' | 'BACKGROUND_SCAN_SLOW' | 'LOCK_CONTENTION' | 'SERVERLESS_COLD_START' | 'PROVIDER_API_DELAY' | 'SCAN_FAILED';
   diagnosticMessage?: string;
   timestamp: number;
 }
