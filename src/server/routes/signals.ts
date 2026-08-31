@@ -60,9 +60,9 @@ async function buildCronResponseBody(options: {
   const validIntervals = [15, 30, 45, 60];
   const intervalMinutes = validIntervals.includes(Number(settings.intervalMinutes))
     ? Number(settings.intervalMinutes)
-    : 30;
-  const configuredInterval = intervalMinutes * 60; // in seconds (e.g. 1800s for 30 minutes)
-  const schedule = `Every ${intervalMinutes} minutes`;
+    : Number(process.env.DISPLAY_SCAN_INTERVAL_MINUTES || 30);
+  const configuredInterval = intervalMinutes * 60; // in seconds
+  const schedule = 'Externally scheduled (see cron-job.org)';
 
   const dailySignalCap = capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap || 10;
   const signalsToday = capState.dailySignalCount || 0;
@@ -147,17 +147,46 @@ async function buildCronResponseBody(options: {
   const scanDurationMs = lastScan?.scanDurationMs ?? lastScan?.scanDuration ?? capState.lastScanDuration ?? 0;
   const scanDuration = scanDurationMs;
 
-  const globalScanStartMs = lastScan?.globalScanStartMs ?? (lastAutomatedScan ? lastAutomatedScan - scanDurationMs : 0);
-  const globalScanDeadlineMs = lastScan?.globalScanDeadlineMs ?? (globalScanStartMs ? globalScanStartMs + 18000 : 0);
-  const currentElapsedMs = globalScanStartMs ? (now - globalScanStartMs) : scanDurationMs;
-  const remainingBudgetMs = globalScanDeadlineMs ? Math.max(0, globalScanDeadlineMs - now) : 0;
-  const totalDurationMs = globalScanStartMs ? (now - globalScanStartMs) : scanDurationMs;
+  // When a scan was just DISPATCHED, these fields must describe the
+  // dispatch that just happened (elapsed ~0-2s), not the previous
+  // completed scan's stats pulled from `lastScan`. Using lastScan's
+  // numbers here previously produced nonsensical values like "15
+  // minutes elapsed" on a response that took 1.3 seconds to return.
+  const isFreshDispatch = options.status === 'DISPATCHED';
 
-  const gate6ElapsedMs = lastScan?.gate6ElapsedMs ?? 0;
-  const stage3ElapsedMs = lastScan?.stage3ElapsedMs ?? 0;
+  const globalScanStartMs = isFreshDispatch
+    ? options.requestStartTime
+    : (lastScan?.globalScanStartMs ?? (lastAutomatedScan ? lastAutomatedScan - scanDurationMs : 0));
+  const globalScanDeadlineMs = isFreshDispatch
+    ? options.requestStartTime + 18000
+    : (lastScan?.globalScanDeadlineMs ?? (globalScanStartMs ? globalScanStartMs + 18000 : 0));
+  const currentElapsedMs = isFreshDispatch
+    ? (now - options.requestStartTime)
+    : (globalScanStartMs ? (now - globalScanStartMs) : scanDurationMs);
+  const remainingBudgetMs = isFreshDispatch
+    ? Math.max(0, globalScanDeadlineMs - now)
+    : (globalScanDeadlineMs ? Math.max(0, globalScanDeadlineMs - now) : 0);
+  const totalDurationMs = isFreshDispatch
+    ? (now - options.requestStartTime)
+    : (globalScanStartMs ? (now - globalScanStartMs) : scanDurationMs);
 
-  const timeBudgetExceeded = lastScan?.timeBudgetExceeded ?? false;
-  const providerRequestsStoppedByBudget = lastScan?.providerRequestsStoppedByBudget ?? false;
+  const gate6ElapsedMs = isFreshDispatch ? 0 : (lastScan?.gate6ElapsedMs ?? 0);
+  const stage3ElapsedMs = isFreshDispatch ? 0 : (lastScan?.stage3ElapsedMs ?? 0);
+
+  const timeBudgetExceeded = isFreshDispatch ? false : (lastScan?.timeBudgetExceeded ?? false);
+  const providerRequestsStoppedByBudget = isFreshDispatch ? false : (lastScan?.providerRequestsStoppedByBudget ?? false);
+
+  // Preserve the previous scan's real stats for anyone who wants them,
+  // clearly attributed instead of masquerading as "now".
+  const lastCompletedScan = lastScan ? {
+    globalScanStartMs: lastScan.globalScanStartMs ?? null,
+    globalScanDeadlineMs: lastScan.globalScanDeadlineMs ?? null,
+    scanDurationMs: lastScan.scanDurationMs ?? lastScan.scanDuration ?? null,
+    timeBudgetExceeded: lastScan.timeBudgetExceeded ?? false,
+    gate6ElapsedMs: lastScan.gate6ElapsedMs ?? null,
+    stage3ElapsedMs: lastScan.stage3ElapsedMs ?? null,
+    completedAt: lastScanCompletedAt ?? null,
+  } : null;
 
   const latestTelemetry = await ScannerPersistence.getLatestTimingTelemetry();
   let timingTelemetry: any = lastScan?.timingTelemetry ?? latestTelemetry ?? null;
@@ -301,6 +330,7 @@ async function buildCronResponseBody(options: {
     timeBudgetExceeded,
     providerRequestsStoppedByBudget,
     timingTelemetry,
+    lastCompletedScan,
 
     external_hourly_scan_status: options.status === 'DISPATCHED' ? 'DISPATCHED_IN_BACKGROUND' : options.status,
 

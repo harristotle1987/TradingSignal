@@ -111,11 +111,19 @@ export class CandidateRejectionTracker {
       .trim();
 
     if (clean.includes('GROSS_RR_BELOW_THRESHOLD') || clean.includes('Gross R:R') || clean.includes('rrRatio') || clean.includes('R:R')) {
-      const match = clean.match(/R:R\s*\(([\d.]+)\)\s*below\s*([\d.]+)/i);
+      // The actual rejection reason text looks like: "Gross Risk/Reward
+      // ratio (0.56:1) is below minimum acceptable GROSS R:R (1.8:1)" -
+      // the previous regex expected "R:R (X) below Y" immediately, which
+      // never matches this real format, so it always silently fell
+      // through to a hardcoded "1.5:1" placeholder regardless of the
+      // real configured threshold. This corrected pattern matches the
+      // actual message shape and pulls both real numbers out of it.
+      const match = clean.match(/\(([\d.]+):1\)\s*is\s*below\s*minimum\s*acceptable\s*GROSS\s*R:R\s*\(([\d.]+):1\)/i);
       if (match) {
         return `Risk/reward only ${match[1]}:1; minimum required is ${match[2]}:1.`;
       }
-      return 'Risk/reward ratio below required minimum threshold (1.5:1).';
+      const minRR = serverConfig?.getConfig?.()?.thresholds?.minimumRR;
+      return `Risk/reward ratio below required minimum threshold${minRR ? ` (${minRR}:1)` : ''}.`;
     }
 
     if (clean.includes('Entry too close to major resistance') || clean.includes('resistance')) {

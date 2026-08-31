@@ -91,9 +91,13 @@ export class SignalAuditStore {
       const arr = Array.from(this.auditLogs.values())
         .sort((a, b) => b.timestamp - a.timestamp)
         .slice(0, 1000); // Retain latest 1000 records locally
-      fs.writeFileSync(LOCAL_AUDIT_PATH, JSON.stringify(arr, null, 2), 'utf-8');
+      fs.writeFile(LOCAL_AUDIT_PATH, JSON.stringify(arr, null, 2), 'utf-8', (err) => {
+        if (err) {
+          logger.warn('[SignalAuditStore] Failed to write audit records to local disk:', { error: err.message });
+        }
+      });
     } catch (err) {
-      logger.warn('[SignalAuditStore] Failed to write audit records to local disk:', err);
+      logger.warn('[SignalAuditStore] Synchronous failure during local persistence setup:', { error: err instanceof Error ? err.message : String(err) });
     }
   }
 

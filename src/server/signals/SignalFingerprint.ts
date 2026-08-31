@@ -69,9 +69,13 @@ export class SignalFingerprint {
   private static persist(): void {
     try {
       const arr = Array.from(this.records.values());
-      fs.writeFileSync(FINGERPRINT_FILE_PATH, JSON.stringify(arr, null, 2), 'utf-8');
+      fs.writeFile(FINGERPRINT_FILE_PATH, JSON.stringify(arr, null, 2), 'utf-8', (err) => {
+        if (err) {
+          logger.warn('[SignalFingerprint] Could not save fingerprints to disk:', { error: err.message });
+        }
+      });
     } catch (err) {
-      logger.warn('[SignalFingerprint] Could not save fingerprints to disk:', err);
+      logger.warn('[SignalFingerprint] Synchronous failure during local persistence setup:', { error: err instanceof Error ? err.message : String(err) });
     }
   }
 

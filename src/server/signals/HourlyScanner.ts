@@ -29,6 +29,7 @@
  *    - Sends NO TRADE notification only if configured.
  */
 
+import { waitUntil } from '@vercel/functions';
 import {
   OPERATIONAL_SCAN_BUDGET_MS,
   HARD_SCAN_DEADLINE_MS,
@@ -339,9 +340,13 @@ export class HourlyScannerService {
 
     // 4. Fire the scan in the background WITHOUT awaiting it, so the
     // HTTP response returns immediately and never risks the external
-    // cron scheduler's request timeout.
+    // cron scheduler's request timeout. waitUntil() tells Vercel's
+    // runtime to keep this execution context alive until the promise
+    // settles, even after the HTTP response has already been sent -
+    // without it, this background work has no platform guarantee of
+    // actually completing.
     const backgroundStartMs = Date.now();
-    this.executeBackgroundScan(instanceId, isExternal, {
+    const backgroundScanPromise = this.executeBackgroundScan(instanceId, isExternal, {
       scanStartedAt: backgroundStartMs,
       operationalBudgetMs: OPERATIONAL_SCAN_BUDGET_MS,
       hardDeadlineMs: HARD_SCAN_DEADLINE_MS,
@@ -352,6 +357,17 @@ export class HourlyScannerService {
     }).catch((err) => {
       logger.error(`[Hourly Scanner] BACKGROUND_SCAN_UNCAUGHT_ERROR | instanceId: ${instanceId} | error: ${err instanceof Error ? err.message : String(err)}`);
     });
+    try {
+      waitUntil(backgroundScanPromise);
+    } catch (waitUntilErr) {
+      // waitUntil is only meaningful inside an active Vercel request
+      // context. If it throws (e.g. running outside Vercel, or an
+      // older runtime), the scan still proceeds via the unawaited
+      // promise above - this just means the extra reliability
+      // guarantee wasn't available in this environment. Log it once so
+      // it's visible, don't fail the dispatch over it.
+      logger.warn(`[Hourly Scanner] waitUntil unavailable in this execution context: ${waitUntilErr instanceof Error ? waitUntilErr.message : String(waitUntilErr)}`);
+    }
 
     logger.info(`[Hourly Scanner] DISPATCH_COMPLETED | duration: ${cronResponseDurationMs}ms | instanceId: ${instanceId}`);
 
