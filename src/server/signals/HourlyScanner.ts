@@ -39,6 +39,7 @@ import { signalEngine } from './SignalEngine.js';
 import { getDynamicPrecision } from '../../utils/formatters.js';
 import { TradeRankingEngine } from './TradeRankingEngine.js';
 import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
+import { marketDataManager } from '../market/MarketDataManager.js';
 import { Gate17CorrelationExposure } from './Gate17CorrelationExposure.js';
 import { SignalLifecycleManager } from './SignalLifecycleManager.js';
 import { SignalLogger } from './SignalLogger.js';
