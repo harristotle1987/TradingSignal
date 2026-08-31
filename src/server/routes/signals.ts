@@ -159,21 +159,12 @@ async function buildCronResponseBody(options: {
   const timeBudgetExceeded = lastScan?.timeBudgetExceeded ?? false;
   const providerRequestsStoppedByBudget = lastScan?.providerRequestsStoppedByBudget ?? false;
 
-  const executionId = options.executionId || (
-    options.status === 'DISPATCHED'
-      ? `scan-${now}-${Math.random().toString(36).substring(2, 7)}`
-      : `cron-${now}-${Math.random().toString(36).substring(2, 7)}`
-  );
-
   const latestTelemetry = await ScannerPersistence.getLatestTimingTelemetry();
   let timingTelemetry: any = lastScan?.timingTelemetry ?? latestTelemetry ?? null;
 
-  // Gate 3: Accurate and consistent execution timing states.
-  if (options.status === 'COMPLETED') {
-    // For a completed scan, timing telemetry is strictly the completed telemetry from the current scan
-    timingTelemetry = lastScan?.timingTelemetry ?? timingTelemetry;
-  } else {
-    // For DISPATCHED, SKIPPED, or ERROR, we construct accurate telemetry for THIS HTTP request
+  // Gate 3: Avoid exposing stale/incorrect timing telemetry on skipped or error responses
+  const isCurrentlyActive = options.status === 'DISPATCHED' || options.status === 'COMPLETED';
+  if (!isCurrentlyActive) {
     timingTelemetry = {
       dispatchStartedAt: options.requestStartTime,
       dispatchCompletedAt: now,
@@ -188,10 +179,10 @@ async function buildCronResponseBody(options: {
       scanDurationMs: 0,
       timeBudgetExceeded: false,
       providerRequestsStoppedByBudget: false,
-      lockAcquired: options.status === 'DISPATCHED',
-      instanceId: executionId,
+      lockAcquired: false,
+      instanceId: 'none',
       status: options.status,
-      diagnosticClassification: options.status === 'DISPATCHED' ? 'OK' : (options.status === 'SKIPPED_SCAN_ALREADY_RUNNING' ? 'LOCK_CONTENTION' : 'OK'),
+      diagnosticClassification: 'OK',
       diagnosticMessage: options.message,
       timestamp: now,
     };
@@ -235,6 +226,12 @@ async function buildCronResponseBody(options: {
   };
 
   const failoverCount = tel.totalFailovers || 0;
+
+  const executionId = options.executionId || (
+    options.status === 'DISPATCHED'
+      ? `scan-${now}-${Math.random().toString(36).substring(2, 7)}`
+      : `cron-${now}-${Math.random().toString(36).substring(2, 7)}`
+  );
 
   const isSuccess = options.success !== undefined
     ? options.success

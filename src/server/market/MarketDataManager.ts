@@ -529,7 +529,7 @@ export class MarketDataManager {
     }
 
     // 2. CONTEXT BOUNDARY CHECK: If no background scanner context exists, block external requests
-    if (!activeContext) {
+    if (!activeContext && reason !== 'USER_CLICK') {
       logger.warn(`[MarketDataManager] Rejecting provider price request outside scan context for ${cleanSymbol}`);
       this.preScanApiAttempts++;
       return this.createErrorTicker(
@@ -541,11 +541,16 @@ export class MarketDataManager {
       );
     }
 
-    const telemetry = this.getOrCreateTelemetry(activeContext);
-    telemetry.cacheMisses++;
+    let telemetry: ScanTelemetry | null = null;
+    if (activeContext) {
+      telemetry = this.getOrCreateTelemetry(activeContext);
+      telemetry.cacheMisses++;
+    }
 
     // 3. SCAN-LEVEL REQUEST DEDUPLICATION
-    const dedupKey = `price:${activeContext.scanExecutionId}:${cleanSymbol}:${requestedProvider || 'default'}`;
+    const dedupKey = activeContext 
+      ? `price:${activeContext.scanExecutionId}:${cleanSymbol}:${requestedProvider || 'default'}`
+      : `price:USER_CLICK:${cleanSymbol}:${requestedProvider || 'default'}`;
     if (this.inFlightScanRequests.has(dedupKey)) {
       return this.inFlightScanRequests.get(dedupKey)!;
     }
@@ -573,8 +578,8 @@ export class MarketDataManager {
   private async executePriceFetchWithFailover(
     cleanSymbol: string,
     routing: { assetClass: any; primaryProvider: string; fallbackProviders: string[] },
-    activeContext: ScanExecutionContext,
-    telemetry: ScanTelemetry,
+    activeContext: ScanExecutionContext | null,
+    telemetry: ScanTelemetry | null,
     forceFresh: boolean,
     cacheTtlMs: number,
     globalScanDeadlineMs?: number
@@ -584,16 +589,16 @@ export class MarketDataManager {
     for (let i = 0; i < providerChain.length; i++) {
       const providerId = providerChain[i];
 
-      if (this.isProviderRateLimited(activeContext.scanExecutionId, providerId)) {
+      if (activeContext && this.isProviderRateLimited(activeContext.scanExecutionId, providerId)) {
         logger.warn(`[MarketDataManager] Provider '${providerId}' rate-limited during scan ${activeContext.scanExecutionId}. Skipping.`);
-        if (i > 0) telemetry.failoverCount++;
+        if (i > 0 && telemetry) telemetry.failoverCount++;
         continue;
       }
 
       const adapter = this.getProvider(providerId);
       if (!adapter) continue;
 
-      telemetry.providerRequests++;
+      if (telemetry) telemetry.providerRequests++;
 
       try {
         const ticker = await providerQueue.enqueue(providerId, async () => {
@@ -601,7 +606,7 @@ export class MarketDataManager {
         }, globalScanDeadlineMs);
 
         if (ticker && (ticker.status === 'OK' || ticker.price > 0)) {
-          telemetry.providerSuccesses++;
+          if (telemetry) telemetry.providerSuccesses++;
           this.lastSuccessfulQuotes.set(providerId, ticker.timestamp || ticker.receivedAt);
           marketCache.set(providerId, cleanSymbol, ticker, cacheTtlMs);
           return ticker;
@@ -610,12 +615,12 @@ export class MarketDataManager {
         const errMsg = ticker?.errorMessage || '';
         const is429 = errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit');
         if (is429) {
-          telemetry.provider429s++;
-          this.markProviderRateLimited(activeContext.scanExecutionId, providerId);
+          if (telemetry) telemetry.provider429s++;
+          if (activeContext) this.markProviderRateLimited(activeContext.scanExecutionId, providerId);
         } else {
-          telemetry.providerErrors++;
+          if (telemetry) telemetry.providerErrors++;
         }
-        if (i > 0) telemetry.failoverCount++;
+        if (i > 0 && telemetry) telemetry.failoverCount++;
 
       } catch (err: any) {
         const errMsg = String(err);
@@ -623,14 +628,14 @@ export class MarketDataManager {
         const isTimeout = errMsg.toLowerCase().includes('timeout') || errMsg.toLowerCase().includes('aborted');
 
         if (is429) {
-          telemetry.provider429s++;
-          this.markProviderRateLimited(activeContext.scanExecutionId, providerId);
+          if (telemetry) telemetry.provider429s++;
+          if (activeContext) this.markProviderRateLimited(activeContext.scanExecutionId, providerId);
         } else if (isTimeout) {
-          telemetry.providerTimeouts++;
+          if (telemetry) telemetry.providerTimeouts++;
         } else {
-          telemetry.providerErrors++;
+          if (telemetry) telemetry.providerErrors++;
         }
-        if (i > 0) telemetry.failoverCount++;
+        if (i > 0 && telemetry) telemetry.failoverCount++;
       }
     }
 
