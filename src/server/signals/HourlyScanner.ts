@@ -64,9 +64,24 @@ export interface ScannerSettings {
   lastScanTime: number;
 }
 
+export interface DispatchResult {
+  success: boolean;
+  status: 'DISPATCHED' | 'SKIPPED_SCAN_ALREADY_RUNNING' | 'SKIPPED_CAP_REACHED' | 'PERSISTENCE_UNAVAILABLE_DEGRADED' | 'ERROR';
+  message: string;
+  dispatchStartedAt: number;
+  dispatchCompletedAt: number;
+  cronResponseDurationMs: number;
+  lockWaitMs: number;
+  instanceId?: string;
+  timestamp: number;
+  lastScanTime: number;
+  nextScanTime: number;
+  capState: DailyCapState;
+}
+
 export interface ManualScanResult {
   success: boolean;
-  status: 'COMPLETED' | 'SCAN_ALREADY_RUNNING' | 'SKIPPED_CAP_REACHED' | 'SKIPPED_NOT_DUE' | 'PERSISTENCE_UNAVAILABLE_DEGRADED' | 'ERROR';
+  status: 'COMPLETED' | 'DISPATCHED' | 'SCAN_ALREADY_RUNNING' | 'SKIPPED_CAP_REACHED' | 'SKIPPED_NOT_DUE' | 'PERSISTENCE_UNAVAILABLE_DEGRADED' | 'ERROR';
   message: string;
   timestamp: number;
   lastScanTime: number;
@@ -147,20 +162,292 @@ export class HourlyScannerService {
   }
 
   /**
-   * Directly invokes Market Scan Engine when triggered by external cron-job.org.
-   * A cron execution means: "SCAN THE MARKET NOW."
-   * It does NOT check whether an internal timer or setting says it is due.
+   * GATE 1: Strictly Non-Blocking Automated Scan Dispatcher.
+   * Authenticates, checks lock/cap, acquires distributed lock, and immediately dispatches the background scan.
+   * Returns within < 1-2 seconds (typically < 50ms) so the cron HTTP response never waits for the market scan.
    */
-  async triggerAutomatedScan(isExternal = true, scanStartTime?: number): Promise<ManualScanResult> {
-    const now = Date.now();
+  async dispatchAutomatedScan(
+    isExternal = true,
+    dispatchStartTime: number = Date.now()
+  ): Promise<DispatchResult> {
+    const dispatchStartedAt = dispatchStartTime;
     const configuredTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-    logger.info(`[Hourly Scanner] CRON_TRIGGER_EXECUTING | Date.now(): ${now} | ISO UTC: ${new Date(now).toISOString()} | Runtime TZ: ${configuredTz}`);
+    logger.info(`[Hourly Scanner] DISPATCH_START | Date.now(): ${Date.now()} | ISO UTC: ${new Date().toISOString()} | Runtime TZ: ${configuredTz}`);
 
-    // Selectively clear expired cache entries and ticker quotes before scan cycle
-    const { marketCache } = await import('../market/CacheStore.js');
-    marketCache.clearExpired();
-    marketCache.clearTickers();
-    return await this.executeIntelligentScan(isExternal, scanStartTime ? { scanStartedAt: scanStartTime } : undefined);
+    // Selectively clear expired cache entries and ticker quotes before starting dispatch
+    try {
+      const { marketCache } = await import('../market/CacheStore.js');
+      marketCache.clearExpired();
+      marketCache.clearTickers();
+    } catch {
+      // ignore
+    }
+
+    // 1. Check production persistence readiness
+    if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
+      logger.error('[Hourly Scanner] AUTOMATED SCANNER DISPATCH DISABLED: Production persistence is unavailable (FIREBASE_SERVICE_ACCOUNT required).');
+      const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
+      const dispatchCompletedAt = Date.now();
+      const cronResponseDurationMs = dispatchCompletedAt - dispatchStartedAt;
+      await ScannerPersistence.recordTimingTelemetry({
+        dispatchStartedAt,
+        dispatchCompletedAt,
+        cronResponseDurationMs,
+        lockWaitMs: 0,
+        backgroundStartedAt: 0,
+        backgroundCompletedAt: 0,
+        scanDurationMs: 0,
+        timeBudgetExceeded: false,
+        providerRequestsStoppedByBudget: false,
+        lockAcquired: false,
+        instanceId: 'none',
+        status: 'PERSISTENCE_UNAVAILABLE_DEGRADED',
+        diagnosticClassification: 'OK',
+        diagnosticMessage: 'Production persistence is unavailable',
+        timestamp: Date.now(),
+      });
+      return {
+        success: false,
+        status: 'PERSISTENCE_UNAVAILABLE_DEGRADED',
+        message: 'REJECTED: PRODUCTION_PERSISTENCE_UNAVAILABLE. Firebase Service Account required for automated scanner dispatch in production.',
+        dispatchStartedAt,
+        dispatchCompletedAt,
+        cronResponseDurationMs,
+        lockWaitMs: 0,
+        timestamp: Date.now(),
+        lastScanTime: capState.lastScanTime,
+        nextScanTime: 0,
+        capState,
+      };
+    }
+
+    // 2. Check current daily cap state
+    const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
+    const currentDailyCount = capState.dailySignalCount;
+    const dailyCap = capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap;
+
+    if (currentDailyCount >= dailyCap) {
+      logger.info(`[Hourly Scanner] Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Dispatch skipped to preserve portfolio limits.`);
+      const dispatchCompletedAt = Date.now();
+      const cronResponseDurationMs = dispatchCompletedAt - dispatchStartedAt;
+      await ScannerPersistence.recordTimingTelemetry({
+        dispatchStartedAt,
+        dispatchCompletedAt,
+        cronResponseDurationMs,
+        lockWaitMs: 0,
+        backgroundStartedAt: 0,
+        backgroundCompletedAt: 0,
+        scanDurationMs: 0,
+        timeBudgetExceeded: false,
+        providerRequestsStoppedByBudget: false,
+        lockAcquired: false,
+        instanceId: 'none',
+        status: 'SKIPPED_CAP_REACHED',
+        diagnosticClassification: 'OK',
+        diagnosticMessage: `Daily signal cap reached (${currentDailyCount}/${dailyCap})`,
+        timestamp: Date.now(),
+      });
+      return {
+        success: true,
+        status: 'SKIPPED_CAP_REACHED',
+        message: `REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving risk limits.`,
+        dispatchStartedAt,
+        dispatchCompletedAt,
+        cronResponseDurationMs,
+        lockWaitMs: 0,
+        timestamp: Date.now(),
+        lastScanTime: capState.lastAutomatedScan || capState.lastScanTime || 0,
+        nextScanTime: 0,
+        capState,
+      };
+    }
+
+    // 3. Check and acquire distributed lock
+    const instanceId = Math.random().toString(36).substring(2, 9);
+    const lockResult = await ScannerPersistence.tryAcquireLock(instanceId, 60000);
+    const lockWaitMs = lockResult.lockWaitMs || 0;
+
+    if (!lockResult.acquired) {
+      logger.warn(`[Hourly Scanner] Dispatch rejected - lock held: ${lockResult.reason || 'Scan already running'}`);
+      const dispatchCompletedAt = Date.now();
+      const cronResponseDurationMs = dispatchCompletedAt - dispatchStartedAt;
+      await ScannerPersistence.recordTimingTelemetry({
+        dispatchStartedAt,
+        dispatchCompletedAt,
+        cronResponseDurationMs,
+        lockWaitMs,
+        backgroundStartedAt: 0,
+        backgroundCompletedAt: 0,
+        scanDurationMs: 0,
+        timeBudgetExceeded: false,
+        providerRequestsStoppedByBudget: false,
+        lockAcquired: false,
+        instanceId,
+        status: 'SKIPPED_SCAN_ALREADY_RUNNING',
+        diagnosticClassification: 'LOCK_CONTENTION',
+        diagnosticMessage: lockResult.reason || 'Scan lock currently held',
+        timestamp: Date.now(),
+      });
+      return {
+        success: false,
+        status: 'SKIPPED_SCAN_ALREADY_RUNNING',
+        message: `REJECTED: SCAN_ALREADY_RUNNING. Another scan cycle is currently in progress (${lockResult.reason || 'Locked'}).`,
+        dispatchStartedAt,
+        dispatchCompletedAt,
+        cronResponseDurationMs,
+        lockWaitMs,
+        timestamp: Date.now(),
+        lastScanTime: capState.lastScanTime,
+        nextScanTime: 0,
+        capState,
+      };
+    }
+
+    const dispatchCompletedAt = Date.now();
+    const cronResponseDurationMs = dispatchCompletedAt - dispatchStartedAt;
+
+    // 4. Launch background execution detached from HTTP request lifecycle
+    const backgroundStartMs = Date.now();
+    this.executeBackgroundScan(instanceId, isExternal, {
+      scanStartedAt: backgroundStartMs,
+      operationalBudgetMs: 18000,
+      hardDeadlineMs: 20000,
+      dispatchStartedAt,
+      dispatchCompletedAt,
+      cronResponseDurationMs,
+      lockWaitMs,
+    }).catch((err) => {
+      logger.error('[Hourly Scanner] Background scan uncaught exception:', { error: String(err) });
+    });
+
+    logger.info(`[Hourly Scanner] DISPATCH_COMPLETED | duration: ${cronResponseDurationMs}ms | instanceId: ${instanceId}`);
+
+    return {
+      success: true,
+      status: 'DISPATCHED',
+      message: 'Automated scan successfully dispatched in background.',
+      dispatchStartedAt,
+      dispatchCompletedAt,
+      cronResponseDurationMs,
+      lockWaitMs,
+      instanceId,
+      timestamp: Date.now(),
+      lastScanTime: capState.lastAutomatedScan || capState.lastScanTime || 0,
+      nextScanTime: 0,
+      capState,
+    };
+  }
+
+  /**
+   * GATE 2: Background scan executor detached from the HTTP response.
+   * Runs the intelligent scan with an 18-second operational budget and 20-second absolute deadline.
+   */
+  async executeBackgroundScan(
+    instanceId: string,
+    isExternal: boolean,
+    options: {
+      scanStartedAt: number;
+      operationalBudgetMs: number;
+      hardDeadlineMs: number;
+      dispatchStartedAt: number;
+      dispatchCompletedAt: number;
+      cronResponseDurationMs: number;
+      lockWaitMs: number;
+    }
+  ): Promise<ManualScanResult> {
+    const backgroundStartedAt = Date.now();
+    logger.info(`[Hourly Scanner] BACKGROUND_SCAN_START | instanceId: ${instanceId} | operationalBudget: ${options.operationalBudgetMs}ms | hardDeadline: ${options.hardDeadlineMs}ms`);
+
+    let scanResult: ManualScanResult;
+    try {
+      scanResult = await this.executeIntelligentScan(
+        isExternal,
+        {
+          scanStartedAt: backgroundStartedAt,
+          globalScanBudgetMs: options.operationalBudgetMs,
+        },
+        instanceId
+      );
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.error(`[Hourly Scanner] BACKGROUND_SCAN_FAILED | error: ${errMsg}`);
+      const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
+      scanResult = {
+        success: false,
+        status: 'ERROR',
+        message: `REJECTED: SCAN_ERROR. Background scan execution error: ${errMsg}`,
+        timestamp: Date.now(),
+        lastScanTime: capState.lastAutomatedScan || capState.lastScanTime || 0,
+        candidatesEvaluated: 0,
+        acceptedSignalsCount: 0,
+        acceptedSignals: [],
+        signalsFound: 0,
+        qualifiedSetups: [],
+        rejectedCount: 0,
+        rejectionReasons: [`REJECTED: SCAN_ERROR. ${errMsg}`],
+        capState,
+      };
+    }
+
+    const backgroundCompletedAt = Date.now();
+    const scanDurationMs = backgroundCompletedAt - backgroundStartedAt;
+
+    // Diagnostic classification
+    let diagnosticClassification: 'OK' | 'CRON_HTTP_SLOW' | 'BACKGROUND_SCAN_SLOW' | 'LOCK_CONTENTION' | 'SERVERLESS_COLD_START' | 'PROVIDER_API_DELAY' = 'OK';
+    let diagnosticMessage = 'Normal background scan execution';
+
+    if (options.cronResponseDurationMs > 2000) {
+      diagnosticClassification = 'CRON_HTTP_SLOW';
+      diagnosticMessage = `Cron HTTP response latency high (${options.cronResponseDurationMs}ms > 2000ms)`;
+    } else if (scanDurationMs > options.hardDeadlineMs) {
+      diagnosticClassification = 'BACKGROUND_SCAN_SLOW';
+      diagnosticMessage = `Background scan duration exceeded hard deadline (${scanDurationMs}ms > ${options.hardDeadlineMs}ms)`;
+    } else if (options.lockWaitMs > 1000) {
+      diagnosticClassification = 'LOCK_CONTENTION';
+      diagnosticMessage = `Lock contention detected (lock wait: ${options.lockWaitMs}ms)`;
+    } else if (scanResult.timeBudgetExceeded || scanResult.providerRequestsStoppedByBudget) {
+      diagnosticClassification = 'PROVIDER_API_DELAY';
+      diagnosticMessage = 'Scan operational budget reached; provider requests stopped';
+    }
+
+    await ScannerPersistence.recordTimingTelemetry({
+      dispatchStartedAt: options.dispatchStartedAt,
+      dispatchCompletedAt: options.dispatchCompletedAt,
+      cronResponseDurationMs: options.cronResponseDurationMs,
+      lockWaitMs: options.lockWaitMs,
+      backgroundStartedAt,
+      backgroundCompletedAt,
+      scanDurationMs,
+      timeBudgetExceeded: scanResult.timeBudgetExceeded ?? false,
+      providerRequestsStoppedByBudget: scanResult.providerRequestsStoppedByBudget ?? false,
+      lockAcquired: true,
+      instanceId,
+      status: scanResult.status,
+      diagnosticClassification,
+      diagnosticMessage,
+      timestamp: Date.now(),
+    });
+
+    logger.info(`[Hourly Scanner] BACKGROUND_SCAN_COMPLETED | duration: ${scanDurationMs}ms | classification: ${diagnosticClassification} | signals: ${scanResult.acceptedSignalsCount}`);
+
+    return scanResult;
+  }
+
+  /**
+   * Backwards compatible automated scan trigger.
+   * If sync=true, runs synchronously; if sync=false (default), invokes non-blocking dispatch.
+   */
+  async triggerAutomatedScan(isExternal = true, scanStartTime?: number, sync = false): Promise<ManualScanResult | DispatchResult> {
+    if (sync) {
+      const now = Date.now();
+      const configuredTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      logger.info(`[Hourly Scanner] CRON_TRIGGER_SYNC_EXECUTING | Date.now(): ${now} | ISO UTC: ${new Date(now).toISOString()} | Runtime TZ: ${configuredTz}`);
+      const { marketCache } = await import('../market/CacheStore.js');
+      marketCache.clearExpired();
+      marketCache.clearTickers();
+      return await this.executeIntelligentScan(isExternal, scanStartTime ? { scanStartedAt: scanStartTime, globalScanBudgetMs: 18000 } : { globalScanBudgetMs: 18000 });
+    }
+    return await this.dispatchAutomatedScan(isExternal, scanStartTime ?? Date.now());
   }
 
   /**
@@ -168,11 +455,12 @@ export class HourlyScannerService {
    */
   private async executeIntelligentScan(
     isExternal = false,
-    options?: { scanStartedAt?: number; globalScanBudgetMs?: number }
+    options?: { scanStartedAt?: number; globalScanBudgetMs?: number },
+    preAcquiredInstanceId?: string
   ): Promise<ManualScanResult> {
     const scanStartTime = options?.scanStartedAt ?? Date.now();
     const globalScanStartMs = scanStartTime;
-    const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 24000;
+    const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 18000;
     const globalScanDeadlineMs = globalScanStartMs + GLOBAL_SCAN_BUDGET_MS;
     logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime} | deadline: ${globalScanDeadlineMs}`);
 
@@ -196,33 +484,36 @@ export class HourlyScannerService {
       };
     }
 
-    const instanceId = Math.random().toString(36).substring(2, 9);
-    const lockResult = await ScannerPersistence.tryAcquireLock(instanceId);
+    const instanceId = preAcquiredInstanceId || Math.random().toString(36).substring(2, 9);
+    if (!preAcquiredInstanceId) {
+      const lockResult = await ScannerPersistence.tryAcquireLock(instanceId, 60000);
 
-    if (!lockResult.acquired) {
-      const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
-      logger.warn(`[Hourly Scanner] Concurrency lock check: ${lockResult.reason || 'Scan already running'}`);
-      return {
-        success: false,
-        status: 'SCAN_ALREADY_RUNNING',
-        message: 'REJECTED: SCAN_ALREADY_RUNNING. Another scan cycle is currently in progress.',
-        timestamp: Date.now(),
-        lastScanTime: capState.lastScanTime,
-        candidatesEvaluated: 0,
-        acceptedSignalsCount: 0,
-        acceptedSignals: [],
-        signalsFound: 0,
-        qualifiedSetups: [],
-        rejectedCount: 0,
-        rejectionReasons: ['REJECTED: SCAN_ALREADY_RUNNING. Concurrent scan execution prevented.'],
-        capState,
-      };
+      if (!lockResult.acquired) {
+        const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
+        logger.warn(`[Hourly Scanner] Concurrency lock check: ${lockResult.reason || 'Scan already running'}`);
+        return {
+          success: false,
+          status: 'SCAN_ALREADY_RUNNING',
+          message: 'REJECTED: SCAN_ALREADY_RUNNING. Another scan cycle is currently in progress.',
+          timestamp: Date.now(),
+          lastScanTime: capState.lastScanTime,
+          candidatesEvaluated: 0,
+          acceptedSignalsCount: 0,
+          acceptedSignals: [],
+          signalsFound: 0,
+          qualifiedSetups: [],
+          rejectedCount: 0,
+          rejectionReasons: ['REJECTED: SCAN_ALREADY_RUNNING. Concurrent scan execution prevented.'],
+          capState,
+        };
+      }
     }
 
     this.isScanning = true;
 
     logger.info('================================================================');
     logger.info('[Hourly Intelligent Scanner] Initiating Multi-Asset Scan Cycle...');
+    logger.info('================================================================');
     logger.info('================================================================');
 
     try {

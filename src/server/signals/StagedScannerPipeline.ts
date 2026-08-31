@@ -1,4 +1,4 @@
-import { TradingSignal, SignalGenerationResponse, NormalizedCandle, NormalizedTicker, SignalDirection } from '../../types/index.js';
+import { TradingSignal, SignalGenerationResponse, NormalizedCandle, SignalDirection } from '../../types/index.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
 import { quotaManager } from '../market/QuotaManager.js';
 import { MarketSessionManager } from '../market/MarketSessionManager.js';
@@ -10,12 +10,12 @@ import { Gate1MarketRegime } from './Gate1MarketRegime.js';
 import { Gate2MTFConfluence } from './Gate2MTFConfluence.js';
 import { Gate3MarketStructure } from './Gate3MarketStructure.js';
 import { Gate3PreliminaryScreen, Gate3PreliminaryScreenResult } from './Gate3PreliminaryScreen.js';
-import { Gate4RequestBudget, Gate4BudgetEvaluation } from './Gate4RequestBudget.js';
-import { Gate5DeepCandidateSelection, Gate5CandidateInput, Gate5SelectionResult, Gate5RankedCandidate } from './Gate5DeepCandidateSelection.js';
-import { Gate6ProgressiveMTF, Gate6CandidateEvaluation, Gate6ProgressiveAnalysisResult } from './Gate6ProgressiveMTF.js';
-import { Gate7FinalTradeValidation, Gate7ValidationResult } from './Gate7FinalTradeValidation.js';
-import { Gate8TradeabilityThreshold, Gate8EvaluationResult, Gate8EvaluationInput } from './Gate8TradeabilityThreshold.js';
-import { Gate9FinalSignalCap, Gate9CapSelectionResult } from './Gate9FinalSignalCap.js';
+import { Gate4RequestBudget } from './Gate4RequestBudget.js';
+import { Gate5DeepCandidateSelection, Gate5CandidateInput } from './Gate5DeepCandidateSelection.js';
+import { Gate6ProgressiveMTF } from './Gate6ProgressiveMTF.js';
+import { Gate7FinalTradeValidation } from './Gate7FinalTradeValidation.js';
+import { Gate8TradeabilityThreshold } from './Gate8TradeabilityThreshold.js';
+import { Gate9FinalSignalCap } from './Gate9FinalSignalCap.js';
 import { Gate10ScannerTelemetry, Gate10ScanTelemetryData, Gate10CandidateScoreRecord } from './Gate10ScannerTelemetry.js';
 import { marketCache } from '../market/CacheStore.js';
 import { Gate4MomentumVolatility } from './Gate4MomentumVolatility.js';
@@ -33,8 +33,8 @@ import { Gate17CorrelationExposure } from './Gate17CorrelationExposure.js';
 import { Gate18RegimeStrategySelection } from './Gate18RegimeStrategySelection.js';
 import { Gate20ProbabilityCalibration } from './Gate20ProbabilityCalibration.js';
 import { Gate21WalkForwardValidation } from './Gate21WalkForwardValidation.js';
-import { Gate32AdaptiveCandidateSelection, Stage2CandidateInput } from './Gate32AdaptiveCandidateSelection.js';
-import { TargetQualityEvaluator, calculateTargetRr } from './TargetQualityEvaluator.js';
+import { Gate32AdaptiveCandidateSelection } from './Gate32AdaptiveCandidateSelection.js';
+import { TargetQualityEvaluator } from './TargetQualityEvaluator.js';
 import { RiskRewardCalculator } from './RiskRewardCalculator.js';
 import { Gate22MonteCarloSimulation } from './Gate22MonteCarloSimulation.js';
 import { NvidiaAIService, CandidateAnalysisPayload } from './NvidiaAIService.js';
@@ -82,14 +82,15 @@ export async function runStagedPipeline(
   symbol: string,
   category?: string,
   persistAndActivate: boolean = true,
-  options?: { scanStartedAt?: number; globalScanBudgetMs?: number }
+  options?: { scanStartedAt?: number; globalScanBudgetMs?: number; hardDeadlineMs?: number }
 ): Promise<SignalGenerationResponse> {
   const cleanSymbol = symbol.trim().toUpperCase();
   const now = Date.now();
   const globalScanStartMs = options?.scanStartedAt ?? Date.now();
-  const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 24000;
+  const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 18000;
+  const GLOBAL_HARD_DEADLINE_MS = options?.hardDeadlineMs ?? 20000;
   const globalScanDeadlineMs = globalScanStartMs + GLOBAL_SCAN_BUDGET_MS;
-  const scanStartTime = globalScanStartMs;
+  const globalHardDeadlineMs = globalScanStartMs + GLOBAL_HARD_DEADLINE_MS;
   let timeBudgetExceeded = false;
   let providerRequestsStoppedByBudget = false;
   let gate6ElapsedMs = 0;
@@ -105,6 +106,7 @@ export async function runStagedPipeline(
   profiler.startScan(globalScanStartMs);
   profiler.setGlobalDeadline(globalScanDeadlineMs);
   setActiveProfiler(profiler);
+  logger.info(`[StagedPipeline] Execution budgets initialized | operationalDeadline: ${globalScanDeadlineMs} | hardDeadline: ${globalHardDeadlineMs}`);
 
   // 1. Check duplicate / active signal cooldown
   const existingSignal = engine.activeSignals.get(cleanSymbol);
@@ -363,7 +365,7 @@ export async function runStagedPipeline(
 
       if (rej.stoppedAtLayer === 'BEFORE_MTF' || lowerReason.includes('final_score_unreachable')) {
         failedGates.push(StandardFailedGate.FINAL_SCORE_UNREACHABLE);
-        failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+        failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_70);
       } else {
         failedGates.push(StandardFailedGate.MTF_ALIGNMENT);
         if (lowerReason.includes('atr') || lowerReason.includes('volatility')) {
@@ -374,7 +376,7 @@ export async function runStagedPipeline(
         }
         const sigThreshold = serverConfig.getConfig().thresholds.signalThreshold || 70;
         if (rej.compositeMtfScore < sigThreshold || rej.finalScore < sigThreshold) {
-          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_70);
         }
       }
 
@@ -404,7 +406,7 @@ export async function runStagedPipeline(
         assetClass: SymbolNormalizer.getAssetClassification(rej.asset),
         initialScore: rej.compositeMtfScore || 0,
         watchingThreshold: 68,
-        qualifiedCandidateThreshold: 72,
+        qualifiedCandidateThreshold: serverConfig.getConfig().thresholds.qualifiedCandidateThreshold || 75,
         signalThreshold: serverConfig.getConfig().thresholds.signalThreshold,
         strategyAgreementRatio: 0,
         timeframeAlignmentRatio: 0,
@@ -833,7 +835,7 @@ export async function runStagedPipeline(
         const reason = `Estimated win rate (${winRate}% <= ${effectiveMinWinProb}% threshold)`;
         const failedGates: StandardFailedGate[] = [StandardFailedGate.WIN_RATE_BELOW_THRESHOLD];
         if ((scoring.score || 0) < (thresholds.signalThreshold || 70)) {
-          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_70);
         }
         if (finalRR < thresholds.minimumRR) {
           failedGates.push(StandardFailedGate.RR);
@@ -864,7 +866,7 @@ export async function runStagedPipeline(
         const reason = `Non-positive expectancy (${expectancy}R <= 0)`;
         const failedGates: StandardFailedGate[] = [StandardFailedGate.NEGATIVE_EXPECTANCY];
         if ((scoring.score || 0) < (thresholds.signalThreshold || 70)) {
-          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_70);
         }
         if (finalRR < thresholds.minimumRR) {
           failedGates.push(StandardFailedGate.RR);
@@ -895,7 +897,7 @@ export async function runStagedPipeline(
 
       // -----------------------------------------------------------------
       // STAGE 4: Gate 8 — Final Tradeability Threshold (10-Factor Rubric)
-      // Configured tradeability threshold: >= thresholds.signalThreshold (72).
+      // Configured tradeability threshold: >= thresholds.signalThreshold (70).
       // Factors: Trend 20, MTF 15, Momentum 10, Structure 15,
       // Volume 10, Volatility/ATR 10, Entry 5, R:R 5, Execution 5, Direction 5 = 100.
       // -----------------------------------------------------------------
@@ -929,7 +931,7 @@ export async function runStagedPipeline(
       if (!gate8Eval.isTradeable) {
         const failedGates: StandardFailedGate[] = [];
         if (gate8Eval.finalScore < (thresholds.signalThreshold || 70) || gate8Eval.finalScore < 70) {
-          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_70);
         }
         const factors: any = gate8Eval.factors || {};
         if (factors.trendAlignment !== undefined && factors.trendAlignment < 14) failedGates.push(StandardFailedGate.TREND);
@@ -943,7 +945,7 @@ export async function runStagedPipeline(
 
         if (failedGates.length === 0) {
           if (gate8Eval.finalScore < (thresholds.signalThreshold || 70)) {
-            failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+            failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_70);
           } else {
             failedGates.push(StandardFailedGate.DATA_INTEGRITY);
           }
@@ -1363,15 +1365,15 @@ export async function runStagedPipeline(
 
     profiler.endStage('Stage 3: Final Trade Validation', finalSignals.length);
 
-    const candidates72PlusCount = allCandidateScores.filter((s) => s.score >= (thresholds.signalThreshold || 70)).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= (thresholds.signalThreshold || 70) || r.compositeMtfScore >= (thresholds.signalThreshold || 70))).length;
-    const rejected72PlusCount = allCandidateScores.filter((s) => s.score >= (thresholds.signalThreshold || 70) && !s.passed).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= (thresholds.signalThreshold || 70) || r.compositeMtfScore >= (thresholds.signalThreshold || 70))).length;
+    const candidatesScoreThresholdCount = allCandidateScores.filter((s) => s.score >= (thresholds.signalThreshold || 70)).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= (thresholds.signalThreshold || 70) || r.compositeMtfScore >= (thresholds.signalThreshold || 70))).length;
+    const rejectedScoreThresholdCount = allCandidateScores.filter((s) => s.score >= (thresholds.signalThreshold || 70) && !s.passed).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= (thresholds.signalThreshold || 70) || r.compositeMtfScore >= (thresholds.signalThreshold || 70))).length;
 
     profiler.setFunnelMetrics({
       preliminaryCandidates: stage1OutputCount,
       deepCandidates: gate5OutputCount,
       MTFCandidates: deepMtfOutputCount,
-      candidates72Plus: candidates72PlusCount,
-      rejected72PlusCandidates: rejected72PlusCount,
+      candidates72Plus: candidatesScoreThresholdCount,
+      rejected72PlusCandidates: rejectedScoreThresholdCount,
       signalsGenerated: finalSignals.length,
       signalsAccepted: finalSignals.length,
     });

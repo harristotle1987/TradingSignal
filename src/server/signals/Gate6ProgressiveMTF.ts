@@ -1020,7 +1020,8 @@ export class Gate6ProgressiveMTF {
       const reasonLower = (rej.rejectionReason || '').toLowerCase();
       const isBefore = rej.stoppedAtLayer === 'BEFORE_MTF' || reasonLower.includes('final_score_unreachable') || reasonLower.includes('halting mtf requests');
       const isMTF = !isBefore && (reasonLower.includes('layer 1') || reasonLower.includes('layer 2') || reasonLower.includes('mtf'));
-      const isScore = rej.finalScore < 72 || rej.compositeMtfScore < 72 || rej.maximumPossibleScoreAfterRemainingAnalysis < 72 || reasonLower.includes('score');
+      const minScore = serverConfig.getConfig().thresholds.minimumScore;
+      const isScore = rej.finalScore < minScore || rej.compositeMtfScore < minScore || rej.maximumPossibleScoreAfterRemainingAnalysis < minScore || reasonLower.includes('score');
       const isRR = reasonLower.includes('rr') || reasonLower.includes('risk/reward');
       const isStruct = reasonLower.includes('structure') || reasonLower.includes('support') || reasonLower.includes('resistance');
 

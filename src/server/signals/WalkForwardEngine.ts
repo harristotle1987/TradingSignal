@@ -20,7 +20,7 @@
 
 import { NormalizedCandle, SignalDirection } from '../../types/index.js';
 import { StrategyEngine } from './StrategyEngine.js';
-import { ScoringEngine, ScoringResult } from './ScoringEngine.js';
+import { ScoringEngine } from './ScoringEngine.js';
 import { SignalValidator } from './SignalValidator.js';
 import { StrategyPerformanceTracker, MetricSummary, PERFORMANCE_LEGAL_DISCLAIMER } from './StrategyPerformanceTracker.js';
 import { logger } from '../logger.js';

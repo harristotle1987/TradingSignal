@@ -5,14 +5,15 @@ import { ASSET_CLASS_GUARDRAILS } from './AtrTpGenerator.js';
 export interface RiskRewardResult {
   riskDistance: number;
   rewardDistance: number;
-  grossRR: number;          // TP2 R:R ratio (canonical benchmark)
-  effectiveGrossRR: number; // Effective Gross R:R evaluated for gate (either TP2 or TP3 if condition 2 is met)
+  grossRR: number;          // Canonical primary gross R:R (= effectiveGrossRR = primaryRR)
+  effectiveGrossRR: number; // Effective Gross R:R evaluated for gate (TP2 or TP3)
   tp1RR: number;
   tp2RR: number;
   tp3RR: number;
-  primaryRR: number;
+  primaryRR: number;        // Primary qualifying R:R
+  passedGrossRR: boolean;   // True if effectiveGrossRR >= minRR and isOrdered
+  passedViaTp3: boolean;    // True when TP3 R:R >= minRR satisfied the gate
   isValid: boolean;
-  passedViaTp3: boolean;    // True when condition 2 (TP3 R:R >= minRR) satisfied the gate
   reason?: string;
 }
 
@@ -121,6 +122,7 @@ export class RiskRewardCalculator {
       tp2RR: 0,
       tp3RR: 0,
       primaryRR: 0,
+      passedGrossRR: false,
       isValid: false,
       passedViaTp3: false,
     };
@@ -167,8 +169,6 @@ export class RiskRewardCalculator {
       tp3RR = Number((Math.abs(entryPrice - tp3) / riskDistance).toFixed(2));
     }
 
-    const grossRR = tp2RR;
-
     // Validate logical positioning and strict target ordering relative to direction
     const isOrdered = direction === 'BUY'
       ? (stopLoss < entryPrice && tp1 > entryPrice && tp2 > tp1 && tp3 > tp2)
@@ -178,12 +178,13 @@ export class RiskRewardCalculator {
       return {
         riskDistance: Number(riskDistance.toFixed(4)),
         rewardDistance: Number(Math.abs(tp2 - entryPrice).toFixed(4)),
-        grossRR,
-        effectiveGrossRR: grossRR,
+        grossRR: tp2RR,
+        effectiveGrossRR: tp2RR,
         tp1RR,
         tp2RR,
         tp3RR,
-        primaryRR: grossRR,
+        primaryRR: tp2RR,
+        passedGrossRR: false,
         isValid: false,
         passedViaTp3: false,
         reason: `Invalid SL/TP placement or ordering relative to entry for direction ${direction}: SL=${stopLoss}, TP1=${tp1}, TP2=${tp2}, TP3=${tp3}`,
@@ -211,18 +212,69 @@ export class RiskRewardCalculator {
       evaluatedRewardDistance = Math.abs(tp2 - entryPrice);
     }
 
+    const passedGrossRR = isOrdered && effectiveGrossRR >= minRR;
+
     return {
       riskDistance: Number(riskDistance.toFixed(4)),
       rewardDistance: Number(evaluatedRewardDistance.toFixed(4)),
-      grossRR,
+      grossRR: effectiveGrossRR,
       effectiveGrossRR,
       tp1RR,
       tp2RR,
       tp3RR,
       primaryRR: effectiveGrossRR,
+      passedGrossRR,
       isValid: true,
       passedViaTp3,
     };
+  }
+
+  /**
+   * Automated consistency check: verifies that published R:R values,
+   * score, and rejection reasons do not contradict the canonical calculation result.
+   */
+  public static verifyConsistency(params: {
+    rrResult: RiskRewardResult;
+    score: number;
+    minimumScore: number;
+    failedGates: string[];
+    rejectionReason?: string;
+  }): { isConsistent: boolean; violationReason?: string } {
+    const { rrResult, score, minimumScore, failedGates, rejectionReason } = params;
+
+    // 1. R:R Gross Consistency Check: If gross R:R passed, GROSS_RR_BELOW_THRESHOLD must NOT be reported.
+    if (rrResult.passedGrossRR) {
+      if (failedGates.some(g => g === 'GROSS_RR_BELOW_THRESHOLD' || g === 'RR')) {
+        return {
+          isConsistent: false,
+          violationReason: `Contradiction: Canonical calculator passed gross R:R (${rrResult.primaryRR}:1) via ${rrResult.passedViaTp3 ? 'TP3' : 'TP2'}, but failedGates includes GROSS_RR_BELOW_THRESHOLD`,
+        };
+      }
+      if (rejectionReason && rejectionReason.includes('GROSS_RR_BELOW_THRESHOLD')) {
+        return {
+          isConsistent: false,
+          violationReason: `Contradiction: Canonical calculator passed gross R:R (${rrResult.primaryRR}:1), but rejectionReason was set to GROSS_RR_BELOW_THRESHOLD`,
+        };
+      }
+    }
+
+    // 2. Score Threshold Consistency Check: If score >= minimumScore, FINAL_SCORE_BELOW_70/72 must NOT be reported.
+    if (score >= minimumScore) {
+      if (failedGates.some(g => g.includes('FINAL_SCORE_BELOW_'))) {
+        return {
+          isConsistent: false,
+          violationReason: `Contradiction: Score ${score} >= minimumScore (${minimumScore}), but failedGates includes score threshold rejection`,
+        };
+      }
+      if (rejectionReason && rejectionReason.includes('FINAL_SCORE_BELOW_')) {
+        return {
+          isConsistent: false,
+          violationReason: `Contradiction: Score ${score} >= minimumScore (${minimumScore}), but rejectionReason was score threshold rejection`,
+        };
+      }
+    }
+
+    return { isConsistent: true };
   }
 }
 

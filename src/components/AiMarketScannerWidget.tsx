@@ -238,7 +238,7 @@ export function AiMarketScannerWidget({
 
                       <div className="space-y-2.5">
                         {scanResult.acceptedSignals.map((sig: TradingSignal, idx: number) => {
-                          const scoreVal = sig.score || sig.confidenceScore || 72;
+                          const scoreVal = sig.score || sig.confidenceScore || 70;
                           const rrVal = (sig as any).netRiskRewardRatio ?? sig.riskRewardRatio ?? 2.0;
                           
                           let whyText = 'Strong MTF trend alignment and momentum confluence';

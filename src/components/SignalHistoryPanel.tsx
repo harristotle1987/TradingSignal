@@ -670,7 +670,7 @@ export function SignalHistoryPanel({
                     )}
 
                     <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                      Target Quality: <strong className="text-emerald-400 font-bold">{item.targetQualityScore !== undefined ? `${item.targetQualityScore}/100` : `${item.score || 72}/100`}</strong>
+                      Target Quality: <strong className="text-emerald-400 font-bold">{item.targetQualityScore !== undefined ? `${item.targetQualityScore}/100` : `${item.score || 70}/100`}</strong>
                     </span>
 
                     {(item.estimatedWinRate !== undefined || item.modelEstimatedWinRate !== undefined) && (
