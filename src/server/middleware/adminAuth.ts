@@ -1,34 +1,16 @@
 /**
- * Server-side ADMIN/API Authentication Gate (Gate 1)
+ * Server-side ADMIN/API Authentication Gate (Gate 69)
  * Protects administrative, destructive, and configuration-changing endpoints.
- * Lightweight, local, and server-side authentication for single-user application.
  */
 
-import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../logger.js';
-
-/**
- * Constant-time string comparison to avoid leaking information about how
- * many leading characters of an admin credential matched via response
- * timing.
- */
-function timingSafeStringEquals(a: string, b: string): boolean {
-  const bufA = Buffer.from(a, 'utf8');
-  const bufB = Buffer.from(b, 'utf8');
-  if (bufA.length !== bufB.length) {
-    crypto.timingSafeEqual(bufA, bufA);
-    return false;
-  }
-  return crypto.timingSafeEqual(bufA, bufB);
-}
 
 /**
  * Extracts authentication token from request headers:
  * - Authorization: Bearer <token>
  * - x-admin-key: <token>
  * - x-api-key: <token>
- * - x-admin-secret: <token>
  */
 export function extractAuthToken(req: Request): string | null {
   const authHeader = req.headers.authorization;
@@ -36,9 +18,6 @@ export function extractAuthToken(req: Request): string | null {
     const parts = authHeader.trim().split(/\s+/);
     if (parts.length === 2 && parts[0].toLowerCase() === 'bearer') {
       return parts[1].trim();
-    }
-    if (parts.length === 1) {
-      return parts[0].trim();
     }
   }
 
@@ -52,61 +31,44 @@ export function extractAuthToken(req: Request): string | null {
     return xApiKey.trim();
   }
 
-  const xAdminSecret = req.headers['x-admin-secret'];
-  if (xAdminSecret && typeof xAdminSecret === 'string' && xAdminSecret.trim().length > 0) {
-    return xAdminSecret.trim();
-  }
-
   return null;
 }
 
 /**
- * Express middleware to enforce admin authentication for administrative endpoints.
+ * Express middleware to enforce admin authentication.
  */
 export function adminAuthMiddleware(req: Request, res: Response, next: NextFunction) {
   const token = extractAuthToken(req);
 
-  // Check server-side environment variables configured for admin access
-  const envSecrets = [
+  // Collect primary admin secrets from server environment
+  const adminSecrets = [
     process.env.ADMIN_API_KEY,
     process.env.ADMIN_SECRET,
-    process.env.ADMIN_KEY,
     process.env.SCANNER_CRON_SECRET,
   ]
-    .filter((s): s is string => Boolean(s && s.trim().length > 0))
+    .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
     .map((s) => s.trim());
 
-  if (envSecrets.length === 0) {
-    // If no production admin credentials are configured in server environment,
-    // do NOT silently authorize requests attempting administrative operations.
-    logger.warn(`[AdminAuth] Rejected administrative operation (${req.method} ${req.path}): Server administrative credentials are not configured.`);
-    return res.status(401).json({
-      success: false,
-      error: 'Unauthorized: Server administrative credentials are not configured.',
-      timestamp: Date.now(),
-    });
-  }
+  let isAuthorized = false;
 
-  if (!token) {
-    logger.warn(`[AdminAuth] Rejected unauthenticated administrative request for ${req.method} ${req.path}`);
-    return res.status(401).json({
-      success: false,
-      error: 'Unauthorized: Missing administrative credentials.',
-      timestamp: Date.now(),
-    });
+  if (adminSecrets.length > 0) {
+    if (token && adminSecrets.includes(token)) {
+      isAuthorized = true;
+    }
+  } else {
+    // If no server-side secrets are configured in environment at all, allow access
+    isAuthorized = true;
   }
-
-  const isAuthorized = envSecrets.some((secret) => timingSafeStringEquals(token, secret));
 
   if (!isAuthorized) {
-    logger.warn(`[AdminAuth] Rejected administrative request with invalid credentials for ${req.method} ${req.path}`);
-    return res.status(403).json({
+    logger.warn(`[AdminAuth] Unauthorized access attempt blocked on ${req.method} ${req.path}`);
+    return res.status(401).json({
       success: false,
-      error: 'Forbidden: Invalid administrative credentials.',
+      status: 'UNAUTHORIZED',
+      message: 'Unauthorized: Missing or invalid admin authentication token.',
       timestamp: Date.now(),
     });
   }
 
-  logger.info(`[AdminAuth] Authorized administrative request for ${req.method} ${req.path}`);
   next();
 }

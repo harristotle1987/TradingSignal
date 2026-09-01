@@ -8,7 +8,6 @@ import { marketDataManager } from '../market/MarketDataManager.js';
 import { logger } from '../logger.js';
 import { MarketSessionManager } from '../market/MarketSessionManager.js';
 import { requestRegistry } from '../market/CacheStore.js';
-import { adminAuthMiddleware } from '../middleware/adminAuth.js';
 
 const router = Router();
 
@@ -52,36 +51,28 @@ router.get('/market/twelvedata/status', async (_req: Request, res: Response) => 
 /**
  * GET /api/market/bitget/price?symbol=BTCUSDT
  */
-router.get('/market/bitget/price', async (req: Request, res: Response, next: any) => {
-  try {
-    const symbol = (req.query.symbol as string) || 'BTCUSDT';
-    const ticker = await marketDataManager.getPrice(symbol, 'bitget');
+router.get('/market/bitget/price', async (req: Request, res: Response) => {
+  const symbol = (req.query.symbol as string) || 'BTCUSDT';
+  const ticker = await marketDataManager.getPrice(symbol, 'bitget');
 
-    if (ticker.status === 'MARKET_DATA_UNAVAILABLE') {
-      res.status(503).json(ticker);
-    } else {
-      res.status(200).json(ticker);
-    }
-  } catch (err) {
-    next(err);
+  if (ticker.status === 'MARKET_DATA_UNAVAILABLE') {
+    res.status(503).json(ticker);
+  } else {
+    res.status(200).json(ticker);
   }
 });
 
 /**
  * GET /api/market/finnhub/price?symbol=AAPL
  */
-router.get('/market/finnhub/price', async (req: Request, res: Response, next: any) => {
-  try {
-    const symbol = (req.query.symbol as string) || 'AAPL';
-    const ticker = await marketDataManager.getPrice(symbol, 'finnhub');
+router.get('/market/finnhub/price', async (req: Request, res: Response) => {
+  const symbol = (req.query.symbol as string) || 'AAPL';
+  const ticker = await marketDataManager.getPrice(symbol, 'finnhub');
 
-    if (ticker.status === 'MARKET_DATA_UNAVAILABLE') {
-      res.status(503).json(ticker);
-    } else {
-      res.status(200).json(ticker);
-    }
-  } catch (err) {
-    next(err);
+  if (ticker.status === 'MARKET_DATA_UNAVAILABLE') {
+    res.status(503).json(ticker);
+  } else {
+    res.status(200).json(ticker);
   }
 });
 
@@ -89,40 +80,32 @@ router.get('/market/finnhub/price', async (req: Request, res: Response, next: an
  * GET /api/market/twelvedata/price?symbol=EURUSD
  * Dedicated test endpoint for Twelve Data Forex
  */
-router.get('/market/twelvedata/price', async (req: Request, res: Response, next: any) => {
-  try {
-    const symbol = (req.query.symbol as string) || 'EURUSD';
-    const reasonParam = (req.query.reason as string) || 'USER_CLICK';
-    const reason = reasonParam === 'AUTOMATED_SCANNER' ? 'AUTOMATED_SCANNER' : 'USER_CLICK';
-    const ticker = await marketDataManager.getPrice(symbol, 'twelvedata', false, reason);
+router.get('/market/twelvedata/price', async (req: Request, res: Response) => {
+  const symbol = (req.query.symbol as string) || 'EURUSD';
+  const reasonParam = (req.query.reason as string) || 'USER_CLICK';
+  const reason = reasonParam === 'AUTOMATED_SCANNER' ? 'AUTOMATED_SCANNER' : 'USER_CLICK';
+  const ticker = await marketDataManager.getPrice(symbol, 'twelvedata', false, reason);
 
-    if (ticker.status === 'MARKET_DATA_UNAVAILABLE') {
-      res.status(503).json(ticker);
-    } else {
-      res.status(200).json(ticker);
-    }
-  } catch (err) {
-    next(err);
+  if (ticker.status === 'MARKET_DATA_UNAVAILABLE') {
+    res.status(503).json(ticker);
+  } else {
+    res.status(200).json(ticker);
   }
 });
 
 /**
  * GET /api/market/forex/price?symbol=EURUSD
  */
-router.get('/market/forex/price', async (req: Request, res: Response, next: any) => {
-  try {
-    const symbol = (req.query.symbol as string) || 'EURUSD';
-    const reasonParam = (req.query.reason as string) || 'USER_CLICK';
-    const reason = reasonParam === 'AUTOMATED_SCANNER' ? 'AUTOMATED_SCANNER' : 'USER_CLICK';
-    const ticker = await marketDataManager.getPrice(symbol, 'twelvedata', false, reason);
+router.get('/market/forex/price', async (req: Request, res: Response) => {
+  const symbol = (req.query.symbol as string) || 'EURUSD';
+  const reasonParam = (req.query.reason as string) || 'USER_CLICK';
+  const reason = reasonParam === 'AUTOMATED_SCANNER' ? 'AUTOMATED_SCANNER' : 'USER_CLICK';
+  const ticker = await marketDataManager.getPrice(symbol, 'twelvedata', false, reason);
 
-    if (ticker.status === 'MARKET_DATA_UNAVAILABLE') {
-      res.status(503).json(ticker);
-    } else {
-      res.status(200).json(ticker);
-    }
-  } catch (err) {
-    next(err);
+  if (ticker.status === 'MARKET_DATA_UNAVAILABLE') {
+    res.status(503).json(ticker);
+  } else {
+    res.status(200).json(ticker);
   }
 });
 
@@ -130,22 +113,18 @@ router.get('/market/forex/price', async (req: Request, res: Response, next: any)
  * GET /api/market/price?symbol=BTCUSDT&provider=bitget
  * Unified market price endpoint using MarketDataManager
  */
-router.get('/market/price', async (req: Request, res: Response, next: any) => {
-  try {
-    const symbol = (req.query.symbol as string) || 'BTCUSDT';
-    const provider = req.query.provider as string | undefined;
-    const reasonParam = (req.query.reason as string) || 'USER_CLICK';
-    const reason = reasonParam === 'AUTOMATED_SCANNER' ? 'AUTOMATED_SCANNER' : 'USER_CLICK';
+router.get('/market/price', async (req: Request, res: Response) => {
+  const symbol = (req.query.symbol as string) || 'BTCUSDT';
+  const provider = req.query.provider as string | undefined;
+  const reasonParam = (req.query.reason as string) || 'USER_CLICK';
+  const reason = reasonParam === 'AUTOMATED_SCANNER' ? 'AUTOMATED_SCANNER' : 'USER_CLICK';
 
-    const ticker = await marketDataManager.getPrice(symbol, provider, false, reason);
+  const ticker = await marketDataManager.getPrice(symbol, provider, false, reason);
 
-    if (ticker.status === 'MARKET_DATA_UNAVAILABLE') {
-      res.status(503).json(ticker);
-    } else {
-      res.status(200).json(ticker);
-    }
-  } catch (err) {
-    next(err);
+  if (ticker.status === 'MARKET_DATA_UNAVAILABLE') {
+    res.status(503).json(ticker);
+  } else {
+    res.status(200).json(ticker);
   }
 });
 
@@ -223,7 +202,7 @@ router.get('/market/session', (req: Request, res: Response) => {
  * POST /api/market/time
  * Allows setting a simulated mock timestamp for timezone/weekend/holiday lock testing.
  */
-router.post('/market/time', adminAuthMiddleware, (req: Request, res: Response) => {
+router.post('/market/time', (req: Request, res: Response) => {
   try {
     if (process.env.NODE_ENV === 'production') {
       return res.status(403).json({
@@ -275,7 +254,7 @@ router.get('/market/requests', (_req: Request, res: Response) => {
  * POST /api/market/requests/clear
  * Clears the external request registry logs.
  */
-router.post('/market/requests/clear', adminAuthMiddleware, (_req: Request, res: Response) => {
+router.post('/market/requests/clear', (_req: Request, res: Response) => {
   requestRegistry.clear();
   res.status(200).json({ success: true, message: 'External request audit logs cleared' });
 });

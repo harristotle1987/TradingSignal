@@ -90,20 +90,6 @@ export class NvidiaAIService {
       };
     }
 
-    const { getActiveProfiler } = await import('./ScanPerformanceProfiler.js');
-    const profiler = getActiveProfiler();
-    let timeoutMs = 8000;
-    if (profiler && profiler.globalDeadline > 0) {
-      const remainingMs = profiler.globalDeadline - Date.now();
-      if (remainingMs < timeoutMs + 500) {
-        return this.fallbackDeterministicRanking(
-          candidates,
-          `Insufficient scan budget remaining (${remainingMs}ms) for AI batch ranking`
-        );
-      }
-      timeoutMs = Math.min(8000, remainingMs - 500);
-    }
-
     const apiKey = serverConfig.getNvidiaApiKey();
     if (!apiKey || apiKey.trim().length === 0) {
       return this.fallbackDeterministicRanking(
@@ -114,7 +100,7 @@ export class NvidiaAIService {
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
 
       const candidatesFormatted = candidates.slice(0, 5).map((c) => ({
         symbol: c.symbol,
@@ -261,21 +247,6 @@ export class NvidiaAIService {
    */
   static async evaluate(analysis: ConfluenceAnalysisResult): Promise<NvidiaEvaluationResult> {
     const apiKey = serverConfig.getNvidiaApiKey();
-    const { getActiveProfiler } = await import('./ScanPerformanceProfiler.js');
-
-    const profiler = getActiveProfiler();
-    let timeoutMs = 6000;
-    if (profiler && profiler.globalDeadline > 0) {
-      const remainingMs = profiler.globalDeadline - Date.now();
-      if (remainingMs < timeoutMs + 500) {
-        return Gate33AiAssessmentPolicy.classifyResponse(
-          `Insufficient scan budget remaining (${remainingMs}ms). Algorithmic technical confluence validated.`,
-          analysis.confidenceScore,
-          false
-        );
-      }
-      timeoutMs = Math.min(6000, remainingMs - 500);
-    }
 
     if (!apiKey || apiKey.trim().length === 0) {
       const policyRes = Gate33AiAssessmentPolicy.classifyResponse(
@@ -292,7 +263,7 @@ export class NvidiaAIService {
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
 
       const tm = analysis.technicalMetrics;
       const metricsText = tm
@@ -364,25 +335,6 @@ export class NvidiaAIService {
     const apiKey = serverConfig.getNvidiaApiKey();
     const isConfigured = Boolean(apiKey && apiKey.trim().length > 0);
 
-    const { getActiveProfiler } = await import('./ScanPerformanceProfiler.js');
-    const profiler = getActiveProfiler();
-    let timeoutMs = 4000;
-    if (profiler && profiler.globalDeadline > 0) {
-      const remainingMs = profiler.globalDeadline - Date.now();
-      if (remainingMs < timeoutMs + 500) {
-        return {
-          provider: 'nvidia',
-          name: 'NVIDIA AI API',
-          configured: true,
-          status: 'DEGRADED',
-          latencyMs: 0,
-          lastChecked: new Date().toISOString(),
-          errorMessage: `Insufficient scan budget for health check (${remainingMs}ms)`,
-        };
-      }
-      timeoutMs = Math.min(4000, remainingMs - 500);
-    }
-
     if (!isConfigured) {
       return {
         provider: 'nvidia',
@@ -398,7 +350,7 @@ export class NvidiaAIService {
     const start = Date.now();
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
 
       const response = await fetch('https://integrate.api.nvidia.com/v1/models', {
         method: 'GET',

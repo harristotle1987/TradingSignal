@@ -61,7 +61,7 @@ export class TwelveDataAdapter implements IMarketDataProvider {
   readonly id = 'twelvedata';
   readonly name = 'Twelve Data (Forex)';
 
-  async fetchPrice(appSymbol: string, globalScanDeadlineMs?: number): Promise<NormalizedTicker> {
+  async fetchPrice(appSymbol: string): Promise<NormalizedTicker> {
     let providerSymbol = appSymbol;
     let assetType: 'CRYPTO' | 'STOCK' | 'FOREX' | 'INDEX' | 'UNKNOWN' = 'FOREX';
 
@@ -80,17 +80,7 @@ export class TwelveDataAdapter implements IMarketDataProvider {
       providerSymbol = mapping.providerSymbol; // e.g. "EUR/USD"
       assetType = mapping.assetType;
 
-      const configTimeout = serverConfig.getConfig().marketDataTimeoutMs;
-      let timeoutMs = configTimeout;
-      const safetyMargin = 100;
-      if (globalScanDeadlineMs) {
-        const remainingMs = globalScanDeadlineMs - Date.now();
-        if (remainingMs <= safetyMargin) {
-          throw new Error('TIMEOUT: Global scanner deadline reached before starting request');
-        }
-        timeoutMs = Math.min(configTimeout, remainingMs - safetyMargin);
-      }
-
+      const timeoutMs = serverConfig.getConfig().marketDataTimeoutMs;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -188,13 +178,11 @@ export class TwelveDataAdapter implements IMarketDataProvider {
 
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      const isAbort = (err instanceof Error && err.name === 'AbortError') || msg.toLowerCase().includes('aborted');
-      const finalMsg = isAbort ? `Twelve Data request timed out (${timeoutMs}ms)` : `Twelve Data connection failed: ${msg}`;
       return this.createErrorTicker(
         appSymbol,
         providerSymbol,
         assetType,
-        finalMsg
+        `Twelve Data connection failed: ${msg}`
       );
     }
   }
@@ -241,20 +229,9 @@ export class TwelveDataAdapter implements IMarketDataProvider {
     requestedTimeframe: string,
     interval: string,
     limit: number,
-    apiKey: string,
-    globalScanDeadlineMs?: number
+    apiKey: string
   ): Promise<NormalizedCandle[]> {
-    const configTimeout = serverConfig.getConfig().marketDataTimeoutMs;
-    let timeoutMs = configTimeout;
-    const safetyMargin = 100;
-    if (globalScanDeadlineMs) {
-      const remainingMs = globalScanDeadlineMs - Date.now();
-      if (remainingMs <= safetyMargin) {
-        throw new Error('TIMEOUT: Global scanner deadline reached before starting request');
-      }
-      timeoutMs = Math.min(configTimeout, remainingMs - safetyMargin);
-    }
-
+    const timeoutMs = serverConfig.getConfig().marketDataTimeoutMs;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -336,7 +313,7 @@ export class TwelveDataAdapter implements IMarketDataProvider {
     }
   }
 
-  async fetchCandles(appSymbol: string, timeframe = '1m', limit = 50, globalScanDeadlineMs?: number): Promise<NormalizedCandle[]> {
+  async fetchCandles(appSymbol: string, timeframe = '1m', limit = 50): Promise<NormalizedCandle[]> {
     const apiKey = process.env.TWELVE_DATA_API_KEY;
     if (!apiKey || apiKey.trim().length === 0) {
       throw new Error('TWELVE_DATA_API_KEY environment variable is required for candle fetching');
@@ -350,15 +327,12 @@ export class TwelveDataAdapter implements IMarketDataProvider {
     // 1. Exact timeframe fetch if mapped
     if (mappedInterval) {
       try {
-        const directCandles = await this.fetchDirectTimeSeries(appSymbol, providerSymbol, timeframe, mappedInterval, limit, apiKey, globalScanDeadlineMs);
+        const directCandles = await this.fetchDirectTimeSeries(appSymbol, providerSymbol, timeframe, mappedInterval, limit, apiKey);
         if (directCandles && directCandles.length > 0) {
           return directCandles;
         }
       } catch (err) {
         const errMsg = String(err);
-        if (errMsg.includes('TIMEOUT')) {
-          throw err;
-        }
         const isRateLimit = errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit');
         logger.warn(`Twelve Data direct fetch for interval '${mappedInterval}' (${timeframe}) failed${isRateLimit ? ' (Rate Limited)' : ', trying aggregation'}`, {
           symbol: appSymbol,
@@ -378,7 +352,7 @@ export class TwelveDataAdapter implements IMarketDataProvider {
       if (lowerInterval) {
         try {
           const fetchLimit = limit * lowerTf.ratio;
-          const lowerCandles = await this.fetchDirectTimeSeries(appSymbol, providerSymbol, lowerTf.timeframe, lowerInterval, fetchLimit, apiKey, globalScanDeadlineMs);
+          const lowerCandles = await this.fetchDirectTimeSeries(appSymbol, providerSymbol, lowerTf.timeframe, lowerInterval, fetchLimit, apiKey);
           if (lowerCandles && lowerCandles.length > 0) {
             const aggregated = aggregateOHLCCandles(lowerCandles, timeframe, limit);
             if (aggregated && aggregated.length > 0) {
@@ -386,13 +360,9 @@ export class TwelveDataAdapter implements IMarketDataProvider {
             }
           }
         } catch (err) {
-          const errMsg = String(err);
-          if (errMsg.includes('TIMEOUT')) {
-            throw err;
-          }
           logger.warn(`Twelve Data lower timeframe aggregation for '${timeframe}' using '${lowerTf.timeframe}' failed`, {
             symbol: appSymbol,
-            error: errMsg,
+            error: String(err),
           });
         }
       }

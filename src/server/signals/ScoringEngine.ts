@@ -7,17 +7,6 @@ import { Gate28ConfirmationDiversity } from './Gate28ConfirmationDiversity.js';
 import { Gate34ExecutionFrictionStressTest, FrictionStressTestResult } from './Gate34ExecutionFrictionStressTest.js';
 import { logger } from '../logger.js';
 import { serverConfig } from '../config.js';
-import { ASSET_CLASS_GUARDRAILS, AtrTpGenerator } from './AtrTpGenerator.js';
-import { RiskRewardCalculator, logRrRejectionDiagnostic } from './RiskRewardCalculator.js';
-
-export interface TpCalculationDiagnostics {
-  rawTp1BeforeClamp: number;
-  rawTp2BeforeClamp: number;
-  rawTp3BeforeClamp: number;
-  guardrailTp2MinPct: number;
-  guardrailTp2MaxPct: number;
-  structuralAnchorUsedForTp2: boolean;
-}
 
 export interface ScoringFactors {
   higherTfTrendScore: number;     // 0 - 20 (4H / 1D major direction)
@@ -58,16 +47,7 @@ export interface ScoringResult {
   tp1?: number;
   tp2?: number;
   tp3?: number;
-  tpDiagnostics?: TpCalculationDiagnostics;
   riskRewardRatio: number;
-  grossRR?: number;
-  primaryRR?: number;
-  tp1RR?: number;
-  tp2RR?: number;
-  tp3RR?: number;
-  passedViaTp3?: boolean;
-  minimumRequiredRR?: number;
-  entryPrice?: number;
   estimatedWinRate: number;
   expectancy: number;
   targetDistance?: number;
@@ -568,27 +548,6 @@ export class ScoringEngine {
     );
     const totalScore = coreScore;
 
-    const factors: ScoringFactors = {
-      higherTfTrendScore,
-      marketStructureScore,
-      momentumScore,
-      volumeOrderFlowScore,
-      supportResistanceScore,
-      volatilityAtrScore,
-      entryQualityScore,
-      newsSentimentScore,
-      coreScore: totalScore,
-      totalScore,
-      // Legacy compatibility
-      trendScore: higherTfTrendScore,
-      structureScore: marketStructureScore,
-      volatilityScore: volatilityAtrScore,
-      volumeScore: volumeOrderFlowScore,
-      strategyAgreementScore: Math.round((strategyEval.agreeingStrategiesCount / 6) * 20),
-      riskRewardScore: 8,
-      freshnessAgreementScore: newsSentimentScore * 2,
-    };
-
     // =========================================================================
     // GATE 28 / GATE 81: Independent Confirmation Diversity Evaluation (Secondary Evidence)
     // Evaluates confirmation diversity across independent indicator categories
@@ -611,12 +570,9 @@ export class ScoringEngine {
     // =========================================================================
     // SL / TP Geometry & Risk/Reward Hurdle
     // =========================================================================
-    if (direction !== 'BUY' && direction !== 'SELL') {
-      throw new Error(`Invalid direction value: ${direction}`);
-    }
-
-    const profile = this.getAssetExecutionProfile(cleanSymbol, entryPrice, Math.max(atr_15m, atr_1h));
+    const profile = this.getAssetExecutionProfile(cleanSymbol, entryPrice, atr_15m);
     const precision = profile.precision;
+    const minSafeStopDist = Math.max(profile.minPracticalStopDistance, atr_15m * 0.85);
 
     let stopLoss = 0;
     let takeProfit = 0;
@@ -624,54 +580,32 @@ export class ScoringEngine {
     let tp2 = 0;
     let tp3 = 0;
 
-    // 1. Structural anchor & 2. Minimum-safe floor (must respect the 0.85 * ATR noise floor of both 15m and 1h)
-    const effectiveAtrForNoiseFloor = atr_1h > 0 ? Math.max(atr_15m, atr_1h) : atr_15m;
-    const minSafeDistance = Math.max(profile.minPracticalStopDistance, effectiveAtrForNoiseFloor * 0.85);
-    let rawStopDistance = 0;
-    if (direction === 'BUY') {
-      const structuralSlPrice = support15m - atr_15m * 0.4;
-      rawStopDistance = Math.max(entryPrice - structuralSlPrice, minSafeDistance);
-    } else {
-      const structuralSlPrice = resistance15m + atr_15m * 0.4;
-      rawStopDistance = Math.max(structuralSlPrice - entryPrice, minSafeDistance);
-    }
-
-    // 3. Maximum stop cap (never compressed below minSafeDistance)
-    const normalizedAsset = profile.assetClass === 'STOCK' ? 'STOCKS' : profile.assetClass.toUpperCase();
-    const guardrails = ASSET_CLASS_GUARDRAILS[normalizedAsset] || ASSET_CLASS_GUARDRAILS.DEFAULT;
-    const maxStopDistance = Math.max(minSafeDistance, entryPrice * (guardrails.tp3.maxPct / 100));
-    const finalStopDistance = Math.min(rawStopDistance, maxStopDistance);
-
-    // 4. Round final SL
-    stopLoss = direction === 'BUY'
-      ? Number((entryPrice - finalStopDistance).toFixed(precision))
-      : Number((entryPrice + finalStopDistance).toFixed(precision));
-
     const primaryStrategyName = strategyEval.strategyResults?.find(s => s.passed)?.name || 'Multi-Timeframe Trend Confluence';
 
-    // Use a blended ATR basis for take-profit sizing rather than the
-    // 15-minute ATR alone. The 15m ATR is naturally small and was
-    // confirmed (via live scan data) to cause TP2 to hit its guardrail
-    // floor almost universally, while SL is driven by genuine
-    // structural swing points and is not similarly constrained. A
-    // blend keeps TP responsive to short-term volatility while
-    // anchoring it to a timeframe more comparable to where SL's
-    // structural distance actually comes from.
-    const tpAtrBasis = atr_1h > 0 ? (atr_15m * 0.5 + atr_1h * 0.5) : atr_15m;
+    if (direction === 'BUY') {
+      const structuralSl = support15m - atr_15m * 0.4;
+      const proposedSl = Math.min(structuralSl, entryPrice - minSafeStopDist);
+      stopLoss = Number(proposedSl.toFixed(precision));
+    } else {
+      const structuralSl = resistance15m + atr_15m * 0.4;
+      const proposedSl = Math.max(structuralSl, entryPrice + minSafeStopDist);
+      stopLoss = Number(proposedSl.toFixed(precision));
+    }
+
+    const calculatedRisk = Math.abs(entryPrice - stopLoss);
 
     const tpSetup = ScoringEngine.calculateThreeTakeProfits(
       direction,
       entryPrice,
-      stopLoss,
-      tpAtrBasis,
+      calculatedRisk,
+      atr_15m,
       support15m,
       resistance15m,
       majorSupport1h,
       majorResistance1h,
       primaryStrategyName,
       profile.minPracticalTargetDistance,
-      precision,
-      profile.assetClass
+      precision
     );
 
     tp1 = tpSetup.tp1;
@@ -679,83 +613,16 @@ export class ScoringEngine {
     tp3 = tpSetup.tp3;
     takeProfit = tp2;
 
-    const isBuyDirection = direction === 'BUY';
-
-    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, thresholds.minimumRR, thresholds.minimumNetRR, cleanSymbol);
-    takeProfit = rrResult.passedViaTp3 ? tp3 : tp2;
-    if (!rrResult.isValid) {
-      logRrRejectionDiagnostic({
-        symbol: cleanSymbol,
-        direction,
-        entryPrice,
-        stopLoss,
-        tp1,
-        tp2,
-        tp3,
-        structural15m: isBuyDirection ? resistance15m : support15m,
-        structural1h: isBuyDirection ? majorResistance1h : majorSupport1h,
-        assetClass: profile.assetClass,
-        rejectionReason: rrResult.reason,
-      });
-      return this.createRejection(
-        `REJECTED: INVALID_RR_GEOMETRY. ${rrResult.reason || 'Invalid Risk/Reward geometry'}`,
-        marketRegime,
-        regimeDetails,
-        totalScore,
-        direction,
-        stopLoss,
-        takeProfit,
-        tp1,
-        tp2,
-        tp3,
-        rrResult.grossRR,
-        entryPrice,
-        rrResult.primaryRR,
-        rrResult.tp1RR,
-        rrResult.tp2RR,
-        rrResult.tp3RR,
-        factors,
-        tpSetup.diagnostics
-      );
-    }
-    const rawRR = rrResult.grossRR;
-    const calculatedRisk = rrResult.riskDistance;
-    const calculatedReward = rrResult.rewardDistance;
+    // Base reward on actual TP structure: average reward of the three distinct targets
+    const calculatedReward = (Math.abs(tp1 - entryPrice) + Math.abs(tp2 - entryPrice) + Math.abs(tp3 - entryPrice)) / 3;
+    const rawRR = calculatedRisk > 0 ? Number((calculatedReward / calculatedRisk).toFixed(2)) : 0;
 
     // GATE 45 Step 1 & 2: Calculate Gross R:R & Reject if gross R:R < minimum acceptable GROSS R:R
     if (rawRR < thresholds.minimumRR) {
-      logRrRejectionDiagnostic({
-        symbol: cleanSymbol,
-        direction,
-        entryPrice,
-        stopLoss,
-        tp1,
-        tp2,
-        tp3,
-        structural15m: isBuyDirection ? resistance15m : support15m,
-        structural1h: isBuyDirection ? majorResistance1h : majorSupport1h,
-        assetClass: profile.assetClass,
-        rejectionReason: `GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${thresholds.minimumRR}:1)`,
-      });
       return this.createRejection(
         `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${thresholds.minimumRR}:1)`,
         marketRegime,
-        regimeDetails,
-        totalScore,
-        direction,
-        stopLoss,
-        takeProfit,
-        tp1,
-        tp2,
-        tp3,
-        rawRR,
-        entryPrice,
-        rrResult.primaryRR,
-        rrResult.tp1RR,
-        rrResult.tp2RR,
-        rrResult.tp3RR,
-        factors,
-        tpSetup.diagnostics
+        regimeDetails
       );
     }
 
@@ -785,22 +652,7 @@ export class ScoringEngine {
       return this.createRejection(
         `REJECTED: WIN_RATE_BELOW_THRESHOLD. Estimated win rate (${estimatedWinRate}%) is at or below ${effectiveMinWinProb}% threshold`,
         marketRegime,
-        regimeDetails,
-        totalScore,
-        direction,
-        stopLoss,
-        takeProfit,
-        tp1,
-        tp2,
-        tp3,
-        rawRR,
-        entryPrice,
-        rrResult.primaryRR,
-        rrResult.tp1RR,
-        rrResult.tp2RR,
-        rrResult.tp3RR,
-        factors,
-        tpSetup.diagnostics
+        regimeDetails
       );
     }
 
@@ -809,22 +661,7 @@ export class ScoringEngine {
       return this.createRejection(
         `REJECTED: NEGATIVE_EXPECTANCY. Negative mathematical expectancy (${expectancy}R per trade). Setup discarded.`,
         marketRegime,
-        regimeDetails,
-        totalScore,
-        direction,
-        stopLoss,
-        takeProfit,
-        tp1,
-        tp2,
-        tp3,
-        rawRR,
-        entryPrice,
-        rrResult.primaryRR,
-        rrResult.tp1RR,
-        rrResult.tp2RR,
-        rrResult.tp3RR,
-        factors,
-        tpSetup.diagnostics
+        regimeDetails
       );
     }
 
@@ -842,22 +679,7 @@ export class ScoringEngine {
       return this.createRejection(
         `REJECTED: SCORE_BELOW_THRESHOLD. Deterministic quality score ${totalScore}/100 is below minimum actionable threshold of ${thresholds.minimumScore}`,
         marketRegime,
-        regimeDetails,
-        totalScore,
-        direction,
-        stopLoss,
-        takeProfit,
-        tp1,
-        tp2,
-        tp3,
-        rawRR,
-        entryPrice,
-        rrResult.primaryRR,
-        rrResult.tp1RR,
-        rrResult.tp2RR,
-        rrResult.tp3RR,
-        factors,
-        tpSetup.diagnostics
+        regimeDetails
       );
     }
 
@@ -869,10 +691,7 @@ export class ScoringEngine {
       symbol,
       entryPrice,
       stopLoss,
-      takeProfit,
-      tp1,
-      tp2,
-      tp3
+      takeProfit
     );
 
     // GATE 45 Step 4: Reject if normal net R:R < minimumNetRR
@@ -880,22 +699,7 @@ export class ScoringEngine {
       return this.createRejection(
         `REJECTED: NET_RR_BELOW_THRESHOLD. Normal Net Risk/Reward ratio (${stressTest.normal.netRR.toFixed(2)}:1) is below minimum acceptable NET R:R (${thresholds.minimumNetRR}:1) (Gross R:R: ${rawRR.toFixed(2)}:1)`,
         marketRegime,
-        regimeDetails,
-        totalScore,
-        direction,
-        stopLoss,
-        takeProfit,
-        tp1,
-        tp2,
-        tp3,
-        rawRR,
-        entryPrice,
-        rrResult.primaryRR,
-        rrResult.tp1RR,
-        rrResult.tp2RR,
-        rrResult.tp3RR,
-        factors,
-        tpSetup.diagnostics
+        regimeDetails
       );
     }
 
@@ -904,22 +708,7 @@ export class ScoringEngine {
       return this.createRejection(
         `REJECTED: ADVERSE_NET_RR_BELOW_THRESHOLD. Adverse Net Risk/Reward ratio (${stressTest.adverse.netRR.toFixed(2)}:1) is below required stress floor (${(thresholds.minimumAdverseNetRR ?? 1.0)}:1)`,
         marketRegime,
-        regimeDetails,
-        totalScore,
-        direction,
-        stopLoss,
-        takeProfit,
-        tp1,
-        tp2,
-        tp3,
-        rawRR,
-        entryPrice,
-        rrResult.primaryRR,
-        rrResult.tp1RR,
-        rrResult.tp2RR,
-        rrResult.tp3RR,
-        factors,
-        tpSetup.diagnostics
+        regimeDetails
       );
     }
 
@@ -928,22 +717,7 @@ export class ScoringEngine {
       return this.createRejection(
         stressTest.reasons[0] || `REJECTED: ${stressTest.rejectionReason}. Execution friction stress test failed.`,
         marketRegime,
-        regimeDetails,
-        totalScore,
-        direction,
-        stopLoss,
-        takeProfit,
-        tp1,
-        tp2,
-        tp3,
-        rawRR,
-        entryPrice,
-        rrResult.primaryRR,
-        rrResult.tp1RR,
-        rrResult.tp2RR,
-        rrResult.tp3RR,
-        factors,
-        tpSetup.diagnostics
+        regimeDetails
       );
     }
 
@@ -954,8 +728,26 @@ export class ScoringEngine {
 
     const hypotheticalRisk = this.calculateHypotheticalRisk(entryPrice, stopLoss, profile.minPracticalStopDistance);
 
-    // Update dynamic factor fields
-    factors.riskRewardScore = rawRR >= 2.5 ? 10 : 8;
+    const factors: ScoringFactors = {
+      higherTfTrendScore,
+      marketStructureScore,
+      momentumScore,
+      volumeOrderFlowScore,
+      supportResistanceScore,
+      volatilityAtrScore,
+      entryQualityScore,
+      newsSentimentScore,
+      coreScore: totalScore,
+      totalScore,
+      // Legacy compatibility
+      trendScore: higherTfTrendScore,
+      structureScore: marketStructureScore,
+      volatilityScore: volatilityAtrScore,
+      volumeScore: volumeOrderFlowScore,
+      strategyAgreementScore: Math.round((strategyEval.agreeingStrategiesCount / 6) * 20),
+      riskRewardScore: rawRR >= 2.5 ? 10 : 8,
+      freshnessAgreementScore: newsSentimentScore * 2,
+    };
 
     return {
       isValid: true,
@@ -971,16 +763,7 @@ export class ScoringEngine {
       tp1,
       tp2,
       tp3,
-      tpDiagnostics: tpSetup.diagnostics,
       riskRewardRatio: rawRR,
-      grossRR: rawRR,
-      primaryRR: rrResult.primaryRR,
-      tp1RR: rrResult.tp1RR,
-      tp2RR: rrResult.tp2RR,
-      tp3RR: rrResult.tp3RR,
-      passedViaTp3: rrResult.passedViaTp3,
-      minimumRequiredRR: thresholds.minimumRR,
-      entryPrice,
       estimatedWinRate,
       expectancy,
       targetDistance,
@@ -994,7 +777,7 @@ export class ScoringEngine {
       agreeingStrategiesCount: strategyEval.agreeingStrategiesCount,
       totalStrategiesCount: 6,
       strategyAgreementRatio: strategyEval.agreementRatio,
-      isTopTradeCandidate: totalScore >= thresholds.signalThreshold && timeframeAlignmentRatio >= (thresholds.minimumTimeframeAlignment || 0.50),
+      isTopTradeCandidate: totalScore >= thresholds.signalThreshold && timeframeAlignmentRatio >= (thresholds.minimumTimeframeAlignment || 0.60),
       estimatedFriction: {
         spreadPipsOrPoints: spreadUnits,
         feeBufferPct: feePct,
@@ -1035,13 +818,9 @@ export class ScoringEngine {
     majorResistance1h: number,
     primaryStrategyName: string,
     minPracticalTargetDistance: number,
-    precision: number,
-    assetClass: string
-  ): { tp1: number; tp2: number; tp3: number; diagnostics?: TpCalculationDiagnostics } {
-    if (direction !== 'BUY' && direction !== 'SELL') {
-      throw new Error(`Invalid direction value: ${direction}`);
-    }
-
+    precision: number
+  ): { tp1: number; tp2: number; tp3: number } {
+    const risk = Math.abs(entryPrice - stopLoss);
     const thresholds = serverConfig.getConfig().thresholds;
     
     // Ensure we have a non-zero ATR and minPracticalTargetDistance
@@ -1077,37 +856,45 @@ export class ScoringEngine {
     let tp2 = 0;
     let tp3 = 0;
 
-    const isBuy = direction === 'BUY';
-
-    const riskDist = Math.abs(entryPrice - stopLoss);
-    const req1_8RTarget = isBuy ? entryPrice + (riskDist * 1.8) : entryPrice - (riskDist * 1.8);
-
-    const minRR = thresholds.minimumRR || 1.8;
-    const minRiskTp2Dist = riskDist * minRR;
-
-    if (isBuy) {
+    if (direction === 'BUY') {
       // TP1: conservative
       let baseTp1 = entryPrice + (cleanAtr * tp1Mult);
       if (resistance15m > entryPrice) {
         baseTp1 = 0.5 * baseTp1 + 0.5 * resistance15m;
       }
       tp1 = Math.max(baseTp1, entryPrice + cleanMinDistance * 0.5);
+      // Ensure TP1 is strictly above Entry by at least minPrecisionStep
+      if (tp1 < entryPrice + minPrecisionStep) {
+        tp1 = entryPrice + minPrecisionStep;
+      }
 
-      // TP2: primary - must satisfy risk-distance R:R requirement (riskDist * minRR)
-      const minRiskTp2 = entryPrice + minRiskTp2Dist;
-      const atrTp2 = entryPrice + (cleanAtr * tp2Mult);
-      let baseTp2 = Math.max(atrTp2, minRiskTp2);
+      // TP2: primary
+      let baseTp2 = entryPrice + (cleanAtr * tp2Mult);
       if (majorResistance1h > entryPrice) {
-        if (majorResistance1h >= minRiskTp2) {
-          baseTp2 = Math.max(baseTp2, majorResistance1h);
-        }
-        // If majorResistance1h is closer than minRiskTp2, do not move TP2 closer; adhere to risk-distance requirement.
+        baseTp2 = 0.3 * baseTp2 + 0.7 * (majorResistance1h - cleanAtr * 0.15);
       }
       tp2 = Math.max(baseTp2, tp1 + minStep);
 
-      // TP3: extended - farther than TP2
-      let baseTp3 = Math.max(entryPrice + (cleanAtr * tp3Mult), tp2 + minStep, majorResistance1h > entryPrice && majorResistance1h >= minRiskTp2 ? majorResistance1h + cleanAtr * 0.5 : tp2 + cleanAtr * 0.8);
+      // Verify the minimum risk/reward requirement is met for TP2 (primary target)
+      const minRequiredReward = risk * thresholds.minimumRR;
+      if (tp2 < entryPrice + minRequiredReward) {
+        tp2 = entryPrice + minRequiredReward;
+      }
+      // Guarantee TP2 is strictly above TP1 by at least minStep
+      if (tp2 < tp1 + minStep) {
+        tp2 = tp1 + minStep;
+      }
+
+      // TP3: extended
+      let baseTp3 = entryPrice + (cleanAtr * tp3Mult);
+      if (majorResistance1h > entryPrice) {
+        baseTp3 = Math.max(baseTp3, majorResistance1h + cleanAtr * tp3Mult * 0.4);
+      }
       tp3 = Math.max(baseTp3, tp2 + minStep);
+      // Guarantee TP3 is strictly above TP2 by at least minStep
+      if (tp3 < tp2 + minStep) {
+        tp3 = tp2 + minStep;
+      }
     } else {
       // TP1: conservative
       let baseTp1 = entryPrice - (cleanAtr * tp1Mult);
@@ -1115,54 +902,35 @@ export class ScoringEngine {
         baseTp1 = 0.5 * baseTp1 + 0.5 * support15m;
       }
       tp1 = Math.min(baseTp1, entryPrice - cleanMinDistance * 0.5);
-
-      // TP2: primary - must satisfy risk-distance R:R requirement (riskDist * minRR)
-      const minRiskTp2 = entryPrice - minRiskTp2Dist;
-      const atrTp2 = entryPrice - (cleanAtr * tp2Mult);
-      let baseTp2 = Math.min(atrTp2, minRiskTp2);
-      if (majorSupport1h < entryPrice) {
-        if (majorSupport1h <= minRiskTp2) {
-          baseTp2 = Math.min(baseTp2, majorSupport1h);
-        }
-        // If majorSupport1h is closer than minRiskTp2, do not move TP2 closer; adhere to risk-distance requirement.
-      }
-      tp2 = Math.min(baseTp2, tp1 - minStep);
-
-      // TP3: extended - farther than TP2
-      let baseTp3 = Math.min(entryPrice - (cleanAtr * tp3Mult), tp2 - minStep, majorSupport1h < entryPrice && majorSupport1h <= minRiskTp2 ? majorSupport1h - cleanAtr * 0.5 : tp2 - cleanAtr * 0.8);
-      tp3 = Math.min(baseTp3, tp2 - minStep);
-    }
-
-    // NEW — percentage guardrail clamp
-    const normalizedAsset = assetClass === 'STOCK' ? 'STOCKS' : assetClass.toUpperCase();
-    const baseGuardrails = ASSET_CLASS_GUARDRAILS[normalizedAsset] || ASSET_CLASS_GUARDRAILS.DEFAULT;
-
-    let tp1Clamped = AtrTpGenerator.applyGuardrail(tp1, baseGuardrails.tp1, entryPrice, isBuy);
-    let tp2Clamped = AtrTpGenerator.applyGuardrail(tp2, baseGuardrails.tp2, entryPrice, isBuy);
-    let tp3Clamped = AtrTpGenerator.applyGuardrail(tp3, baseGuardrails.tp3, entryPrice, isBuy);
-
-    tp1 = tp1Clamped;
-    tp2 = tp2Clamped;
-    tp3 = tp3Clamped;
-
-    // Ordering/distinctness enforcement
-    if (isBuy) {
-      if (tp1 < entryPrice + minPrecisionStep) {
-        tp1 = entryPrice + minPrecisionStep;
-      }
-      if (tp2 < tp1 + minStep) {
-        tp2 = tp1 + minStep;
-      }
-      if (tp3 < tp2 + minStep) {
-        tp3 = tp2 + minStep;
-      }
-    } else {
+      // Ensure TP1 is strictly below Entry by at least minPrecisionStep
       if (tp1 > entryPrice - minPrecisionStep) {
         tp1 = entryPrice - minPrecisionStep;
       }
+
+      // TP2: primary
+      let baseTp2 = entryPrice - (cleanAtr * tp2Mult);
+      if (majorSupport1h < entryPrice) {
+        baseTp2 = 0.3 * baseTp2 + 0.7 * (majorSupport1h + cleanAtr * 0.15);
+      }
+      tp2 = Math.min(baseTp2, tp1 - minStep);
+
+      // Verify the minimum risk/reward requirement is met for TP2 (primary target)
+      const minRequiredReward = risk * thresholds.minimumRR;
+      if (tp2 > entryPrice - minRequiredReward) {
+        tp2 = entryPrice - minRequiredReward;
+      }
+      // Guarantee TP2 is strictly below TP1 by at least minStep
       if (tp2 > tp1 - minStep) {
         tp2 = tp1 - minStep;
       }
+
+      // TP3: extended
+      let baseTp3 = entryPrice - (cleanAtr * tp3Mult);
+      if (majorSupport1h < entryPrice) {
+        baseTp3 = Math.min(baseTp3, majorSupport1h - cleanAtr * tp3Mult * 0.4);
+      }
+      tp3 = Math.min(baseTp3, tp2 - minStep);
+      // Guarantee TP3 is strictly below TP2 by at least minStep
       if (tp3 > tp2 - minStep) {
         tp3 = tp2 - minStep;
       }
@@ -1171,20 +939,7 @@ export class ScoringEngine {
     return {
       tp1: Number(tp1.toFixed(precision)),
       tp2: Number(tp2.toFixed(precision)),
-      tp3: Number(tp3.toFixed(precision)),
-      // Diagnostics only — not used for any trading decision. Lets us
-      // confirm from real scan data whether the guardrail floor is
-      // still binding as often after Fix 1, and whether the
-      // structural anchor (majorResistance1h/majorSupport1h) or the
-      // pure-ATR component is driving the raw value.
-      diagnostics: {
-        rawTp1BeforeClamp: Number(tp1Clamped.toFixed(precision)),
-        rawTp2BeforeClamp: Number(tp2Clamped.toFixed(precision)),
-        rawTp3BeforeClamp: Number(tp3Clamped.toFixed(precision)),
-        guardrailTp2MinPct: baseGuardrails.tp2.minPct,
-        guardrailTp2MaxPct: baseGuardrails.tp2.maxPct,
-        structuralAnchorUsedForTp2: isBuy ? (majorResistance1h > entryPrice) : (majorSupport1h < entryPrice),
-      }
+      tp3: Number(tp3.toFixed(precision))
     };
   }
 
@@ -1239,46 +994,21 @@ export class ScoringEngine {
   private static createRejection(
     rejectionReason: string,
     marketRegime: MarketRegime = 'RANGE',
-    regimeDetails = 'Unqualified',
-    score = 0,
-    direction: SignalDirection = 'BUY',
-    stopLoss = 0,
-    takeProfit = 0,
-    tp1 = 0,
-    tp2 = 0,
-    tp3 = 0,
-    riskRewardRatio = 0,
-    entryPrice = 0,
-    primaryRR = 0,
-    tp1RR = 0,
-    tp2RR = 0,
-    tp3RR = 0,
-    factors?: ScoringFactors,
-    tpDiagnostics?: TpCalculationDiagnostics
+    regimeDetails = 'Unqualified'
   ): ScoringResult {
     return {
       isValid: false,
-      score,
-      coreScore: score,
+      score: 0,
+      coreScore: 0,
       qualityTier: 'REJECT',
-      direction,
+      direction: 'BUY',
       marketRegime,
       regimeDetails,
       rejectionReason,
       confluenceReasons: [],
-      stopLoss,
-      takeProfit,
-      tp1,
-      tp2,
-      tp3,
-      tpDiagnostics,
-      riskRewardRatio,
-      grossRR: riskRewardRatio,
-      primaryRR: primaryRR || riskRewardRatio,
-      tp1RR,
-      tp2RR,
-      tp3RR,
-      entryPrice,
+      stopLoss: 0,
+      takeProfit: 0,
+      riskRewardRatio: 0,
       estimatedWinRate: 0,
       expectancy: 0,
       alignedCount: 0,
@@ -1298,7 +1028,7 @@ export class ScoringEngine {
         suggestedRiskAmount: 0,
         suggestedPositionSize: 0,
       },
-      factors: factors || {
+      factors: {
         higherTfTrendScore: 0,
         marketStructureScore: 0,
         momentumScore: 0,
@@ -1320,38 +1050,20 @@ export class ScoringEngine {
    */
   static classifyScore(score: number, customThresholds?: { signalThreshold: number; qualifiedCandidateThreshold: number; watchingThreshold: number }) {
     const thresholds = customThresholds || serverConfig.getConfig().thresholds;
-    if (score >= 90) {
+    if (score >= thresholds.signalThreshold) {
       return {
-        tier: 'EXCEPTIONAL' as const,
-        label: `Exceptional (90-100)`,
+        tier: 'ACTIONABLE_SIGNAL' as const,
+        label: `ACTIONABLE SIGNAL (${thresholds.signalThreshold}+)`,
         isActionable: true,
         isQualifiedCandidate: true,
         isWatching: true,
       };
     }
-    if (score >= 80) {
+    if (score >= thresholds.qualifiedCandidateThreshold) {
       return {
-        tier: 'VERY_STRONG' as const,
-        label: `Very Strong setup (80-89)`,
-        isActionable: true,
-        isQualifiedCandidate: true,
-        isWatching: true,
-      };
-    }
-    if (score >= 75) {
-      return {
-        tier: 'STRONG' as const,
-        label: `Strong setup (75-79)`,
-        isActionable: true,
-        isQualifiedCandidate: true,
-        isWatching: true,
-      };
-    }
-    if (score >= (thresholds.signalThreshold || 70)) {
-      return {
-        tier: 'MODERATE_VALID' as const,
-        label: `Valid / Moderate setup (${thresholds.signalThreshold || 70}-74)`,
-        isActionable: true,
+        tier: 'QUALIFIED_CANDIDATE' as const,
+        label: `QUALIFIED CANDIDATE (${thresholds.qualifiedCandidateThreshold}-${thresholds.signalThreshold - 1})`,
+        isActionable: false,
         isQualifiedCandidate: true,
         isWatching: true,
       };
@@ -1359,7 +1071,7 @@ export class ScoringEngine {
     if (score >= thresholds.watchingThreshold) {
       return {
         tier: 'WATCHING' as const,
-        label: `WATCHING (${thresholds.watchingThreshold}-${(thresholds.signalThreshold || 70) - 1})`,
+        label: `WATCHING (${thresholds.watchingThreshold}-${thresholds.qualifiedCandidateThreshold - 1})`,
         isActionable: false,
         isQualifiedCandidate: false,
         isWatching: true,

@@ -5,7 +5,7 @@
 
 import express from 'express';
 import path from 'path';
-import fs from 'fs';
+import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
 // Load environment variables
@@ -23,6 +23,9 @@ import { hourlyScanner } from './src/server/signals/HourlyScanner.js';
 import { RepairService } from './src/server/signals/RepairService.js';
 import { SignalLifecycleManager } from './src/server/signals/SignalLifecycleManager.js';
 import { PushNotificationService } from './src/server/notifications/PushNotificationService.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export async function createServer() {
   const app = express();
@@ -47,48 +50,18 @@ export async function createServer() {
   app.use('/api', signalsRouter);
   app.use('/api', notificationsRouter);
 
-  // Catch-all 404 JSON response for any unmatched /api routes (prevents Vite SPA fallback returning HTML 200 for API calls)
-  app.use('/api/*', (req, res) => {
-    res.status(404).json({
-      success: false,
-      error: {
-        code: 'NOT_FOUND',
-        message: `API endpoint ${req.method} ${req.originalUrl} not found`,
-        timestamp: new Date().toISOString(),
-        path: req.originalUrl,
-      },
-    });
-  });
-
   // Global Express Error Handler
   app.use(globalErrorHandler);
 
-  // Serve static public assets (icons, manifest, sw.js)
-  const publicPath = path.join(process.cwd(), 'public');
-  if (fs.existsSync(publicPath)) {
-    app.use(express.static(publicPath));
-  }
-
   // Explicit route for Service Worker to prevent catch-all SPA fallback returning HTML
   app.get('/sw.js', (req, res) => {
-    let swPath = path.join(process.cwd(), 'public', 'sw.js');
-    if (!fs.existsSync(swPath)) {
-      swPath = path.join(process.cwd(), 'dist', 'sw.js');
-    }
-
-    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-    res.setHeader('Service-Worker-Allowed', '/');
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-
-    if (fs.existsSync(swPath)) {
-      return res.sendFile(swPath, (err) => {
-        if (err && !res.headersSent) {
-          res.status(500).send('// Error serving service worker\nconsole.error("[SW] Error serving service worker");');
-        }
-      });
-    }
-
-    return res.send('// Service worker placeholder\nconsole.log("[SW] Service worker placeholder");');
+    const swPath = path.join(process.cwd(), 'public', 'sw.js');
+    res.setHeader('Content-Type', 'application/javascript');
+    res.sendFile(swPath, (err) => {
+      if (err) {
+        res.status(404).send('Service worker not found');
+      }
+    });
   });
 
   // Vite Middleware in Dev or Static Serve in Prod

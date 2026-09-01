@@ -1,25 +1,5 @@
 [
   {
-    "id": "audit_1788197890478_FETUSDT_80lkc",
-    "timestamp": 1788197890478,
-    "symbol": "FETUSDT",
-    "direction": "SELL",
-    "timeframe": "Multi-TF Realism Setup",
-    "primaryStrategy": "Progressive MTF Confluence",
-    "passedStrategies": [],
-    "failedStrategies": [],
-    "marketRegime": "UNKNOWN",
-    "atr": 0,
-    "dataFreshnessSeconds": 0,
-    "providerAgreement": true,
-    "providerAgreementPct": 100,
-    "expectedRR": 0,
-    "score": 86,
-    "status": "REJECTED",
-    "rejectionReason": "Layer 2 MTF Validation Failed: Macro 4h and micro 5m structure both confirm Bullish regime (opposing SELL).",
-    "fingerprint": "fp_g6_FETUSDT"
-  },
-  {
     "id": "audit_1787739678976_XRPUSDT_o714a",
     "timestamp": 1787739678976,
     "symbol": "XRPUSDT",

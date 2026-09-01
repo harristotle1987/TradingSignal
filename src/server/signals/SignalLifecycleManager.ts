@@ -1628,7 +1628,6 @@ export class SignalLifecycleManager {
           timestamp: sig.timestamp,
           resolvedAt: step.eventTime,
           durationMs: Math.max(0, step.eventTime - sig.timestamp),
-          provenance: 'LIVE',
         });
       }
     }

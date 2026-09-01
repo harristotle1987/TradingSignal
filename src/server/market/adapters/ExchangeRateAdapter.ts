@@ -20,11 +20,10 @@ export class ExchangeRateAdapter implements IMarketDataProvider {
   readonly id = 'exchangerate';
   readonly name = 'Open Exchange Rates (Forex Fallback)';
 
-  async fetchPrice(appSymbol: string, globalScanDeadlineMs?: number): Promise<NormalizedTicker> {
+  async fetchPrice(appSymbol: string): Promise<NormalizedTicker> {
     const receivedAt = Date.now();
     let providerSymbol = appSymbol;
 
-    let timeoutId: NodeJS.Timeout | null = null;
     try {
       const norm = SymbolNormalizer.normalizeAppSymbol(appSymbol);
       if (!norm || norm.length < 6) {
@@ -35,19 +34,9 @@ export class ExchangeRateAdapter implements IMarketDataProvider {
       const quote = norm.slice(3, 6);
       providerSymbol = `${base}/${quote}`;
 
-      const configTimeout = serverConfig.getConfig().marketDataTimeoutMs;
-      let timeoutMs = configTimeout;
-      const safetyMargin = 100;
-      if (globalScanDeadlineMs) {
-        const remainingMs = globalScanDeadlineMs - Date.now();
-        if (remainingMs <= safetyMargin) {
-          throw new Error('TIMEOUT: Global scanner deadline reached before starting request');
-        }
-        timeoutMs = Math.min(configTimeout, remainingMs - safetyMargin);
-      }
-
+      const timeoutMs = serverConfig.getConfig().marketDataTimeoutMs;
       const controller = new AbortController();
-      timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
       const url = `https://open.er-api.com/v6/latest/${base}`;
       const response = await fetch(url, {
@@ -55,10 +44,7 @@ export class ExchangeRateAdapter implements IMarketDataProvider {
         headers: { 'Accept': 'application/json' },
       });
 
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         return this.createErrorTicker(appSymbol, providerSymbol, `ExchangeRate API returned HTTP ${response.status}`);
@@ -91,19 +77,8 @@ export class ExchangeRateAdapter implements IMarketDataProvider {
         status: 'OK',
       };
     } catch (err: unknown) {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('TIMEOUT: Global scanner deadline reached')) {
-        throw err;
-      }
-      const isAbort = (err instanceof Error && err.name === 'AbortError') || msg.toLowerCase().includes('aborted');
-      const finalMsg = (msg.includes('TIMEOUT') || isAbort)
-        ? `ExchangeRate request timed out`
-        : `ExchangeRate fetch failed: ${msg}`;
-      return this.createErrorTicker(appSymbol, providerSymbol, finalMsg);
+      return this.createErrorTicker(appSymbol, providerSymbol, `ExchangeRate fetch failed: ${msg}`);
     }
   }
 

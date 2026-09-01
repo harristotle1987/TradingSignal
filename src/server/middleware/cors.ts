@@ -29,18 +29,8 @@ export function getAllowedOrigins(): string[] {
       origins.push(normalizeOrigin(process.env.APP_URL));
     }
   } else {
-    // Production allowed origin(s) — configurable via ALLOWED_ORIGIN
-    // (comma-separated for multiple), falling back to the original
-    // hard-coded Vercel URL for backward compatibility.
-    const configured = process.env.ALLOWED_ORIGIN;
-    if (configured && configured.trim().length > 0) {
-      for (const o of configured.split(',')) {
-        const trimmed = o.trim();
-        if (trimmed) origins.push(normalizeOrigin(trimmed));
-      }
-    } else {
-      origins.push('https://trading-signal-chi.vercel.app');
-    }
+    // Production hard-coded origin
+    origins.push('https://trading-signal-chi.vercel.app');
   }
 
   return Array.from(new Set(origins));

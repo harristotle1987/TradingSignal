@@ -9,7 +9,6 @@
 import { useState, useEffect } from 'react';
 import { SignalHistoryItem, TradingSignal } from '../types/index.js';
 import { TargetTracker } from './TargetTracker.js';
-import { RejectionBreakdown, AcceptanceBreakdown } from './SignalAnalysisDetails.js';
 import { formatTimeWithZone, DisplayTimeZone } from '../utils/time.js';
 import {
   formatLabel,
@@ -39,54 +38,11 @@ import {
   Globe,
   RefreshCw,
   BarChart3,
-  Copy,
-  Check,
 } from 'lucide-react';
 import { SignalPerformanceChart } from './SignalPerformanceChart.js';
 
-
-function CopySignalButton({ signal, precision }: { signal: any, precision: number }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = (e: any) => {
-    e.stopPropagation();
-    
-    let text = `Symbol: ${signal.symbol} (${signal.direction})\n`;
-    text += `Entry: ${signal.entryPrice ? signal.entryPrice.toFixed(precision) : '--'}\n`;
-    text += `Stop Loss: ${signal.stopLoss ? signal.stopLoss.toFixed(precision) : '--'}\n`;
-    if (signal.tp1 !== undefined) {
-      text += `TP1: ${signal.tp1.toFixed(precision)}\n`;
-    }
-    if (signal.tp2 !== undefined) {
-      text += `TP2: ${signal.tp2.toFixed(precision)}\n`;
-    }
-    if (signal.tp3 !== undefined) {
-      text += `TP3: ${signal.tp3.toFixed(precision)}\n`;
-    }
-
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <button
-      onClick={handleCopy}
-      className={`p-1 rounded transition min-h-[28px] min-w-[28px] flex items-center justify-center shadow-sm ${
-        copied 
-          ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/80 cursor-default' 
-          : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 cursor-pointer'
-      }`}
-      title="Copy Signal Details"
-    >
-      {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-    </button>
-  );
-}
-
 interface SignalHistoryPanelProps {
   history: SignalHistoryItem[];
-  rejected72PlusCandidates?: any[];
   onClearHistory: () => void;
   onDeleteHistoryItem?: (id: string, symbol: string) => void;
   onDeleteMultipleHistoryItems?: (ids: string[]) => Promise<void>;
@@ -99,7 +55,6 @@ interface SignalHistoryPanelProps {
 
 export function SignalHistoryPanel({
   history,
-  rejected72PlusCandidates = [],
   onClearHistory,
   onDeleteHistoryItem,
   onDeleteMultipleHistoryItems,
@@ -109,7 +64,7 @@ export function SignalHistoryPanel({
   onTimeZoneChange,
   onSignalRefreshed,
 }: SignalHistoryPanelProps) {
-  const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'TOP_TRADE' | 'SUGGESTION' | '72PLUS_REJECTED'>('ALL');
+  const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'TOP_TRADE' | 'SUGGESTION'>('ALL');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'list' | 'chart'>('list');
 
@@ -322,17 +277,6 @@ export function SignalHistoryPanel({
             >
               Suggestions ({suggestionCount})
             </button>
-            <button
-              type="button"
-              onClick={() => setFilter('72PLUS_REJECTED')}
-              className={`px-2 py-0.5 rounded transition cursor-pointer ${
-                filter === '72PLUS_REJECTED'
-                  ? 'bg-rose-950 text-rose-300 font-semibold border border-rose-800'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              70+ Rejected ({rejected72PlusCandidates.length})
-            </button>
           </div>
 
           {/* Clear History Button */}
@@ -379,84 +323,6 @@ export function SignalHistoryPanel({
 
       {activeTab === 'chart' ? (
         <SignalPerformanceChart refreshTrigger={history.length} />
-      ) : filter === '72PLUS_REJECTED' ? (
-        rejected72PlusCandidates.length > 0 ? (
-          <div className="space-y-3 font-mono">
-            {rejected72PlusCandidates.map((cand: any, idx: number) => (
-              <div
-                key={idx}
-                className="bg-slate-950/90 border border-rose-900/60 hover:border-rose-800 rounded-xl p-4 transition shadow-md space-y-2.5"
-              >
-                {/* Header Row: Symbol, Direction, Status & Score */}
-                <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-lg font-bold text-white">{cand.symbol}</span>
-                    {cand.direction && (
-                      <span
-                        className={`px-2 py-0.5 rounded text-xs font-bold ${
-                          cand.direction === 'BUY'
-                            ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                            : 'bg-rose-950 text-rose-400 border border-rose-800'
-                        }`}
-                      >
-                        {cand.direction}
-                      </span>
-                    )}
-                    <span className="px-2 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800 text-xs font-bold tracking-wide">
-                      STATUS: {cand.statusText || 'REJECTED — NOT TRADEABLE'}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <span className="text-amber-300 font-bold bg-amber-950 px-2 py-0.5 rounded text-xs border border-amber-800/80">
-                      Score: {cand.score || cand.finalScore}/100
-                    </span>
-                    {cand.timestamp && (
-                      <span className="text-xs text-slate-400">
-                        {formatTimeWithZone(cand.timestamp, preferredTimeZone)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Setup Prices */}
-                {(cand.entryPrice || cand.stopLoss || cand.takeProfit || cand.tp1) && (
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 bg-slate-900/80 p-2 rounded-lg border border-slate-800 text-xs">
-                    <div>
-                      <span className="text-slate-500 block text-[10px]">ENTRY</span>
-                      <span className="text-slate-200 font-semibold">{cand.entryPrice ?? 'N/A'}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-500 block text-[10px]">STOP LOSS</span>
-                      <span className="text-rose-400 font-semibold">{cand.stopLoss ?? 'N/A'}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-500 block text-[10px]">TP1</span>
-                      <span className="text-emerald-400 font-semibold">{cand.tp1 ?? cand.takeProfit ?? 'N/A'}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-500 block text-[10px]">TP2</span>
-                      <span className="text-emerald-400 font-semibold">{cand.tp2 ?? 'N/A'}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-500 block text-[10px]">TP3</span>
-                      <span className="text-emerald-400 font-semibold">{cand.tp3 ?? 'N/A'}</span>
-                    </div>
-                  </div>
-                )}
-
-                 {/* Interactive Rejection Breakdown */}
-                 <div className="pt-2">
-                   <RejectionBreakdown candidate={cand as any} />
-                 </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-8 bg-slate-950/60 rounded-xl border border-slate-800 text-slate-400 text-xs font-mono">
-            No 70+ candidates have been rejected in recent scans.
-          </div>
-        )
       ) : filteredHistory.length > 0 ? (
         <div className="space-y-3">
           {/* Bulk Action Controls */}
@@ -670,7 +536,7 @@ export function SignalHistoryPanel({
                     )}
 
                     <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                      Target Quality: <strong className="text-emerald-400 font-bold">{item.targetQualityScore !== undefined ? `${item.targetQualityScore}/100` : `${item.score || 70}/100`}</strong>
+                      Target Quality: <strong className="text-emerald-400 font-bold">{item.targetQualityScore !== undefined ? `${item.targetQualityScore}/100` : `${item.score || 75}/100`}</strong>
                     </span>
 
                     {(item.estimatedWinRate !== undefined || item.modelEstimatedWinRate !== undefined) && (
@@ -700,7 +566,6 @@ export function SignalHistoryPanel({
                     >
                       {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                     </button>
-                    <CopySignalButton signal={item} precision={getDynamicPrecision(item.entryPrice, item.symbol)} />
 
                     {/* Delete Entry Button */}
                     <button
@@ -850,8 +715,22 @@ export function SignalHistoryPanel({
                     )}
 
                     {/* Technical Confluence Reasons List */}
-                    {/* Visual Acceptance & Technical Confluence Breakdown */}
-                    <AcceptanceBreakdown signal={item as any} />
+                    {item.confluenceReasons && item.confluenceReasons.length > 0 && (
+                      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-2">
+                        <div className="flex items-center gap-2 text-emerald-400 font-semibold text-xs uppercase tracking-wider">
+                          <Layers className="w-4 h-4 text-emerald-400" />
+                          <span>Technical Confluence Rationale</span>
+                        </div>
+                        <ul className="space-y-1.5 pl-1">
+                          {item.confluenceReasons.map((reason, rIdx) => (
+                            <li key={rIdx} className="text-xs text-slate-200 flex items-start gap-2.5 leading-relaxed">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5 shrink-0" />
+                              <span>{reason}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
 
                     {/* NVIDIA AI Risk Evaluation */}
                     {item.aiAssessment && (

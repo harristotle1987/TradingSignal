@@ -71,19 +71,6 @@ export interface AtrTpResult {
 }
 
 export class AtrTpGenerator {
-  public static applyGuardrail(rawTp: number, range: GuardrailRange, entryPrice: number, isBuy: boolean): number {
-    const rawDist = Math.abs(rawTp - entryPrice);
-    const maxDist = entryPrice * (range.maxPct / 100);
-    const minDist = entryPrice * (range.minPct / 100);
-    // Safety ceiling: cap at maxDist (maxPct). Safety floor: ensure at least minDist (minPct) if rawDist is smaller.
-    // If rawDist is larger than minDist (volatility/risk-derived target), keep rawDist (do not move closer).
-    let dist = Math.min(rawDist, maxDist);
-    if (dist < minDist) {
-      dist = minDist;
-    }
-    return isBuy ? entryPrice + dist : entryPrice - dist;
-  }
-
   /**
    * Determine volatility regime based on ATR % relative to price if not explicitly provided.
    */
@@ -197,7 +184,9 @@ export class AtrTpGenerator {
     };
 
     const applyGuardrail = (rawTp: number, range: GuardrailRange): number => {
-      return AtrTpGenerator.applyGuardrail(rawTp, range, entryPrice, isBuy);
+      const distPct = (Math.abs(rawTp - entryPrice) / entryPrice) * 100;
+      const clampedPct = Math.min(Math.max(distPct, range.minPct), range.maxPct);
+      return isBuy ? entryPrice * (1 + clampedPct / 100) : entryPrice * (1 - clampedPct / 100);
     };
 
     let tp1Clamped = applyGuardrail(rawTp1, guardrails.tp1);
@@ -238,25 +227,6 @@ export class AtrTpGenerator {
     const isOrdered = isBuy
       ? entryPrice < tp1 && tp1 < tp2 && tp2 < tp3
       : entryPrice > tp1 && tp1 > tp2 && tp2 > tp3;
-
-    // Absolute positivity / sanity guard — negative, zero, or non-finite
-    // targets must never be emitted, regardless of ordering.
-    const allFiniteAndPositive =
-      Number.isFinite(tp1) && tp1 > 0 &&
-      Number.isFinite(tp2) && tp2 > 0 &&
-      Number.isFinite(tp3) && tp3 > 0;
-
-    if (!allFiniteAndPositive) {
-      return {
-        tp1, tp2, tp3,
-        takeProfit: tp2,
-        multipliersUsed: { m1, m2, m3 },
-        volatilityRegime,
-        isAggressive,
-        isValid: false,
-        rejectionReason: `Generated take-profit target is non-positive or invalid for ${direction}: entry=${entryPrice}, tp1=${tp1}, tp2=${tp2}, tp3=${tp3}`,
-      };
-    }
 
     if (!isOrdered) {
       return {

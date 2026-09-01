@@ -29,18 +29,10 @@
  *    - Sends NO TRADE notification only if configured.
  */
 
-import { waitUntil } from '@vercel/functions';
-import {
-  OPERATIONAL_SCAN_BUDGET_MS,
-  HARD_SCAN_DEADLINE_MS,
-  CRON_DISPATCH_TIMEOUT_MS,
-  SCANNER_LOCK_TIMEOUT_MS,
-} from './ScannerConstants.js';
 import { signalEngine } from './SignalEngine.js';
 import { getDynamicPrecision } from '../../utils/formatters.js';
 import { TradeRankingEngine } from './TradeRankingEngine.js';
 import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
-import { marketDataManager } from '../market/MarketDataManager.js';
 import { Gate17CorrelationExposure } from './Gate17CorrelationExposure.js';
 import { SignalLifecycleManager } from './SignalLifecycleManager.js';
 import { SignalLogger } from './SignalLogger.js';
@@ -72,26 +64,9 @@ export interface ScannerSettings {
   lastScanTime: number;
 }
 
-export interface DispatchResult {
-  success: boolean;
-  status: 'DISPATCHED' | 'SKIPPED_SCAN_ALREADY_RUNNING' | 'SKIPPED_CAP_REACHED' | 'PERSISTENCE_UNAVAILABLE_DEGRADED' | 'ERROR';
-  message: string;
-  dispatchStartedAt: number;
-  dispatchCompletedAt: number;
-  cronRequestDurationMs: number;
-  cronResponseDurationMs: number;
-  dispatchDurationMs: number;
-  lockWaitMs: number;
-  instanceId?: string;
-  timestamp: number;
-  lastScanTime: number;
-  nextScanTime: number;
-  capState: DailyCapState;
-}
-
 export interface ManualScanResult {
   success: boolean;
-  status: 'COMPLETED' | 'DISPATCHED' | 'SCAN_ALREADY_RUNNING' | 'SKIPPED_CAP_REACHED' | 'SKIPPED_NOT_DUE' | 'PERSISTENCE_UNAVAILABLE_DEGRADED' | 'ERROR';
+  status: 'COMPLETED' | 'SCAN_ALREADY_RUNNING' | 'SKIPPED_CAP_REACHED' | 'SKIPPED_NOT_DUE' | 'PERSISTENCE_UNAVAILABLE_DEGRADED' | 'ERROR';
   message: string;
   timestamp: number;
   lastScanTime: number;
@@ -100,11 +75,6 @@ export interface ManualScanResult {
   candidatesRejectedPreliminary?: number;
   candidatesEvaluated: number;
   candidatesRejectedFinal?: number;
-  candidatesRejectedBeforeMTF?: number;
-  candidatesRejectedByMTF?: number;
-  candidatesRejectedByScore?: number;
-  candidatesRejectedByRR?: number;
-  candidatesRejectedByStructure?: number;
   signalsGenerated?: number;
   signalsAccepted?: number;
   acceptedSignalsCount: number;
@@ -113,39 +83,14 @@ export interface ManualScanResult {
   qualifiedSetups: TradingSignal[];
   rejectedCount: number;
   rejectionReasons: string[];
-  rejectionReasonsCounts?: Record<string, number>;
-  rejectionReasonsAggregated?: Record<string, number>;
-  candidateRejectionDetails?: any[];
   diagnosticsCount?: number;
   diagnostics?: string[];
   capState: DailyCapState;
   scanDurationMs?: number;
-  timingTelemetry?: {
-    globalScanStartMs: number;
-    globalScanDeadlineMs: number;
-    currentElapsedMs: number;
-    remainingBudgetMs: number;
-    gate6ElapsedMs: number;
-    stage3ElapsedMs: number;
-    timeBudgetExceeded: boolean;
-    providerRequestsStoppedByBudget: boolean;
-  };
-  globalScanStartMs?: number;
-  globalScanDeadlineMs?: number;
-  currentElapsedMs?: number;
-  remainingBudgetMs?: number;
-  gate6ElapsedMs?: number;
-  stage3ElapsedMs?: number;
-  timeBudgetExceeded?: boolean;
-  providerRequestsStoppedByBudget?: boolean;
 }
 
 export class HourlyScannerService {
   private isScanning = false;
-
-  public getIsScanning(): boolean {
-    return this.isScanning;
-  }
 
   constructor() {
     ScannerPersistence.init();
@@ -171,361 +116,35 @@ export class HourlyScannerService {
   /**
    * Manually triggers a scan execution (e.g. from UI admin actions).
    */
-  async triggerManualScan(isExternal = false, scanStartTime?: number): Promise<ManualScanResult> {
-    return await this.executeIntelligentScan(isExternal, scanStartTime ? { scanStartedAt: scanStartTime } : undefined);
+  async triggerManualScan(isExternal = false): Promise<ManualScanResult> {
+    return await this.executeIntelligentScan(isExternal);
   }
 
   /**
-   * GATE 1: Strictly Non-Blocking Automated Scan Dispatcher.
-   * Authenticates, checks lock/cap, acquires distributed lock, and immediately dispatches the background scan.
-   * Returns within < 1-2 seconds (typically < 50ms) so the cron HTTP response never waits for the market scan.
+   * Directly invokes Market Scan Engine when triggered by external cron-job.org.
+   * A cron execution means: "SCAN THE MARKET NOW."
+   * It does NOT check whether an internal timer or setting says it is due.
    */
-  async dispatchAutomatedScan(
-    isExternal = true,
-    dispatchStartTime: number = Date.now()
-  ): Promise<DispatchResult> {
-    const dispatchStartedAt = dispatchStartTime;
+  async triggerAutomatedScan(isExternal = true): Promise<ManualScanResult> {
+    const now = Date.now();
     const configuredTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-    logger.info(`[Hourly Scanner] DISPATCH_START | Date.now(): ${Date.now()} | ISO UTC: ${new Date().toISOString()} | Runtime TZ: ${configuredTz}`);
+    logger.info(`[Hourly Scanner] CRON_TRIGGER_EXECUTING | Date.now(): ${now} | ISO UTC: ${new Date(now).toISOString()} | Runtime TZ: ${configuredTz}`);
 
-    // Selectively clear expired cache entries and ticker quotes before starting dispatch
-    try {
-      const { marketCache } = await import('../market/CacheStore.js');
-      marketCache.clearExpired();
-      marketCache.clearTickers();
-    } catch {
-      // ignore
-    }
-
-    // 1. Check production persistence readiness
-    if (ScannerPersistence.isProductionMode() && !ScannerPersistence.isProductionPersistenceReady()) {
-      logger.error('[Hourly Scanner] AUTOMATED SCANNER DISPATCH DISABLED: Production persistence is unavailable (FIREBASE_SERVICE_ACCOUNT required).');
-      const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
-      const dispatchCompletedAt = Date.now();
-      const cronResponseDurationMs = dispatchCompletedAt - dispatchStartedAt;
-      await ScannerPersistence.recordTimingTelemetry({
-        dispatchStartedAt,
-        dispatchCompletedAt,
-        cronRequestDurationMs: cronResponseDurationMs,
-        cronResponseDurationMs,
-        dispatchDurationMs: cronResponseDurationMs,
-        lockWaitMs: 0,
-        backgroundStartedAt: 0,
-        backgroundCompletedAt: 0,
-        backgroundScanDurationMs: 0,
-        totalScanDurationMs: 0,
-        scanDurationMs: 0,
-        timeBudgetExceeded: false,
-        providerRequestsStoppedByBudget: false,
-        lockAcquired: false,
-        instanceId: 'none',
-        status: 'PERSISTENCE_UNAVAILABLE_DEGRADED',
-        diagnosticClassification: 'OK',
-        diagnosticMessage: 'Production persistence is unavailable',
-        timestamp: Date.now(),
-      });
-      return {
-        success: false,
-        status: 'PERSISTENCE_UNAVAILABLE_DEGRADED',
-        message: 'REJECTED: PRODUCTION_PERSISTENCE_UNAVAILABLE. Firebase Service Account required for automated scanner dispatch in production.',
-        dispatchStartedAt,
-        dispatchCompletedAt,
-        cronRequestDurationMs: cronResponseDurationMs,
-        cronResponseDurationMs,
-        dispatchDurationMs: cronResponseDurationMs,
-        lockWaitMs: 0,
-        timestamp: Date.now(),
-        lastScanTime: capState.lastScanTime,
-        nextScanTime: 0,
-        capState,
-      };
-    }
-
-    // 2. Check current daily cap state
-    const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
-    const currentDailyCount = capState.dailySignalCount;
-    const dailyCap = capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap;
-
-    if (currentDailyCount >= dailyCap) {
-      logger.info(`[Hourly Scanner] Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Dispatch skipped to preserve portfolio limits.`);
-      const dispatchCompletedAt = Date.now();
-      const cronResponseDurationMs = dispatchCompletedAt - dispatchStartedAt;
-      await ScannerPersistence.recordTimingTelemetry({
-        dispatchStartedAt,
-        dispatchCompletedAt,
-        cronRequestDurationMs: cronResponseDurationMs,
-        cronResponseDurationMs,
-        dispatchDurationMs: cronResponseDurationMs,
-        lockWaitMs: 0,
-        backgroundStartedAt: 0,
-        backgroundCompletedAt: 0,
-        backgroundScanDurationMs: 0,
-        totalScanDurationMs: 0,
-        scanDurationMs: 0,
-        timeBudgetExceeded: false,
-        providerRequestsStoppedByBudget: false,
-        lockAcquired: false,
-        instanceId: 'none',
-        status: 'SKIPPED_CAP_REACHED',
-        diagnosticClassification: 'OK',
-        diagnosticMessage: `Daily signal cap reached (${currentDailyCount}/${dailyCap})`,
-        timestamp: Date.now(),
-      });
-      return {
-        success: true,
-        status: 'SKIPPED_CAP_REACHED',
-        message: `REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving risk limits.`,
-        dispatchStartedAt,
-        dispatchCompletedAt,
-        cronRequestDurationMs: cronResponseDurationMs,
-        cronResponseDurationMs,
-        dispatchDurationMs: cronResponseDurationMs,
-        lockWaitMs: 0,
-        timestamp: Date.now(),
-        lastScanTime: capState.lastAutomatedScan || capState.lastScanTime || 0,
-        nextScanTime: 0,
-        capState,
-      };
-    }
-
-    // 3. Check and acquire distributed lock
-    const instanceId = Math.random().toString(36).substring(2, 9);
-    const lockResult = await ScannerPersistence.tryAcquireLock(instanceId, SCANNER_LOCK_TIMEOUT_MS);
-    const lockWaitMs = lockResult.lockWaitMs || 0;
-
-    if (!lockResult.acquired) {
-      logger.warn(`[Hourly Scanner] Dispatch rejected - lock held: ${lockResult.reason || 'Scan already running'}`);
-      const dispatchCompletedAt = Date.now();
-      const cronResponseDurationMs = dispatchCompletedAt - dispatchStartedAt;
-      await ScannerPersistence.recordTimingTelemetry({
-        dispatchStartedAt,
-        dispatchCompletedAt,
-        cronRequestDurationMs: cronResponseDurationMs,
-        cronResponseDurationMs,
-        dispatchDurationMs: cronResponseDurationMs,
-        lockWaitMs,
-        backgroundStartedAt: 0,
-        backgroundCompletedAt: 0,
-        backgroundScanDurationMs: 0,
-        totalScanDurationMs: 0,
-        scanDurationMs: 0,
-        timeBudgetExceeded: false,
-        providerRequestsStoppedByBudget: false,
-        lockAcquired: false,
-        instanceId,
-        status: 'SKIPPED_SCAN_ALREADY_RUNNING',
-        diagnosticClassification: 'LOCK_CONTENTION',
-        diagnosticMessage: lockResult.reason || 'Scan lock currently held',
-        timestamp: Date.now(),
-      });
-      return {
-        success: false,
-        status: 'SKIPPED_SCAN_ALREADY_RUNNING',
-        message: `REJECTED: SCAN_ALREADY_RUNNING. Another scan cycle is currently in progress (${lockResult.reason || 'Locked'}).`,
-        dispatchStartedAt,
-        dispatchCompletedAt,
-        cronRequestDurationMs: cronResponseDurationMs,
-        cronResponseDurationMs,
-        dispatchDurationMs: cronResponseDurationMs,
-        lockWaitMs,
-        timestamp: Date.now(),
-        lastScanTime: capState.lastScanTime,
-        nextScanTime: 0,
-        capState,
-      };
-    }
-
-    const dispatchCompletedAt = Date.now();
-    const cronResponseDurationMs = dispatchCompletedAt - dispatchStartedAt;
-
-    // 4. Fire the scan in the background WITHOUT awaiting it, so the
-    // HTTP response returns immediately and never risks the external
-    // cron scheduler's request timeout. waitUntil() tells Vercel's
-    // runtime to keep this execution context alive until the promise
-    // settles, even after the HTTP response has already been sent -
-    // without it, this background work has no platform guarantee of
-    // actually completing.
-    const backgroundStartMs = Date.now();
-    const backgroundScanPromise = this.executeBackgroundScan(instanceId, isExternal, {
-      scanStartedAt: backgroundStartMs,
-      operationalBudgetMs: OPERATIONAL_SCAN_BUDGET_MS,
-      hardDeadlineMs: HARD_SCAN_DEADLINE_MS,
-      dispatchStartedAt,
-      dispatchCompletedAt,
-      cronResponseDurationMs,
-      lockWaitMs,
-    }).catch((err) => {
-      logger.error(`[Hourly Scanner] BACKGROUND_SCAN_UNCAUGHT_ERROR | instanceId: ${instanceId} | error: ${err instanceof Error ? err.message : String(err)}`);
-    });
-    try {
-      waitUntil(backgroundScanPromise);
-    } catch (waitUntilErr) {
-      // waitUntil is only meaningful inside an active Vercel request
-      // context. If it throws (e.g. running outside Vercel, or an
-      // older runtime), the scan still proceeds via the unawaited
-      // promise above - this just means the extra reliability
-      // guarantee wasn't available in this environment. Log it once so
-      // it's visible, don't fail the dispatch over it.
-      logger.warn(`[Hourly Scanner] waitUntil unavailable in this execution context: ${waitUntilErr instanceof Error ? waitUntilErr.message : String(waitUntilErr)}`);
-    }
-
-    logger.info(`[Hourly Scanner] DISPATCH_COMPLETED | duration: ${cronResponseDurationMs}ms | instanceId: ${instanceId}`);
-
-    return {
-      success: true,
-      status: 'DISPATCHED',
-      message: 'Automated market scan dispatched successfully (running in background).',
-      dispatchStartedAt,
-      dispatchCompletedAt,
-      cronRequestDurationMs: cronResponseDurationMs,
-      cronResponseDurationMs,
-      dispatchDurationMs: cronResponseDurationMs,
-      lockWaitMs,
-      timestamp: Date.now(),
-      lastScanTime: capState.lastScanTime,
-      nextScanTime: 0,
-      capState,
-      instanceId,
-    };
-  }
-
-  /**
-   * GATE 2: Background scan executor detached from the HTTP response.
-   * Runs the intelligent scan with an 18-second operational budget and 20-second absolute deadline.
-   */
-  async executeBackgroundScan(
-    instanceId: string,
-    isExternal: boolean,
-    options: {
-      scanStartedAt: number;
-      operationalBudgetMs: number;
-      hardDeadlineMs: number;
-      dispatchStartedAt: number;
-      dispatchCompletedAt: number;
-      cronResponseDurationMs: number;
-      lockWaitMs: number;
-    }
-  ): Promise<ManualScanResult> {
-    const backgroundStartedAt = Date.now();
-    logger.info(`[Hourly Scanner] BACKGROUND_SCAN_START | instanceId: ${instanceId} | operationalBudget: ${options.operationalBudgetMs}ms | hardDeadline: ${options.hardDeadlineMs}ms`);
-
-    let scanResult: ManualScanResult;
-    try {
-      scanResult = await this.executeIntelligentScan(
-        isExternal,
-        {
-          scanStartedAt: backgroundStartedAt,
-          globalScanBudgetMs: options.operationalBudgetMs,
-          hardDeadlineMs: options.hardDeadlineMs,
-        },
-        instanceId
-      );
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      logger.error(`[Hourly Scanner] BACKGROUND_SCAN_FAILED | error: ${errMsg}`);
-      const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
-      scanResult = {
-        success: false,
-        status: 'ERROR',
-        message: `REJECTED: SCAN_ERROR. Background scan execution error: ${errMsg}`,
-        timestamp: Date.now(),
-        lastScanTime: capState.lastAutomatedScan || capState.lastScanTime || 0,
-        candidatesEvaluated: 0,
-        acceptedSignalsCount: 0,
-        acceptedSignals: [],
-        signalsFound: 0,
-        qualifiedSetups: [],
-        rejectedCount: 0,
-        rejectionReasons: [`REJECTED: SCAN_ERROR. ${errMsg}`],
-        capState,
-      };
-    }
-
-    const backgroundCompletedAt = Date.now();
-    const scanDurationMs = backgroundCompletedAt - backgroundStartedAt;
-    const totalScanDurationMs = scanDurationMs;
-
-    // Diagnostic classification
-    let diagnosticClassification: 'OK' | 'CRON_HTTP_SLOW' | 'BACKGROUND_SCAN_SLOW' | 'LOCK_CONTENTION' | 'SERVERLESS_COLD_START' | 'PROVIDER_API_DELAY' | 'SCAN_FAILED' = 'OK';
-    let diagnosticMessage = 'Normal background scan execution';
-
-    if (scanResult.status === 'ERROR' || !scanResult.success) {
-      diagnosticClassification = 'SCAN_FAILED';
-      diagnosticMessage = scanResult.message || 'Background scan execution failed';
-    } else if (options.cronResponseDurationMs > CRON_DISPATCH_TIMEOUT_MS) {
-      diagnosticClassification = 'CRON_HTTP_SLOW';
-      diagnosticMessage = `Cron HTTP response latency high (${options.cronResponseDurationMs}ms > ${CRON_DISPATCH_TIMEOUT_MS}ms)`;
-    } else if (scanDurationMs > options.hardDeadlineMs) {
-      diagnosticClassification = 'BACKGROUND_SCAN_SLOW';
-      diagnosticMessage = `Background scan duration exceeded hard deadline (${scanDurationMs}ms > ${options.hardDeadlineMs}ms)`;
-    } else if (options.lockWaitMs > 1000) {
-      diagnosticClassification = 'LOCK_CONTENTION';
-      diagnosticMessage = `Lock contention detected (lock wait: ${options.lockWaitMs}ms)`;
-    } else if (scanResult.timeBudgetExceeded || scanResult.providerRequestsStoppedByBudget) {
-      diagnosticClassification = 'PROVIDER_API_DELAY';
-      diagnosticMessage = 'Scan operational budget reached; provider requests stopped';
-    }
-
-    await ScannerPersistence.recordTimingTelemetry({
-      dispatchStartedAt: options.dispatchStartedAt,
-      dispatchCompletedAt: options.dispatchCompletedAt,
-      cronRequestDurationMs: options.cronResponseDurationMs,
-      cronResponseDurationMs: options.cronResponseDurationMs,
-      dispatchDurationMs: options.cronResponseDurationMs,
-      lockWaitMs: options.lockWaitMs,
-      backgroundStartedAt,
-      backgroundCompletedAt,
-      backgroundScanDurationMs: scanDurationMs,
-      totalScanDurationMs,
-      scanDurationMs,
-      timeBudgetExceeded: scanResult.timeBudgetExceeded ?? false,
-      providerRequestsStoppedByBudget: scanResult.providerRequestsStoppedByBudget ?? false,
-      lockAcquired: true,
-      instanceId,
-      status: scanResult.status,
-      diagnosticClassification,
-      diagnosticMessage,
-      timestamp: Date.now(),
-    });
-
-    logger.info(`[Hourly Scanner] BACKGROUND_SCAN_COMPLETED | duration: ${scanDurationMs}ms | classification: ${diagnosticClassification} | signals: ${scanResult.acceptedSignalsCount}`);
-
-    (scanResult as any).instanceId = instanceId;
-    return scanResult;
-  }
-
-  /**
-   * Backwards compatible automated scan trigger.
-   * If sync=true, runs synchronously; if sync=false (default), invokes non-blocking dispatch.
-   */
-  async triggerAutomatedScan(isExternal = true, scanStartTime?: number, sync = false): Promise<ManualScanResult | DispatchResult> {
-    if (sync) {
-      const now = Date.now();
-      const configuredTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-      logger.info(`[Hourly Scanner] CRON_TRIGGER_SYNC_EXECUTING | Date.now(): ${now} | ISO UTC: ${new Date(now).toISOString()} | Runtime TZ: ${configuredTz}`);
-      const { marketCache } = await import('../market/CacheStore.js');
-      marketCache.clearExpired();
-      marketCache.clearTickers();
-      return await this.executeIntelligentScan(isExternal, scanStartTime ? { scanStartedAt: scanStartTime, globalScanBudgetMs: OPERATIONAL_SCAN_BUDGET_MS } : { globalScanBudgetMs: OPERATIONAL_SCAN_BUDGET_MS });
-    }
-    return await this.dispatchAutomatedScan(isExternal, scanStartTime ?? Date.now());
+    // Selectively clear expired cache entries and ticker quotes before scan cycle
+    const { marketCache } = await import('../market/CacheStore.js');
+    marketCache.clearExpired();
+    marketCache.clearTickers();
+    return await this.executeIntelligentScan(isExternal);
   }
 
   /**
    * Main Intelligent Multi-Asset Scan & Signal Selection Pipeline.
    */
-  private async executeIntelligentScan(
-    isExternal = false,
-    options?: { scanStartedAt?: number; globalScanBudgetMs?: number; hardDeadlineMs?: number },
-    preAcquiredInstanceId?: string
-  ): Promise<ManualScanResult> {
-    const scanStartTime = options?.scanStartedAt ?? Date.now();
-    const globalScanStartMs = scanStartTime;
-    const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? OPERATIONAL_SCAN_BUDGET_MS;
-    const globalScanDeadlineMs = globalScanStartMs + GLOBAL_SCAN_BUDGET_MS;
-    logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime} | deadline: ${globalScanDeadlineMs}`);
+  private async executeIntelligentScan(isExternal = false): Promise<ManualScanResult> {
+    const scanStartTime = Date.now();
+    logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime}`);
 
-    if (ScannerPersistence.isProductionMode() && !ScannerPersistence.isProductionPersistenceReady()) {
+    if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
       logger.error('[Hourly Scanner] AUTOMATED SCANNER DISPATCH DISABLED: Production persistence is unavailable (FIREBASE_SERVICE_ACCOUNT required).');
       const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
       return {
@@ -545,86 +164,74 @@ export class HourlyScannerService {
       };
     }
 
-    const instanceId = preAcquiredInstanceId || Math.random().toString(36).substring(2, 9);
-    if (!preAcquiredInstanceId) {
-      const lockResult = await ScannerPersistence.tryAcquireLock(instanceId, 60000);
+    const instanceId = Math.random().toString(36).substring(2, 9);
+    const lockResult = await ScannerPersistence.tryAcquireLock(instanceId);
 
-      if (!lockResult.acquired) {
-        const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
-        logger.warn(`[Hourly Scanner] Concurrency lock check: ${lockResult.reason || 'Scan already running'}`);
+    if (!lockResult.acquired) {
+      const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
+      logger.warn(`[Hourly Scanner] Concurrency lock check: ${lockResult.reason || 'Scan already running'}`);
+      return {
+        success: false,
+        status: 'SCAN_ALREADY_RUNNING',
+        message: 'REJECTED: SCAN_ALREADY_RUNNING. Another scan cycle is currently in progress.',
+        timestamp: Date.now(),
+        lastScanTime: capState.lastScanTime,
+        candidatesEvaluated: 0,
+        acceptedSignalsCount: 0,
+        acceptedSignals: [],
+        signalsFound: 0,
+        qualifiedSetups: [],
+        rejectedCount: 0,
+        rejectionReasons: ['REJECTED: SCAN_ALREADY_RUNNING. Concurrent scan execution prevented.'],
+        capState,
+      };
+    }
+
+    this.isScanning = true;
+
+    logger.info('================================================================');
+    logger.info('[Hourly Intelligent Scanner] Initiating Multi-Asset Scan Cycle...');
+    logger.info('================================================================');
+
+    try {
+      // 0. Evaluate active signals lifecycle (TP/SL/Expiration hits) and Adaptive Opportunity Funnel
+      const lifecycleStart = Date.now();
+      const lifecycleEval = await SignalLifecycleManager.evaluateActiveSignals();
+      if (lifecycleEval.evaluatedCount > 0) {
+        logger.info(`[Hourly Scanner] Lifecycle evaluation complete: ${lifecycleEval.evaluatedCount} active signals evaluated. TP Hits: ${lifecycleEval.tpHitCount}, SL Hits: ${lifecycleEval.slHitCount}, Expired: ${lifecycleEval.expiredCount}.`);
+      }
+
+      // Evaluate Opportunity Funnel items (Gate 26)
+      const funnelReport = OpportunityFunnelStore.evaluateAll();
+      if (funnelReport.totalActive > 0) {
+        logger.info(`[Hourly Scanner] Opportunity Funnel evaluation: ${funnelReport.totalActive} active tracked candidates (${funnelReport.watchingCount} watching, ${funnelReport.qualifiedCount} qualified, ${funnelReport.promotedCount} promoted).`);
+      }
+      const lifecycleDurationMs = Date.now() - lifecycleStart;
+      logger.info(`[Scanner Telemetry] LIFECYCLE_EVALUATION | duration: ${lifecycleDurationMs}ms`);
+
+      // 1. Check current Daily Cap state
+      const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
+      const currentDailyCount = capState.dailySignalCount;
+      const dailyCap = capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap;
+
+      if (currentDailyCount >= dailyCap) {
+        logger.info(`[Hourly Scanner] Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Scanning skipped to preserve portfolio limits.`);
         return {
-          success: false,
-          status: 'SCAN_ALREADY_RUNNING',
-          message: 'REJECTED: SCAN_ALREADY_RUNNING. Another scan cycle is currently in progress.',
+          success: true,
+          status: 'SKIPPED_CAP_REACHED',
+          message: `REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving risk limits.`,
           timestamp: Date.now(),
-          lastScanTime: capState.lastScanTime,
+          lastScanTime: capState.lastAutomatedScan || capState.lastScanTime || 0,
           candidatesEvaluated: 0,
           acceptedSignalsCount: 0,
           acceptedSignals: [],
           signalsFound: 0,
           qualifiedSetups: [],
           rejectedCount: 0,
-          rejectionReasons: ['REJECTED: SCAN_ALREADY_RUNNING. Concurrent scan execution prevented.'],
+          rejectionReasons: [`REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving portfolio risk limits.`],
           capState,
         };
       }
-    }
-
-    this.isScanning = true;
-
-    const scanType: 'MANUAL' | 'CRON' | 'AI' = isExternal ? 'CRON' : 'MANUAL';
-    const scanExecutionId = `${scanType.toLowerCase()}_${scanStartTime}_${instanceId}`;
-    const scanContext = {
-      scanExecutionId,
-      scanType,
-      scanStartedAt: scanStartTime,
-    };
-
-    logger.info('================================================================');
-    logger.info(`[Hourly Intelligent Scanner] Initiating Multi-Asset Scan Cycle (${scanExecutionId})...`);
-    logger.info('================================================================');
-
-    try {
-      return await marketDataManager.runInScanContext(scanContext, async () => {
-        try {
-        // 0. Evaluate active signals lifecycle (TP/SL/Expiration hits) and Adaptive Opportunity Funnel
-        const lifecycleStart = Date.now();
-        const lifecycleEval = await SignalLifecycleManager.evaluateActiveSignals();
-        if (lifecycleEval.evaluatedCount > 0) {
-          logger.info(`[Hourly Scanner] Lifecycle evaluation complete: ${lifecycleEval.evaluatedCount} active signals evaluated. TP Hits: ${lifecycleEval.tpHitCount}, SL Hits: ${lifecycleEval.slHitCount}, Expired: ${lifecycleEval.expiredCount}.`);
-        }
-
-        // Evaluate Opportunity Funnel items (Gate 26)
-        const funnelReport = OpportunityFunnelStore.evaluateAll();
-        if (funnelReport.totalActive > 0) {
-          logger.info(`[Hourly Scanner] Opportunity Funnel evaluation: ${funnelReport.totalActive} active tracked candidates (${funnelReport.watchingCount} watching, ${funnelReport.qualifiedCount} qualified, ${funnelReport.promotedCount} promoted).`);
-        }
-        const lifecycleDurationMs = Date.now() - lifecycleStart;
-        logger.info(`[Scanner Telemetry] LIFECYCLE_EVALUATION | duration: ${lifecycleDurationMs}ms`);
-
-        // 1. Check current Daily Cap state
-        const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
-        const currentDailyCount = capState.dailySignalCount;
-        const dailyCap = capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap;
-
-        if (currentDailyCount >= dailyCap) {
-          logger.info(`[Hourly Scanner] Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Scanning skipped to preserve portfolio limits.`);
-          return {
-            success: true,
-            status: 'SKIPPED_CAP_REACHED',
-            message: `REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving risk limits.`,
-            timestamp: Date.now(),
-            lastScanTime: capState.lastAutomatedScan || capState.lastScanTime || 0,
-            candidatesEvaluated: 0,
-            acceptedSignalsCount: 0,
-            acceptedSignals: [],
-            signalsFound: 0,
-            qualifiedSetups: [],
-            rejectedCount: 0,
-            rejectionReasons: [`REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (${currentDailyCount}/${dailyCap}). Preserving portfolio risk limits.`],
-            capState,
-          };
-        }
 
       const remainingAllowance = dailyCap - currentDailyCount;
       logger.info(`[Hourly Scanner] Daily Cap status: ${currentDailyCount}/${dailyCap} used. Remaining allowance: ${remainingAllowance}`);
@@ -636,20 +243,11 @@ export class HourlyScannerService {
       const universeDiagnostics: Array<{ symbol: string; reason: string }> = [];
       const rejectedDuringScan: Array<{ symbol: string; direction?: string; score?: number; reason: string }> = [];
 
-      let maxGate6ElapsedMs = 0;
-      let maxStage3ElapsedMs = 0;
-      let aggregatedTimeBudgetExceeded = false;
-      let aggregatedProviderRequestsStoppedByBudget = false;
-
       const categoryScanResults = await Promise.all(
         categories.map(async (category) => {
           try {
             logger.info(`[Hourly Scanner] Scanning universe: [${category}]...`);
-            const result = await signalEngine.generateSignal(category, category, false, {
-              scanStartedAt: globalScanStartMs,
-              globalScanBudgetMs: GLOBAL_SCAN_BUDGET_MS,
-              hardDeadlineMs: options?.hardDeadlineMs,
-            });
+            const result = await signalEngine.generateSignal(category, category, false);
             return { category, result };
           } catch (catErr) {
             logger.error(`[Hourly Scanner] Scan error for ${category}:`, { error: String(catErr) });
@@ -664,13 +262,6 @@ export class HourlyScannerService {
       let totalCandidatesEvaluated = 0;
       let totalCandidatesRejectedFinal = 0;
       let totalSignalsGenerated = 0;
-      let totalCandidatesRejectedBeforeMTF = 0;
-      let totalCandidatesRejectedByMTF = 0;
-      let totalCandidatesRejectedByScore = 0;
-      let totalCandidatesRejectedByRR = 0;
-      let totalCandidatesRejectedByStructure = 0;
-      const aggregatedRejectionCounts: Record<string, number> = {};
-      const allCandidateRejectionDetails: any[] = [];
 
       for (const { category, result } of categoryScanResults) {
         const catUniverseSize = category === 'CRYPTO' ? 45 : category === 'FOREX' ? 20 : 48;
@@ -683,38 +274,12 @@ export class HourlyScannerService {
         const candidatesRejectedFinal = tel?.candidatesRejectedFinal ?? (candidatesEvaluated - (result.success && Array.isArray(result.signals) ? result.signals.length : 0));
         const signalsGenerated = tel?.signalsGenerated ?? (result.success && Array.isArray(result.signals) ? result.signals.length : 0);
 
-        if (tel) {
-          if (typeof tel.gate6ElapsedMs === 'number' && tel.gate6ElapsedMs > maxGate6ElapsedMs) {
-            maxGate6ElapsedMs = tel.gate6ElapsedMs;
-          }
-          if (typeof tel.stage3ElapsedMs === 'number' && tel.stage3ElapsedMs > maxStage3ElapsedMs) {
-            maxStage3ElapsedMs = tel.stage3ElapsedMs;
-          }
-          if (tel.timeBudgetExceeded) aggregatedTimeBudgetExceeded = true;
-          if (tel.providerRequestsStoppedByBudget) aggregatedProviderRequestsStoppedByBudget = true;
-          if (typeof tel.candidatesRejectedBeforeMTF === 'number') totalCandidatesRejectedBeforeMTF += tel.candidatesRejectedBeforeMTF;
-          if (typeof tel.candidatesRejectedByMTF === 'number') totalCandidatesRejectedByMTF += tel.candidatesRejectedByMTF;
-          if (typeof tel.candidatesRejectedByScore === 'number') totalCandidatesRejectedByScore += tel.candidatesRejectedByScore;
-          if (typeof tel.candidatesRejectedByRR === 'number') totalCandidatesRejectedByRR += tel.candidatesRejectedByRR;
-          if (typeof tel.candidatesRejectedByStructure === 'number') totalCandidatesRejectedByStructure += tel.candidatesRejectedByStructure;
-        }
-
         totalUniverseSymbolsScanned += universeSymbolsScanned;
         totalPreliminaryCandidatesFound += preliminaryCandidatesFound;
         totalCandidatesRejectedPreliminary += candidatesRejectedPreliminary;
         totalCandidatesEvaluated += candidatesEvaluated;
         totalCandidatesRejectedFinal += candidatesRejectedFinal;
         totalSignalsGenerated += signalsGenerated;
-
-        // Aggregate granular rejection reasons and candidate logs
-        if (result.rejectionReasons) {
-          for (const [gate, count] of Object.entries(result.rejectionReasons)) {
-            aggregatedRejectionCounts[gate] = (aggregatedRejectionCounts[gate] || 0) + (count as number);
-          }
-        }
-        if (Array.isArray(result.candidateRejectionDetails)) {
-          allCandidateRejectionDetails.push(...result.candidateRejectionDetails);
-        }
 
         if (result.success && Array.isArray(result.signals)) {
           rawCandidates.push(...result.signals);
@@ -725,14 +290,6 @@ export class HourlyScannerService {
           });
         }
       }
-
-      logger.info(`================================================================`);
-      logger.info(`[MULTI-ASSET FUNNEL AUDIT] (Total Scanned: ${totalUniverseSymbolsScanned})`);
-      logger.info(`- preliminaryCandidates: ${totalPreliminaryCandidatesFound}`);
-      logger.info(`- candidatesAfterQuota (deep budget sum): ${totalCandidatesEvaluated}`);
-      logger.info(`- candidatesSelectedForDeepAnalysis: ${totalCandidatesEvaluated}`);
-      logger.info(`- signalsSurvivingToStage3: ${totalSignalsGenerated}`);
-      logger.info(`================================================================`);
 
       const marketDataFetchDurationMs = Date.now() - marketDataFetchStart;
       logger.info(`[Scanner Telemetry] MARKET_DATA_FETCHING | duration: ${marketDataFetchDurationMs}ms | rawCandidatesFound: ${rawCandidates.length}`);
@@ -770,7 +327,7 @@ export class HourlyScannerService {
           initialScore: score,
           watchingThreshold: thresholds.watchingThreshold || 70,
           qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-          signalThreshold: thresholds.signalThreshold || 70,
+          signalThreshold: thresholds.signalThreshold || 80,
           strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
           timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
           grossRR,
@@ -807,7 +364,7 @@ export class HourlyScannerService {
           initialScore: coreScore,
           watchingThreshold: thresholds.watchingThreshold || 70,
           qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-          signalThreshold: thresholds.signalThreshold || 70,
+          signalThreshold: thresholds.signalThreshold || 80,
           strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
           timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
           grossRR,
@@ -1115,7 +672,7 @@ export class HourlyScannerService {
             initialScore: score,
             watchingThreshold: thresholds.watchingThreshold || 70,
             qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-            signalThreshold: thresholds.signalThreshold || 70,
+            signalThreshold: thresholds.signalThreshold || 80,
             strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
             timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
             grossRR,
@@ -1207,7 +764,7 @@ export class HourlyScannerService {
             initialScore: scoreVal,
             watchingThreshold: thresholds.watchingThreshold || 70,
             qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-            signalThreshold: thresholds.signalThreshold || 70,
+            signalThreshold: thresholds.signalThreshold || 80,
             strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
             timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
             grossRR,
@@ -1295,7 +852,7 @@ export class HourlyScannerService {
         Gate36ConfigurableSignalFrequency.recordNotificationCount(1);
 
         // Record Funnel Analytics Final Signal
-        const finalScore = sig.score ?? sig.confidenceScore ?? 70;
+        const finalScore = sig.score ?? sig.confidenceScore ?? 80;
         const grossRR = (sig as any).grossRiskRewardRatio ?? sig.riskRewardRatio ?? 0;
         const netRR = (sig as any).netRiskRewardRatio ?? sig.estimatedFriction?.netRiskRewardRatio ?? 0;
         const adverseNetRR = (sig as any).adverseNetRiskRewardRatio ?? (sig.estimatedFriction as any)?.adverseNetRiskRewardRatio ?? 0;
@@ -1313,7 +870,7 @@ export class HourlyScannerService {
           initialScore: finalScore,
           watchingThreshold: thresholds.watchingThreshold || 70,
           qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-          signalThreshold: thresholds.signalThreshold || 70,
+          signalThreshold: thresholds.signalThreshold || 80,
           strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
           timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
           grossRR,
@@ -1354,7 +911,7 @@ export class HourlyScannerService {
           dataFreshnessSeconds: 0,
           providerAgreement: true,
           expectedRR: sig.riskRewardRatio,
-          score: sig.score || 70,
+          score: sig.score || 80,
           status: 'ACCEPTED',
           rejectionReason: null,
           fingerprint: fp,
@@ -1392,7 +949,7 @@ export class HourlyScannerService {
 
       // 8. If NO setups qualified
       if (dispatchedCount === 0) {
-        logger.info(`[Hourly Scanner] No setups met the ${thresholds.signalThreshold}+ quality and diversification criteria. Dispatched 0 signals (0-${dailyCap} is completely valid).`);
+        logger.info(`[Hourly Scanner] No setups met the strict ${thresholds.signalThreshold}+ quality and diversification criteria. Dispatched 0 signals (0-${dailyCap} is completely valid).`);
         const settings = ScannerPersistence.getSettings();
         if (settings.notifyOnNoTrade && !isExternal) {
           await ScannerPersistence.recordNotification({
@@ -1404,17 +961,11 @@ export class HourlyScannerService {
         }
       }
 
-      
       // 9. Persist rejected candidates audit log
       if (rejectedDuringScan.length > 0) {
         await ScannerPersistence.recordRejectedCandidates(rejectedDuringScan);
         for (const rej of rejectedDuringScan) {
-          const match = rej.reason.match(/REJECTED: ([A-Z0-9_]+)/);
-          const gate = match ? match[1] : 'OTHER_REJECTION';
-          aggregatedRejectionCounts[gate] = (aggregatedRejectionCounts[gate] || 0) + 1;
-
           const dir: SignalDirection = (rej.direction === 'SELL' ? 'SELL' : 'BUY');
-
           const fp = SignalFingerprint.generateFingerprint({
             symbol: rej.symbol,
             direction: dir,
@@ -1445,25 +996,24 @@ export class HourlyScannerService {
       const scanDurationMs = Date.now() - scanStartTime;
       const totalCandidatesRejectedFinalCombined = totalCandidatesRejectedFinal + rejectedDuringScan.length;
 
-      // 10. Update authoritative lastAutomatedScan metrics for the completed scan
-      await ScannerPersistence.recordAutomatedScanMetrics({
-        lastAutomatedScan: scanStartTime,
-        lastScanCompletedAt: Date.now(),
-        lastScanDuration: scanDurationMs,
-        lastCandidatesEvaluated: totalCandidatesEvaluated,
-        lastSignalsFound: totalSignalsGenerated,
-        lastAcceptedSignals: dispatchedCount,
-        universeSymbolsScanned: totalUniverseSymbolsScanned,
-        preliminaryCandidatesFound: totalPreliminaryCandidatesFound,
-        candidatesRejectedPreliminary: totalCandidatesRejectedPreliminary,
-        candidatesEvaluated: totalCandidatesEvaluated,
-        candidatesRejectedFinal: totalCandidatesRejectedFinalCombined,
-        signalsGenerated: totalSignalsGenerated,
-        signalsAccepted: dispatchedCount,
-        deepCandidates: totalPreliminaryCandidatesFound,
-        signalsRejected: totalCandidatesRejectedFinalCombined,
-        rejectionReasons: aggregatedRejectionCounts,
-      });
+      // 10. Update authoritative lastAutomatedScan metrics ONLY if triggered externally from /api/scanner/trigger
+      if (isExternal) {
+        await ScannerPersistence.recordAutomatedScanMetrics({
+          lastAutomatedScan: scanStartTime,
+          lastScanCompletedAt: Date.now(),
+          lastScanDuration: scanDurationMs,
+          lastCandidatesEvaluated: totalCandidatesEvaluated,
+          lastSignalsFound: totalSignalsGenerated,
+          lastAcceptedSignals: dispatchedCount,
+          universeSymbolsScanned: totalUniverseSymbolsScanned,
+          preliminaryCandidatesFound: totalPreliminaryCandidatesFound,
+          candidatesRejectedPreliminary: totalCandidatesRejectedPreliminary,
+          candidatesEvaluated: totalCandidatesEvaluated,
+          candidatesRejectedFinal: totalCandidatesRejectedFinalCombined,
+          signalsGenerated: totalSignalsGenerated,
+          signalsAccepted: dispatchedCount,
+        });
+      }
 
       const persistenceDurationMs = Date.now() - persistenceStart;
       logger.info(`[Scanner Telemetry] PERSISTENCE | duration: ${persistenceDurationMs}ms`);
@@ -1481,30 +1031,13 @@ export class HourlyScannerService {
         (d) => `${d.symbol}: ${d.reason}`
       );
 
-      const currentElapsedMs = Date.now() - globalScanStartMs;
-      const remainingBudgetMs = Math.max(0, globalScanDeadlineMs - Date.now());
-      if (remainingBudgetMs <= 0) {
-        aggregatedTimeBudgetExceeded = true;
-      }
-
-      const timingTelemetry = {
-        globalScanStartMs,
-        globalScanDeadlineMs,
-        currentElapsedMs,
-        remainingBudgetMs,
-        gate6ElapsedMs: maxGate6ElapsedMs,
-        stage3ElapsedMs: maxStage3ElapsedMs,
-        timeBudgetExceeded: aggregatedTimeBudgetExceeded,
-        providerRequestsStoppedByBudget: aggregatedProviderRequestsStoppedByBudget,
-      };
-
-      const completedResult = {
+      return {
         success: true,
         status: 'COMPLETED',
         message:
           dispatchedCount > 0
             ? `Scan complete: Dispatched ${dispatchedCount} qualified automated setup(s). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`
-            : `Scan complete: 0 setups met ${finalCapState.dailySignalCap > 0 ? `${thresholds.signalThreshold}+` : ''} criteria (0-${finalCapState.dailySignalCap} is valid; no trades forced). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`,
+            : `Scan complete: 0 setups met strict ${finalCapState.dailySignalCap > 0 ? `${thresholds.signalThreshold}+` : ''} criteria (0-${finalCapState.dailySignalCap} is valid; no trades forced). Total today: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`,
         timestamp: Date.now(),
         lastScanTime: finalCapState.lastAutomatedScan || finalCapState.lastScanTime || scanStartTime,
         universeSymbolsScanned: totalUniverseSymbolsScanned,
@@ -1519,33 +1052,12 @@ export class HourlyScannerService {
         signalsFound: totalSignalsGenerated,
         qualifiedSetups: selectedSetups,
         rejectedCount: rejectedDuringScan.length,
-        candidatesRejectedBeforeMTF: totalCandidatesRejectedBeforeMTF,
-        candidatesRejectedByMTF: totalCandidatesRejectedByMTF,
-        candidatesRejectedByScore: totalCandidatesRejectedByScore,
-        candidatesRejectedByRR: totalCandidatesRejectedByRR,
-        candidatesRejectedByStructure: totalCandidatesRejectedByStructure,
         rejectionReasons: rejectionReasonStrings,
-        rejectionReasonsAggregated: aggregatedRejectionCounts,
-        rejectionReasonsCounts: aggregatedRejectionCounts,
-        candidateRejectionDetails: allCandidateRejectionDetails,
         diagnosticsCount: universeDiagnostics.length,
         diagnostics: diagnosticStrings,
         capState: finalCapState,
         scanDurationMs,
-        timingTelemetry,
-        globalScanStartMs,
-        globalScanDeadlineMs,
-        currentElapsedMs,
-        remainingBudgetMs,
-        gate6ElapsedMs: maxGate6ElapsedMs,
-        stage3ElapsedMs: maxStage3ElapsedMs,
-        timeBudgetExceeded: aggregatedTimeBudgetExceeded,
-        providerRequestsStoppedByBudget: aggregatedProviderRequestsStoppedByBudget,
       };
-
-      await ScannerPersistence.recordLastCompletedScanResult(completedResult);
-
-      return completedResult;
     } catch (err) {
       logger.error('[Hourly Scanner] Critical failure during scan execution:', { error: String(err) });
       if (isExternal) {
@@ -1579,8 +1091,6 @@ export class HourlyScannerService {
         rejectionReasons: [`REJECTED: SCAN_ERROR. Scan execution error: ${errMsg}`],
         capState,
       };
-    }
-    });
     } finally {
       this.isScanning = false;
       await ScannerPersistence.releaseLock(instanceId);
@@ -1629,22 +1139,7 @@ export class HourlyScannerService {
     // Authoritative cron-job.org job status
     const cronStatus = await CronJobOrgService.getJobStatus();
     const lastCronExecution = cronStatus.lastExecution?.timestamp || capState.lastCronExecution || 0;
-    let nextCronExecution = cronStatus.nextExecution?.timestamp || 0;
-    if (nextCronExecution === 0) {
-      const now = Date.now();
-      const configuredInterval = intervalMinutes * 60;
-      let nextEligibleScan = now + configuredInterval * 1000;
-      if (lastAutomatedScan) {
-        const elapsed = now - lastAutomatedScan;
-        const intervalMs = configuredInterval * 1000;
-        if (elapsed < intervalMs) {
-          nextEligibleScan = lastAutomatedScan + intervalMs;
-        } else {
-          nextEligibleScan = lastAutomatedScan + Math.ceil(elapsed / intervalMs) * intervalMs;
-        }
-      }
-      nextCronExecution = nextEligibleScan;
-    }
+    const nextCronExecution = cronStatus.nextExecution?.timestamp || 0;
     const nextScanTime = nextCronExecution;
 
     let scannerStatus: 'ACTIVE' | 'RUNNING' | 'DISABLED' | 'CAP_REACHED' = 'ACTIVE';

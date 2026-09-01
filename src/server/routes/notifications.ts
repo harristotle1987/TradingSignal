@@ -5,6 +5,7 @@
 import { Router, Request, Response } from 'express';
 import { PushNotificationService } from '../notifications/PushNotificationService.js';
 import { logger } from '../logger.js';
+import { adminAuthMiddleware } from '../middleware/adminAuth.js';
 
 const router = Router();
 

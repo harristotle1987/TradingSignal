@@ -201,10 +201,10 @@ export class Gate19RegimePerformanceMatrix {
         strategy,
         marketRegime,
         sampleSize: 0,
-        winRate: 0.0,
+        winRate: 50.0,
         averageR: 0,
         expectancy: 0,
-        profitFactor: 0.0,
+        profitFactor: 1.0,
         maxDrawdown: 0,
         maeAvg: 0,
         mfeAvg: 0,
@@ -225,12 +225,12 @@ export class Gate19RegimePerformanceMatrix {
     const totalGrossLossR = Math.abs(losses.reduce((sum, t) => sum + t.rMultiple, 0));
     const profitFactor = totalGrossLossR > 0
       ? Number((totalGrossWinR / totalGrossLossR).toFixed(2))
-      : (totalGrossWinR > 0 ? Number(totalGrossWinR.toFixed(2)) : 0.0);
+      : (totalGrossWinR > 0 ? 3.0 : 1.0);
 
     const winProb = winRate / 100;
     const lossProb = 1 - winProb;
-    const avgWin = wins.length > 0 ? totalGrossWinR / wins.length : 0.0;
-    const avgLoss = losses.length > 0 ? totalGrossLossR / losses.length : 0.0;
+    const avgWin = wins.length > 0 ? totalGrossWinR / wins.length : 2.0;
+    const avgLoss = losses.length > 0 ? totalGrossLossR / losses.length : 1.0;
     const expectancy = Number((winProb * avgWin - lossProb * avgLoss).toFixed(3));
 
     // Calculate Max Drawdown in R

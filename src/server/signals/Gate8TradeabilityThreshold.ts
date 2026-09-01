@@ -35,7 +35,6 @@
 
 import { SignalDirection } from '../../types/index.js';
 import { logger } from '../logger.js';
-import { serverConfig } from '../config.js';
 
 export type Gate8ScoreClassification =
   | 'REJECT'
@@ -91,9 +90,7 @@ export interface Gate8EvaluationResult {
 }
 
 export class Gate8TradeabilityThreshold {
-  public static get FINAL_TRADEABILITY_THRESHOLD(): number {
-    return serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 70;
-  }
+  public static readonly FINAL_TRADEABILITY_THRESHOLD = 75;
 
   /**
    * Evaluates a candidate against the 10-factor weighted scoring rubric and assigns classification.
@@ -204,10 +201,7 @@ export class Gate8TradeabilityThreshold {
 
     const finalScore = Math.round(Math.max(0, Math.min(100, rawTotal)));
 
-    const finalThreshold = this.FINAL_TRADEABILITY_THRESHOLD;
-    const watchingThreshold = serverConfig?.getConfig?.()?.thresholds?.watchingThreshold || 68;
-
-    // Assign Classification based on Final Score
+    // Assign Strict Classification based on Final Score
     let classification: Gate8ScoreClassification;
     if (finalScore >= 90) {
       classification = 'EXCEPTIONAL';
@@ -215,23 +209,23 @@ export class Gate8TradeabilityThreshold {
       classification = 'VERY_STRONG_SIGNAL';
     } else if (finalScore >= 80) {
       classification = 'STRONG_SIGNAL';
-    } else if (finalScore >= finalThreshold) {
+    } else if (finalScore >= 75) {
       classification = 'VALID_SIGNAL';
-    } else if (finalScore >= watchingThreshold) {
+    } else if (finalScore >= 70) {
       classification = 'NEAR_MISS_WATCHLIST';
     } else {
       classification = 'REJECT';
     }
 
-    const isTradeable = finalScore >= finalThreshold;
-    const marginAboveThreshold = finalScore - finalThreshold;
+    const isTradeable = finalScore >= this.FINAL_TRADEABILITY_THRESHOLD;
+    const marginAboveThreshold = finalScore - this.FINAL_TRADEABILITY_THRESHOLD;
 
     let rejectionReason: string | null = null;
     if (!isTradeable) {
       if (classification === 'NEAR_MISS_WATCHLIST') {
-        rejectionReason = `Score ${finalScore}/100 is in Watchlist range (${watchingThreshold}–${finalThreshold - 1}), below the final tradeability threshold of ${finalThreshold}. Setup routed to Opportunity Watchlist.`;
+        rejectionReason = `Score ${finalScore}/100 is in Watchlist range (70–74), below the strict final tradeability threshold of ${this.FINAL_TRADEABILITY_THRESHOLD}. Setup routed to Opportunity Watchlist.`;
       } else {
-        rejectionReason = `Score ${finalScore}/100 is below the final tradeability threshold of ${finalThreshold} (Classification: ${classification}).`;
+        rejectionReason = `Score ${finalScore}/100 is below the strict final tradeability threshold of ${this.FINAL_TRADEABILITY_THRESHOLD} (Classification: ${classification}).`;
       }
     }
 

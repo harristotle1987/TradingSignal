@@ -44,13 +44,6 @@ export class CronJobOrgService {
   private static isFetching = false;
 
   /**
-   * Retrieves the current synchronously cached status response.
-   */
-  public static getCachedStatus(): CronJobOrgStatusResponse | null {
-    return this.cachedStatus;
-  }
-
-  /**
    * Normalize cron-job.org timestamps which can be either seconds (10-digit), ms (13-digit),
    * nested objects ({ timestamp, date, executedAt }), or date strings.
    */

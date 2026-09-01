@@ -200,10 +200,10 @@ export class StrategyEngine {
     // GATE 84: Different valid setups qualify through different combinations of core evidence.
     // A valid trend trade does NOT require breakout, pullback, mean reversion, or order flow simultaneously.
     // Archetype core combinations:
-    // 1. Trend: Trend Following (s1) or Momentum (s2) + Volatility Filter (s6) + at least 3 agreeing strategies OR weighted agreement >= 40%
+    // 1. Trend: Trend Following (s1) or Momentum (s2) + Volatility Filter (s6) + at least 3 agreeing strategies OR weighted agreement >= 45%
     // 2. Breakout: Breakout (s3) + Volatility Filter (s6) + (Momentum s2 || Order Flow s5 || agreeing >= 2)
     // 3. Range: Mean Reversion (s4) + Volatility Filter (s6) + agreeing >= 2
-    const isCoreTrendCombo = StrategyEngine.isTrending(regime) && (s1.passed || s2.passed) && s6.passed && (agreeingStrategiesCount >= 3 || weightedAgreementRatio >= 0.40);
+    const isCoreTrendCombo = StrategyEngine.isTrending(regime) && (s1.passed || s2.passed) && s6.passed && (agreeingStrategiesCount >= 3 || weightedAgreementRatio >= 0.45);
     const isCoreBreakoutCombo = StrategyEngine.isBreakout(regime) && s3.passed && s6.passed && (agreeingStrategiesCount >= 2 || s2.passed || s5.passed);
     const isCoreRangeCombo = (StrategyEngine.isRanging(regime) || StrategyEngine.isLowVolatility(regime)) && s4.passed && s6.passed && agreeingStrategiesCount >= 2;
 
@@ -213,7 +213,7 @@ export class StrategyEngine {
         (rawWeightedScore / 100) * 30
     );
 
-    // Require configurable minimum strategies agreeing ratio (or qualified core combination), minimum 40 agreement score, and configurable minimum timeframe alignment ratio
+    // Require configurable minimum strategies agreeing ratio (or qualified core combination), minimum 45 agreement score, and configurable minimum timeframe alignment ratio
     const thresholds = serverConfig.getConfig().thresholds;
     const minimumRequiredAgreement = thresholds.minimumStrategyAgreement;
     const passed =
@@ -226,12 +226,12 @@ export class StrategyEngine {
 
     const hasStrongConfluence = 
       passed && 
-      agreementScore >= 40 && 
+      agreementScore >= 45 && 
       timeframeAlignmentRatio >= thresholds.minimumTimeframeAlignment;
 
     if (!hasStrongConfluence) {
       return this.createRejection(
-        `REJECTED: INSUFFICIENT_CONFLUENCE. Strategy agreement ratio ${(agreementRatio * 100).toFixed(1)}% (${agreeingStrategiesCount}/${totalStrategiesEvaluated}, min ${minimumRequiredAgreement * 100}%) with timeframe alignment ratio ${(timeframeAlignmentRatio * 100).toFixed(0)}% (${tfScores.alignedCount}/${tfScores.totalEvaluated}, min ${thresholds.minimumTimeframeAlignment * 100}%). Agreement Score: ${agreementScore}/100 (min 40 required)`,
+        `REJECTED: INSUFFICIENT_CONFLUENCE. Strategy agreement ratio ${(agreementRatio * 100).toFixed(1)}% (${agreeingStrategiesCount}/${totalStrategiesEvaluated}, min ${minimumRequiredAgreement * 100}%) with timeframe alignment ratio ${(timeframeAlignmentRatio * 100).toFixed(0)}% (${tfScores.alignedCount}/${tfScores.totalEvaluated}, min ${thresholds.minimumTimeframeAlignment * 100}%). Agreement Score: ${agreementScore}/100 (min 45 required)`,
         regime,
         regimeDetails
       );
@@ -497,11 +497,11 @@ export class StrategyEngine {
     // Case C: Moderate 1H Trend Continuation
     else if (lastEma9_1h > lastEma21_1h && entryPrice > lastEma21_1h && slope21_1h >= 0) {
       direction = 'BUY';
-      score = 70;
+      score = 72;
       reasons.push(`Moderate trend alignment: Price holding above upward-sloping 1H EMA21`);
     } else if (lastEma9_1h < lastEma21_1h && entryPrice < lastEma21_1h && slope21_1h <= 0) {
       direction = 'SELL';
-      score = 70;
+      score = 72;
       reasons.push(`Moderate trend alignment: Price holding below downward-sloping 1H EMA21`);
     }
 
@@ -598,11 +598,11 @@ export class StrategyEngine {
       );
     } else if (zlMacd1h.macdLine > zlMacd1h.signalLine && lastRsi1h >= 50) {
       direction = 'BUY';
-      score = 70;
+      score = 72;
       reasons.push('1H Zero-Lag MACD confirms underlying upward momentum');
     } else if (zlMacd1h.macdLine < zlMacd1h.signalLine && lastRsi1h <= 50) {
       direction = 'SELL';
-      score = 70;
+      score = 72;
       reasons.push('1H Zero-Lag MACD confirms underlying downward momentum');
     }
 

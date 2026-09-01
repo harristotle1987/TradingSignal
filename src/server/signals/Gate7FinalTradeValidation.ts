@@ -19,17 +19,15 @@
  * STRICT EXECUTION POLICY:
  * - If ANY hard gate fails -> candidate is NOT tradeable -> DO NOT generate a signal.
  * - Numerical score NEVER overrides hard gates. (A score of 95 with invalid entry data is strictly rejected).
- * - ACCEPTANCE CRITERIA: FINAL_SCORE >= 70 AND ALL HARD_GATES = PASS.
+ * - ACCEPTANCE CRITERIA: FINAL_SCORE >= 75 AND ALL HARD_GATES = PASS.
  * - Only then classify the candidate as TRADEABLE.
  */
 
 import { NormalizedCandle, NormalizedTicker, SignalDirection } from '../../types/index.js';
-import { serverConfig } from '../config.js';
 import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 import { CooldownManager } from './CooldownManager.js';
 import { SignalFingerprint } from './SignalFingerprint.js';
 import { MarketStructureDetector } from './MarketStructureDetector.js';
-import { RiskRewardCalculator, logRrRejectionDiagnostic } from './RiskRewardCalculator.js';
 import { logger } from '../logger.js';
 
 export interface HardGateEvaluation {
@@ -83,10 +81,8 @@ export interface Gate7ValidationResult {
 }
 
 export class Gate7FinalTradeValidation {
-  public static get REQUIRED_MIN_SCORE(): number {
-    return serverConfig?.getConfig?.()?.thresholds?.minimumScore ?? serverConfig?.getConfig?.()?.thresholds?.signalThreshold ?? 70;
-  }
-  public static readonly DEFAULT_MIN_RR = 1.5;
+  public static readonly REQUIRED_MIN_SCORE = 75;
+  public static readonly DEFAULT_MIN_RR = 1.3;
   public static readonly MAX_DATA_AGE_SECONDS = 180; // 3 minutes
 
   /**
@@ -362,34 +358,23 @@ export class Gate7FinalTradeValidation {
     let g9Passed = true;
     let g9Reason: string | undefined;
 
-    
-    const canonicalRR = RiskRewardCalculator.calculate(ctx.entryPrice, ctx.stopLoss, tp1, tp2, tp3, ctx.direction, minRR, ctx.symbol);
-    const effectiveRR = canonicalRR.effectiveGrossRR;
+    const stopDist = Math.abs(ctx.entryPrice - ctx.stopLoss);
+    const targetDist = Math.abs(tp1 - ctx.entryPrice);
+    const calculatedGrossRR = stopDist > 0 ? targetDist / stopDist : 0;
+    const effectiveRR = ctx.netRiskRewardRatio ?? (ctx.riskRewardRatio || calculatedGrossRR);
 
     if (isNaN(effectiveRR) || !isFinite(effectiveRR) || effectiveRR < minRR) {
       g9Passed = false;
-      g9Reason = `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${effectiveRR.toFixed(2)}:1) is below ${minRR}:1 minimum acceptable GROSS R:R`;
-      logRrRejectionDiagnostic({
-        symbol: ctx.symbol,
-        direction: ctx.direction,
-        entryPrice: ctx.entryPrice,
-        stopLoss: ctx.stopLoss,
-        tp1,
-        tp2,
-        tp3,
-        rejectionReason: g9Reason,
-      });
+      g9Reason = `Risk-to-reward ratio (${effectiveRR.toFixed(2)}) is below required minimum (${minRR}).`;
     }
-
     hardGates.push({
       id: 9,
       code: 'MIN_ACCEPTABLE_RR',
       name: 'Minimum Acceptable R:R',
       passed: g9Passed,
       reason: g9Reason,
-      data: { effectiveRR, minRR, calculatedGrossRR: canonicalRR.grossRR, passedViaTp3: canonicalRR.passedViaTp3 },
+      data: { effectiveRR, minRR, calculatedGrossRR },
     });
-
     if (!g9Passed) reasons.push(`[Gate 9 Minimum Acceptable RR] ${g9Reason}`);
 
     // =========================================================================
@@ -580,8 +565,8 @@ export class Gate7FinalTradeValidation {
       validatedAt: now,
       adjustedEntryPrice: ctx.entryPrice,
       adjustedStopLoss: ctx.stopLoss,
-      adjustedTakeProfit: canonicalRR.passedViaTp3 ? tp3 : tp2,
-      adjustedNetRR: canonicalRR.grossRR,
+      adjustedTakeProfit: tp1,
+      adjustedNetRR: effectiveRR,
     };
   }
 }

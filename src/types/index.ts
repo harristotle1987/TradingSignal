@@ -149,8 +149,6 @@ export interface TradingSignal {
   tp1Rr?: number;
   tp2Rr?: number;
   tp3Rr?: number;
-  passedViaTp3?: boolean;
-  minimumRequiredRR?: number;
   riskRewardRatio: number;
   grossRiskRewardRatio?: number;
   netRiskRewardRatio?: number;
@@ -161,8 +159,6 @@ export interface TradingSignal {
   status: 'WAITING_ENTRY' | 'ACTIVE' | 'TP1_HIT' | 'TP2_HIT' | 'TP3_HIT' | 'SL_HIT' | 'STOPPED_OUT' | 'COMPLETED' | 'EXPIRED' | 'REJECTED' | 'SUPERSEDED' | 'AMBIGUOUS';
   isTradeableSignal?: boolean;
   signalClassification?: 'TRADEABLE' | 'WATCHING' | 'QUALIFIED_CANDIDATE' | 'CANDIDATE' | 'REJECTED' | 'FILTERED' | 'BLOCKED' | 'INVALID' | 'EXPIRED_BEFORE_ENTRY' | 'NON_TRADEABLE' | 'ANALYTICS_ONLY' | 'DIAGNOSTIC';
-  provenance?: 'LIVE' | 'HISTORICAL' | 'BACKTEST' | 'SIMULATION' | 'TEST';
-  isSynthetic?: boolean;
   isActionableSignal?: boolean;
   executionEvidence?: ExecutionEvidenceState;
   historicalEntryPolicy?: HistoricalEntryPolicy;
@@ -240,7 +236,6 @@ export interface TradingSignal {
   monteCarloSimulationStatus?: 'INSUFFICIENT_DATA' | 'ROBUST_STABLE' | 'ELEVATED_DRAWDOWN_RISK' | 'HIGH_RUIN_RISK';
   expiresAt?: number;
   notifiedStates?: string[];
-  factors?: any;
 }
 
 export interface ScannerFunnelCounters {
@@ -275,14 +270,6 @@ export interface ScannerFunnelCounters {
   providerErrors?: number;
   providerTimeouts?: number;
   scanDuration?: number;
-  globalScanStartMs?: number;
-  globalScanDeadlineMs?: number;
-  currentElapsedMs?: number;
-  remainingBudgetMs?: number;
-  gate6ElapsedMs?: number;
-  stage3ElapsedMs?: number;
-  timeBudgetExceeded?: boolean;
-  providerRequestsStoppedByBudget?: boolean;
   stage0Input?: number;
   stage0Output?: number;
   stage1Input?: number;
@@ -297,8 +284,6 @@ export interface ScannerFunnelCounters {
   finalValidationOutput?: number;
   finalScoreGateInput?: number;
   finalScoreGateOutput?: number;
-  rejectionReasons?: Record<string, number>;
-  candidateRejectionDetails?: Array<any>;
 }
 
 export interface SignalGenerationResponse {
@@ -314,8 +299,6 @@ export interface SignalGenerationResponse {
   reason?: string;
   timestamp: number;
   telemetry?: Partial<ScannerFunnelCounters>;
-  rejectionReasons?: Record<string, number>;
-  candidateRejectionDetails?: Array<any>;
 }
 
 export interface SignalsListResponse {
@@ -580,9 +563,6 @@ export interface HistoricalPerformanceSummary {
   wins: number;
   losses: number;
   successRate: number | null;
-  activeCount?: number;
-  expiredCount?: number;
-  totalSignals?: number;
 }
 
 export interface HistoricalPerformanceTrendPoint {
@@ -593,33 +573,12 @@ export interface HistoricalPerformanceTrendPoint {
   successRate: number | null;
 }
 
-export interface HistoricalSignalOutcomeItem {
-  id: string;
-  symbol: string;
-  direction: 'BUY' | 'SELL';
-  timestamp: number;
-  resolvedAt?: number;
-  status: 'WIN' | 'LOSS' | 'ACTIVE' | 'EXPIRED' | 'CANCELLED' | 'INVALID';
-  entryPrice?: number;
-  stopLoss?: number;
-  takeProfit?: number;
-  tp1?: number;
-  tp2?: number;
-  tp3?: number;
-  strategy?: string;
-  provider?: string;
-  riskRewardRatio?: number;
-  realizedRR?: number;
-  finalOutcome?: string;
-}
-
 export interface HistoricalPerformanceResponse {
   success: boolean;
   message?: string;
   range: HistoricalPerformanceRange;
   summary: HistoricalPerformanceSummary;
   trend: HistoricalPerformanceTrendPoint[];
-  recentOutcomes?: HistoricalSignalOutcomeItem[];
   timestamp: number;
 }
 

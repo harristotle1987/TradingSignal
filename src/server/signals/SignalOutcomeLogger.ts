@@ -3,7 +3,6 @@ import * as path from 'path';
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { logger } from '../logger.js';
 import { ExecutionEvidenceState, HistoricalEntryPolicy } from '../../types/index.js';
-import { isProductionRecord } from './SignalLogger.js';
 
 export interface SignalOutcomeRecord {
   id: string; // unique signal ID
@@ -54,8 +53,6 @@ export interface SignalOutcomeRecord {
   timeframeUsed?: string;
   isRecovered?: boolean;
   ambiguousDetails?: string;
-  provenance?: 'LIVE' | 'HISTORICAL' | 'BACKTEST' | 'SIMULATION' | 'TEST';
-  isSynthetic?: boolean;
 }
 
 const LOCAL_OUTCOME_LOG_PATH = path.join(process.cwd(), 'signal_outcome_logs.json');
@@ -101,13 +98,6 @@ export class SignalOutcomeLogger {
    */
   public static async recordOutcome(record: SignalOutcomeRecord): Promise<void> {
     this.init();
-    if (!record.provenance) {
-      if (process.env.NODE_ENV === 'test' || process.env.TEST_MODE === 'true' || record.isSynthetic || record.id.startsWith('test_') || record.id.startsWith('sim_') || record.id.startsWith('backtest_')) {
-        record.provenance = 'TEST';
-      } else {
-        record.provenance = 'LIVE';
-      }
-    }
     this.localLogs.set(record.id, record);
     this.saveLocal();
 
@@ -149,70 +139,37 @@ export class SignalOutcomeLogger {
   }
 
   /**
-   * Retrieves all outcome logs. Options enable filtering by production status or exact provenance.
+   * Retrieves all outcome logs
    */
-  public static async getOutcomeLogs(
-    limit = 100,
-    productionOnly = true,
-    provenanceFilter?: string
-  ): Promise<SignalOutcomeRecord[]> {
+  public static async getOutcomeLogs(limit = 100): Promise<SignalOutcomeRecord[]> {
     this.init();
-    let records: SignalOutcomeRecord[] = [];
-
     const firestore = getFirestoreAdmin();
     if (firestore) {
       try {
         const query = await firestore
           .collection(FIRESTORE_OUTCOME_COL)
           .orderBy('updatedAt', 'desc')
-          .limit(limit * 2)
+          .limit(limit)
           .get();
         
         if (!query.empty) {
+          const records: SignalOutcomeRecord[] = [];
           query.forEach((doc) => records.push(doc.data() as SignalOutcomeRecord));
+          
+          // Merge
           for (const item of records) {
             this.localLogs.set(item.id, item);
           }
+          return records;
         }
       } catch (err) {
         logger.warn('[SignalOutcomeLogger] Firestore failed to retrieve logs, falling back to local:', { error: String(err) });
-        records = Array.from(this.localLogs.values());
       }
-    } else {
-      records = Array.from(this.localLogs.values());
     }
 
-    if (provenanceFilter && provenanceFilter.toUpperCase() !== 'PRODUCTION') {
-      records = records.filter((r) => (r.provenance || '').toUpperCase() === provenanceFilter.toUpperCase());
-    } else if (productionOnly) {
-      records = records.filter((r) => isProductionRecord(r));
-    }
-
-    return records
+    return Array.from(this.localLogs.values())
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, limit);
-  }
-
-  /**
-   * Deletes an outcome log entry by ID
-   */
-  public static async deleteOutcome(id: string): Promise<boolean> {
-    this.init();
-    const hadLocal = this.localLogs.delete(id);
-    if (hadLocal) {
-      this.saveLocal();
-    }
-
-    const firestore = getFirestoreAdmin();
-    if (firestore) {
-      try {
-        await firestore.collection(FIRESTORE_OUTCOME_COL).doc(id).delete();
-        return true;
-      } catch (err) {
-        logger.warn('[SignalOutcomeLogger] Firestore failed to delete record:', { id, error: String(err) });
-      }
-    }
-    return hadLocal;
   }
 
   /**

@@ -17,7 +17,6 @@ import { getDynamicPrecision } from '../../utils/formatters.js';
 import { logger } from '../logger.js';
 import { TechnicalIndicators } from './TechnicalIndicators.js';
 import { AtrTpGenerator } from './AtrTpGenerator.js';
-import { RiskRewardCalculator, logRrRejectionDiagnostic } from './RiskRewardCalculator.js';
 import { Gate30DataFreshness } from './Gate30DataFreshness.js';
 import { Gate31NewsRiskClassification } from './Gate31NewsRiskClassification.js';
 import { Gate34ExecutionFrictionStressTest } from './Gate34ExecutionFrictionStressTest.js';
@@ -49,14 +48,6 @@ export interface ValidationResult {
   adjustedEntryPrice?: number;
   adjustedStopLoss?: number;
   adjustedTakeProfit?: number;
-  adjustedTp1?: number;
-  adjustedTp2?: number;
-  adjustedTp3?: number;
-  adjustedGrossRR?: number;
-  adjustedPrimaryRR?: number;
-  adjustedTp1RR?: number;
-  adjustedTp2RR?: number;
-  adjustedTp3RR?: number;
   adjustedNetRR?: number;
 }
 
@@ -153,16 +144,6 @@ export class SignalValidator {
         detailedMessage: slTpCheck.message,
         snapshotId,
         validatedAt: now,
-        adjustedStopLoss: slTpCheck.adjustedStopLoss,
-        adjustedTakeProfit: slTpCheck.adjustedTakeProfit,
-        adjustedTp1: slTpCheck.adjustedTp1,
-        adjustedTp2: slTpCheck.adjustedTp2,
-        adjustedTp3: slTpCheck.adjustedTp3,
-        adjustedGrossRR: slTpCheck.adjustedGrossRR,
-        adjustedPrimaryRR: slTpCheck.adjustedPrimaryRR,
-        adjustedTp1RR: slTpCheck.adjustedTp1RR,
-        adjustedTp2RR: slTpCheck.adjustedTp2RR,
-        adjustedTp3RR: slTpCheck.adjustedTp3RR,
       };
     }
 
@@ -175,16 +156,6 @@ export class SignalValidator {
         detailedMessage: `REJECTED: BLOCK_NEWS_EVENT. Trading blocked due to major scheduled market-moving event (${newsRiskResult.reasons.join('; ')})`,
         snapshotId,
         validatedAt: now,
-        adjustedStopLoss: slTpCheck.adjustedStopLoss,
-        adjustedTakeProfit: slTpCheck.adjustedTakeProfit,
-        adjustedTp1: slTpCheck.adjustedTp1,
-        adjustedTp2: slTpCheck.adjustedTp2,
-        adjustedTp3: slTpCheck.adjustedTp3,
-        adjustedGrossRR: slTpCheck.adjustedGrossRR,
-        adjustedPrimaryRR: slTpCheck.adjustedPrimaryRR,
-        adjustedTp1RR: slTpCheck.adjustedTp1RR,
-        adjustedTp2RR: slTpCheck.adjustedTp2RR,
-        adjustedTp3RR: slTpCheck.adjustedTp3RR,
       };
     }
 
@@ -205,16 +176,6 @@ export class SignalValidator {
         detailedMessage: reasonMsg,
         snapshotId,
         validatedAt: now,
-        adjustedStopLoss: slTpCheck.adjustedStopLoss,
-        adjustedTakeProfit: slTpCheck.adjustedTakeProfit,
-        adjustedTp1: slTpCheck.adjustedTp1,
-        adjustedTp2: slTpCheck.adjustedTp2,
-        adjustedTp3: slTpCheck.adjustedTp3,
-        adjustedGrossRR: slTpCheck.adjustedGrossRR,
-        adjustedPrimaryRR: slTpCheck.adjustedPrimaryRR,
-        adjustedTp1RR: slTpCheck.adjustedTp1RR,
-        adjustedTp2RR: slTpCheck.adjustedTp2RR,
-        adjustedTp3RR: slTpCheck.adjustedTp3RR,
       };
     }
 
@@ -228,14 +189,6 @@ export class SignalValidator {
       adjustedEntryPrice: livePrice,
       adjustedStopLoss: slTpCheck.adjustedStopLoss,
       adjustedTakeProfit: slTpCheck.adjustedTakeProfit,
-      adjustedTp1: slTpCheck.adjustedTp1,
-      adjustedTp2: slTpCheck.adjustedTp2,
-      adjustedTp3: slTpCheck.adjustedTp3,
-      adjustedGrossRR: slTpCheck.adjustedGrossRR,
-      adjustedPrimaryRR: slTpCheck.adjustedPrimaryRR,
-      adjustedTp1RR: slTpCheck.adjustedTp1RR,
-      adjustedTp2RR: slTpCheck.adjustedTp2RR,
-      adjustedTp3RR: slTpCheck.adjustedTp3RR,
       adjustedNetRR: slTpCheck.adjustedNetRR,
     };
   }
@@ -349,21 +302,7 @@ export class SignalValidator {
     tp1?: number,
     tp2?: number,
     tp3?: number
-  ): {
-    isValid: boolean;
-    message: string;
-    adjustedStopLoss?: number;
-    adjustedTakeProfit?: number;
-    adjustedTp1?: number;
-    adjustedTp2?: number;
-    adjustedTp3?: number;
-    adjustedGrossRR?: number;
-    adjustedPrimaryRR?: number;
-    adjustedTp1RR?: number;
-    adjustedTp2RR?: number;
-    adjustedTp3RR?: number;
-    adjustedNetRR?: number;
-  } {
+  ): { isValid: boolean; message: string; adjustedStopLoss?: number; adjustedTakeProfit?: number; adjustedNetRR?: number } {
     const precision = getDynamicPrecision(livePrice, symbol);
 
     // Adjust SL/TP if minor live price drift occurred
@@ -392,22 +331,6 @@ export class SignalValidator {
       adjustedTp1 = tp1Dist !== undefined ? Number((livePrice - tp1Dist).toFixed(precision)) : undefined;
       adjustedTp2 = tp2Dist !== undefined ? Number((livePrice - tp2Dist).toFixed(precision)) : undefined;
       adjustedTp3 = tp3Dist !== undefined ? Number((livePrice - tp3Dist).toFixed(precision)) : undefined;
-    }
-
-    // 0. Absolute Positivity Guard — negative, zero, or non-finite SL/TP
-    // values must never reach emission, independent of the direction and
-    // ordering checks below.
-    const candidateValues: Array<[string, number | undefined]> = [
-      ['stop-loss', adjustedSL],
-      ['take-profit', adjustedTP],
-      ['TP1', adjustedTp1],
-      ['TP2', adjustedTp2],
-      ['TP3', adjustedTp3],
-    ];
-    for (const [label, val] of candidateValues) {
-      if (val !== undefined && (!Number.isFinite(val) || val <= 0)) {
-        return { isValid: false, message: `REJECTED: INVALID_SL_TP. ${label} value (${val}) is negative, zero, or invalid and cannot be emitted.` };
-      }
     }
 
     // 1. Geometric Side & Ordering Validation
@@ -458,10 +381,10 @@ export class SignalValidator {
     // 2. Minimum Practical Distance Hurdles based on Volatility (ATR)
     const risk = Math.abs(livePrice - adjustedSL);
     
-    // Calculate reward based on actual TP structure (TP2 only) if available, otherwise fallback to adjustedTP
+    // Calculate reward based on actual TP structure (average of the three targets) if available, otherwise fallback to adjustedTP
     let reward = Math.abs(adjustedTP - livePrice);
-    if (adjustedTp2 !== undefined) {
-      reward = Math.abs(adjustedTp2 - livePrice);
+    if (adjustedTp1 !== undefined && adjustedTp2 !== undefined && adjustedTp3 !== undefined) {
+      reward = (Math.abs(adjustedTp1 - livePrice) + Math.abs(adjustedTp2 - livePrice) + Math.abs(adjustedTp3 - livePrice)) / 3;
     }
 
     if (risk <= 0 || reward <= 0) {
@@ -479,10 +402,9 @@ export class SignalValidator {
     }
 
     // Use 0.85 * ATR as the minimum noise hurdle to prevent tight SL hit by normal market noise
-    const thresholds = serverConfig.getConfig().thresholds;
     const minSafeStopDistance = 0.85 * atr;
-    const minSafeTargetDistance = 0.85 * atr; // Volatility distance hurdle (A)
-    const minRR = thresholds.minimumRR ?? 1.80;
+    // Use 1.80 * ATR as the minimum take-profit expansion to ensure meaningful profit after fees/slippage
+    const minSafeTargetDistance = 1.80 * atr;
 
     if (risk < minSafeStopDistance) {
       return {
@@ -491,42 +413,35 @@ export class SignalValidator {
       };
     }
 
-    // Verify both A. volatility distance and B. risk-distance R:R geometry
-    const tp1Val = adjustedTp1 ?? adjustedTP;
-    const tp2Val = adjustedTp2 ?? adjustedTP;
-    const tp3Val = adjustedTp3 ?? adjustedTP;
+    // Verify minimum tradeable distance for each target if present
+    if (adjustedTp1 !== undefined && adjustedTp2 !== undefined && adjustedTp3 !== undefined) {
+      const tp1Dist = Math.abs(adjustedTp1 - livePrice);
+      const tp2Dist = Math.abs(adjustedTp2 - livePrice);
+      const tp3Dist = Math.abs(adjustedTp3 - livePrice);
 
-    const rrValidation = RiskRewardCalculator.calculate(livePrice, adjustedSL, tp1Val, tp2Val, tp3Val, direction, thresholds.minimumRR, thresholds.minimumNetRR, symbol);
-    if (!rrValidation.isValid || rrValidation.tp2GrossRR < thresholds.minimumRR) {
-      logRrRejectionDiagnostic({
-        symbol,
-        direction,
-        entryPrice: livePrice,
-        stopLoss: adjustedSL,
-        tp1: tp1Val,
-        tp2: tp2Val,
-        tp3: tp3Val,
-        rejectionReason: `GROSS_RR_BELOW_THRESHOLD. TP2 distance fails risk-distance R:R geometry requirement (${rrValidation.tp2GrossRR.toFixed(2)}:1 gross R:R below minimum ${thresholds.minimumRR}:1)`,
-      });
-      return {
-        isValid: false,
-        message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. TP2 distance fails risk-distance R:R geometry requirement (${rrValidation.tp2GrossRR.toFixed(2)}:1 gross R:R below minimum ${thresholds.minimumRR}:1)`,
-        adjustedStopLoss: adjustedSL,
-        adjustedTakeProfit: tp2Val,
-        adjustedTp1: tp1Val,
-        adjustedTp2: tp2Val,
-        adjustedTp3: tp3Val,
-        adjustedGrossRR: rrValidation.grossRR,
-        adjustedPrimaryRR: rrValidation.primaryRR,
-      };
-    }
-
-    if (tp2Val !== undefined) {
-      const tp2Dist = Math.abs(tp2Val - livePrice);
+      if (tp1Dist < minSafeTargetDistance * 0.5) {
+        return {
+          isValid: false,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP1 distance (${tp1Dist.toFixed(precision)}) is below minimum conservative target distance (${(minSafeTargetDistance * 0.5).toFixed(precision)}, derived as 0.5 * 1.80 * ATR)`,
+        };
+      }
       if (tp2Dist < minSafeTargetDistance) {
         return {
           isValid: false,
-          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP2 volatility distance (${tp2Dist.toFixed(precision)}) is below minimum volatility hurdle (${minSafeTargetDistance.toFixed(precision)})`,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP2 distance (${tp2Dist.toFixed(precision)}) is below minimum primary target distance (${minSafeTargetDistance.toFixed(precision)}, derived as 1.80 * ATR)`,
+        };
+      }
+      if (tp3Dist < minSafeTargetDistance * 1.5) {
+        return {
+          isValid: false,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP3 distance (${tp3Dist.toFixed(precision)}) is below minimum extended target distance (${(minSafeTargetDistance * 1.5).toFixed(precision)}, derived as 1.5 * 1.80 * ATR)`,
+        };
+      }
+    } else {
+      if (reward < minSafeTargetDistance) {
+        return {
+          isValid: false,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected take-profit distance (${reward.toFixed(precision)}) is below minimum volatility profit expansion hurdle (${minSafeTargetDistance.toFixed(precision)}, derived as 1.80 * ATR of ${atr.toFixed(precision)})`,
         };
       }
     }
@@ -549,33 +464,13 @@ export class SignalValidator {
       };
     }
 
-    // 5. Gross Risk / Reward Ratio Check: Minimum acceptable GROSS R:R from config using RiskRewardCalculator canonical module
-    const rrResult = RiskRewardCalculator.calculate(livePrice, adjustedSL, adjustedTp1 ?? adjustedTP, adjustedTp2 ?? adjustedTP, adjustedTp3 ?? adjustedTP, direction, thresholds.minimumRR, thresholds.minimumNetRR, symbol);
-    const rawRR = rrResult.grossRR;
-    if (rawRR < thresholds.minimumRR || !rrResult.isValid) {
-      logRrRejectionDiagnostic({
-        symbol,
-        direction,
-        entryPrice: livePrice,
-        stopLoss: adjustedSL,
-        tp1: adjustedTp1 ?? adjustedTP,
-        tp2: adjustedTp2 ?? adjustedTP,
-        tp3: adjustedTp3 ?? adjustedTP,
-        rejectionReason: `GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum acceptable GROSS R:R (${rrResult.reason || 'Invalid geometry'})`,
-      });
+    // 5. Gross Risk / Reward Ratio Check: Minimum acceptable GROSS R:R from config
+    const rawRR = Number((reward / risk).toFixed(2));
+    const thresholds = serverConfig.getConfig().thresholds;
+    if (rawRR < thresholds.minimumRR) {
       return {
         isValid: false,
-        message: `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum acceptable GROSS R:R (${rrResult.reason || 'Invalid geometry'})`,
-        adjustedStopLoss: adjustedSL,
-        adjustedTakeProfit: adjustedTP,
-        adjustedTp1: adjustedTp1 ?? adjustedTP,
-        adjustedTp2: adjustedTp2 ?? adjustedTP,
-        adjustedTp3: adjustedTp3 ?? adjustedTP,
-        adjustedGrossRR: rrResult.grossRR,
-        adjustedPrimaryRR: rrResult.primaryRR,
-        adjustedTp1RR: rrResult.tp1RR,
-        adjustedTp2RR: rrResult.tp2RR,
-        adjustedTp3RR: rrResult.tp3RR,
+        message: `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum acceptable GROSS R:R`,
       };
     }
 
@@ -584,14 +479,6 @@ export class SignalValidator {
       message: 'OK',
       adjustedStopLoss: adjustedSL,
       adjustedTakeProfit: adjustedTP,
-      adjustedTp1: adjustedTp1 ?? adjustedTP,
-      adjustedTp2: adjustedTp2 ?? adjustedTP,
-      adjustedTp3: adjustedTp3 ?? adjustedTP,
-      adjustedGrossRR: rrResult.effectiveGrossRR,
-      adjustedPrimaryRR: rrResult.primaryRR,
-      adjustedTp1RR: rrResult.tp1RR,
-      adjustedTp2RR: rrResult.tp2RR,
-      adjustedTp3RR: rrResult.tp3RR,
       adjustedNetRR: frictionCheck.netRR,
     };
   }
@@ -642,7 +529,7 @@ export class SignalValidator {
     const dummyStopLoss = price - rawRisk;
     const dummyTakeProfit = price + rawReward;
 
-    const res = Gate34ExecutionFrictionStressTest.evaluate(symbol, price, dummyStopLoss, dummyTakeProfit, dummyTakeProfit, dummyTakeProfit, dummyTakeProfit);
+    const res = Gate34ExecutionFrictionStressTest.evaluate(symbol, price, dummyStopLoss, dummyTakeProfit);
 
     if (!res.isPassed) {
       return {
@@ -689,18 +576,21 @@ export class SignalValidator {
     }
 
     const tp1Dist = Math.abs(tp1 - entryPrice);
+    const tp2Dist = Math.abs(tp2 - entryPrice);
+    const tp3Dist = Math.abs(tp3 - entryPrice);
 
-    // 3. Check risk/reward (TP2 primary or TP3 multi-target) using RiskRewardCalculator
-    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, undefined, assetClass);
-    const rr = rrResult.primaryRR;
+    // 3. Check risk/reward
+    const risk = Math.abs(entryPrice - stopLoss);
+    const averageReward = (tp1Dist + tp2Dist + tp3Dist) / 3;
+    const rr = risk > 0 ? averageReward / risk : 0;
 
     // If valid, return original values
-    if (isDistinct && isOrdered && tp1Dist > 0 && rrResult.isValid) {
+    if (isDistinct && isOrdered && tp1Dist > 0) {
       return {
         tp1,
         tp2,
         tp3,
-        takeProfit: rrResult.passedViaTp3 ? tp3 : tp2,
+        takeProfit: tp2,
         riskRewardRatio: Number(rr.toFixed(2)),
         wasRecalculated: false
       };
@@ -716,14 +606,17 @@ export class SignalValidator {
       isAggressive,
     });
 
-    const newRrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, atrGen.tp1, atrGen.tp2, atrGen.tp3, direction, undefined, assetClass);
-    const newRR = newRrResult.primaryRR;
+    const newTp1Dist = Math.abs(atrGen.tp1 - entryPrice);
+    const newTp2Dist = Math.abs(atrGen.tp2 - entryPrice);
+    const newTp3Dist = Math.abs(atrGen.tp3 - entryPrice);
+    const newAvgReward = (newTp1Dist + newTp2Dist + newTp3Dist) / 3;
+    const newRR = risk > 0 ? newAvgReward / risk : 0;
 
     return {
       tp1: atrGen.tp1,
       tp2: atrGen.tp2,
       tp3: atrGen.tp3,
-      takeProfit: newRrResult.passedViaTp3 ? atrGen.tp3 : atrGen.tp2,
+      takeProfit: atrGen.tp2,
       riskRewardRatio: Number(newRR.toFixed(2)),
       wasRecalculated: true
     };

@@ -272,9 +272,6 @@ export class TradeRankingEngine {
     if (typeof aiConfidence === 'number' && !isNaN(aiConfidence)) {
       modifier += ((aiConfidence - 70) / 30) * 3; // -3 to +3 modifier
     }
-    if (signal.isAiValidated === false) {
-      modifier -= 5; // Soft penalty for non-recommended AI candidate under GATE 80 policy
-    }
 
     // 4. Correlation Preference (portfolio clustering penalty)
     const corrPenalty = signal.correlationPenalty ?? 0;

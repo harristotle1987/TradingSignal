@@ -1,5 +1,4 @@
 import { SignalDirection } from '../../types/index.js';
-import { RiskRewardCalculator } from './RiskRewardCalculator.js';
 
 export interface TargetQualityInput {
   direction: SignalDirection;
@@ -28,7 +27,9 @@ export interface TargetQualityResult {
 }
 
 /**
- * Calculates exact R:R using RiskRewardCalculator canonical module.
+ * Calculates exact R:R using displayed/published prices.
+ * BUY:  Risk = Entry - SL, Reward = TP - Entry
+ * SELL: Risk = SL - Entry, Reward = Entry - TP
  */
 export function calculateTargetRr(
   direction: SignalDirection,
@@ -37,8 +38,12 @@ export function calculateTargetRr(
   targetPrice: number
 ): number {
   if (!entryPrice || !stopLoss || !targetPrice) return 0;
-  const result = RiskRewardCalculator.calculate(entryPrice, stopLoss, targetPrice, targetPrice, targetPrice, direction);
-  return result.grossRR;
+  const isBuy = direction === 'BUY';
+  const risk = isBuy ? entryPrice - stopLoss : stopLoss - entryPrice;
+  if (risk <= 0) return 0;
+  const reward = isBuy ? targetPrice - entryPrice : entryPrice - targetPrice;
+  if (reward <= 0) return 0;
+  return Number((reward / risk).toFixed(2));
 }
 
 export class TargetQualityEvaluator {
@@ -55,11 +60,10 @@ export class TargetQualityEvaluator {
       hasStructureClearance = true,
     } = input;
 
-    // 1. Calculate Exact R:R Ratios for each target using RiskRewardCalculator
-    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction);
-    const tp1Rr = rrResult.tp1RR;
-    const tp2Rr = rrResult.tp2RR;
-    const tp3Rr = rrResult.tp3RR;
+    // 1. Calculate Exact R:R Ratios for each target
+    const tp1Rr = calculateTargetRr(direction, entryPrice, stopLoss, tp1);
+    const tp2Rr = calculateTargetRr(direction, entryPrice, stopLoss, tp2);
+    const tp3Rr = calculateTargetRr(direction, entryPrice, stopLoss, tp3);
 
     // Factor 1: R Quality (Max 25 Pts)
     // Benchmark: TP1 >= 1.0R (8 pts), TP2 >= 1.5R (8 pts), TP3 >= 2.2R (9 pts)
@@ -142,4 +146,3 @@ export class TargetQualityEvaluator {
     };
   }
 }
-

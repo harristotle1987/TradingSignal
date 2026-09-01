@@ -1,25 +1,20 @@
 /**
  * Centralized Market Data Manager
- * Single source of truth for all market data requests across Bitget, Finnhub, Twelve Data, Tiingo, and ExchangeRate APIs.
+ * Single source of truth for all market data requests across Bitget, Finnhub, Twelve Data, and Forex APIs.
  *
- * Principles & Constraints:
- * 1. ZERO Pre-Scan API Activity (Gate 1): No external requests until a scan execution is explicitly activated.
- * 2. Scan Execution Context (Gate 3): Enforces active scan context check before performing provider requests.
- * 3. Cache-First Access: Checks cached market data before requesting from network.
- * 4. Scan-Level Request Deduplication: Same symbol+timeframe+limit in a scan execution context resolves to 1 provider request.
- * 5. Provider Fallback Routing & Rate Limit Protection:
- *    - FOREX: Tiingo -> Finnhub -> Twelve Data -> ExchangeRate
- *    - STOCKS: Finnhub -> Tiingo -> Twelve Data
- *    - CRYPTO: Bitget -> Finnhub -> Tiingo -> Twelve Data
- *    - Immediately fails over when 429 received.
+ * Responsibilities:
+ * - Provider selection
+ * - Symbol normalization
+ * - Price & Candle fetching
+ * - Response validation & Freshness checks
+ * - Server-side caching (TTL) & In-flight Request Deduplication
+ * - Timeout handling & Error isolation
  */
 
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { IMarketDataProvider } from './adapters/IMarketDataProvider.js';
 import { BitgetAdapter } from './adapters/BitgetAdapter.js';
 import { FinnhubAdapter } from './adapters/FinnhubAdapter.js';
 import { TwelveDataAdapter } from './adapters/TwelveDataAdapter.js';
-import { TiingoAdapter } from './adapters/TiingoAdapter.js';
 import { ExchangeRateAdapter } from './adapters/ExchangeRateAdapter.js';
 import { NormalizedTicker, NormalizedCandle, MarketStatusResponse, ProviderHealth, TruthfulMarketHealth } from './types.js';
 import { SymbolNormalizer } from './SymbolNormalizer.js';
@@ -29,30 +24,6 @@ import { serverConfig } from '../config.js';
 import { logger } from '../logger.js';
 import { ScannerPersistence } from '../signals/ScannerPersistence.js';
 import { NvidiaAIService } from '../signals/NvidiaAIService.js';
-import { getActiveProfiler } from '../signals/ScanPerformanceProfiler.js';
-
-export interface ScanExecutionContext {
-  scanExecutionId: string;
-  scanType: 'MANUAL' | 'CRON' | 'AI';
-  scanStartedAt: number;
-}
-
-export interface ScanTelemetry {
-  scanExecutionId: string;
-  scanType: 'MANUAL' | 'CRON' | 'AI';
-  scanStartedAt: number;
-  providerRequests: number;
-  providerSuccesses: number;
-  provider429s: number;
-  providerErrors: number;
-  providerTimeouts: number;
-  failoverCount: number;
-  cacheHits: number;
-  cacheMisses: number;
-  apiRequestsBeforeScan: number;
-}
-
-export const scanContextStorage = new AsyncLocalStorage<ScanExecutionContext>();
 
 class ProviderRequestQueue {
   private lastCallTime = new Map<string, number>();
@@ -62,42 +33,23 @@ class ProviderRequestQueue {
   private minSpacingMs: Record<string, number> = {
     twelvedata: 1000,
     finnhub: 300,
-    tiingo: 300,
     bitget: 100,
     exchangerate: 100,
   };
 
-  async enqueue<T>(providerId: string, fn: () => Promise<T>, globalScanDeadlineMs?: number): Promise<T> {
+  async enqueue<T>(providerId: string, fn: () => Promise<T>): Promise<T> {
     const cleanId = providerId.toLowerCase();
     const hasTwelveDataKey = Boolean(process.env.TWELVE_DATA_API_KEY && process.env.TWELVE_DATA_API_KEY.trim().length > 0);
     const spacing = cleanId === 'twelvedata' && !hasTwelveDataKey ? 0 : (this.minSpacingMs[cleanId] || 100);
-
-    const safetyMargin = 100;
-    if (globalScanDeadlineMs) {
-      const remaining = globalScanDeadlineMs - Date.now();
-      if (remaining <= safetyMargin) {
-        throw new Error(`TIMEOUT: Global scanner deadline reached during queue wait for ${providerId}`);
-      }
-    }
 
     const previousPromise = this.providerQueues.get(cleanId) || Promise.resolve();
 
     const currentPromise = previousPromise
       .then(async () => {
-        if (globalScanDeadlineMs) {
-          const remaining = globalScanDeadlineMs - Date.now();
-          if (remaining <= safetyMargin) {
-            throw new Error(`TIMEOUT: Global scanner deadline reached during queue wait for ${providerId}`);
-          }
-        }
         const last = this.lastCallTime.get(cleanId) || 0;
         const elapsed = Date.now() - last;
         if (elapsed < spacing) {
-          const sleepTime = spacing - elapsed;
-          if (globalScanDeadlineMs && (Date.now() + sleepTime > globalScanDeadlineMs - safetyMargin)) {
-            throw new Error(`TIMEOUT: Global scanner deadline would be reached during pacing delay for ${providerId}`);
-          }
-          await new Promise((res) => setTimeout(res, sleepTime));
+          await new Promise((res) => setTimeout(res, spacing - elapsed));
         }
         this.lastCallTime.set(cleanId, Date.now());
         return fn();
@@ -120,100 +72,16 @@ export class MarketDataManager {
   private cachedTruthfulHealth: TruthfulMarketHealth | null = null;
   private lastSuccessfulQuotes = new Map<string, number>();
 
-  // Scan context and telemetry management
-  private explicitScanContext: ScanExecutionContext | null = null;
-  private preScanApiAttempts = 0;
-  private scanTelemetryMap = new Map<string, ScanTelemetry>();
-  private inFlightScanRequests = new Map<string, Promise<any>>();
-  private scanRateLimitedProviders = new Map<string, Set<string>>();
-
   constructor() {
     this.registerProvider(new BitgetAdapter());
     this.registerProvider(new FinnhubAdapter());
     this.registerProvider(new TwelveDataAdapter());
-    this.registerProvider(new TiingoAdapter());
     this.registerProvider(new ExchangeRateAdapter());
   }
 
-  // --- Scan Context Activation & Tracking Methods ---
-
-  public startScanContext(context: ScanExecutionContext): void {
-    this.explicitScanContext = context;
-    this.getOrCreateTelemetry(context);
-  }
-
-  public endScanContext(scanExecutionId?: string): void {
-    if (!scanExecutionId || this.explicitScanContext?.scanExecutionId === scanExecutionId) {
-      this.explicitScanContext = null;
-    }
-  }
-
-  public runInScanContext<T>(context: ScanExecutionContext, fn: () => Promise<T>): Promise<T> {
-    this.startScanContext(context);
-    return scanContextStorage.run(context, async () => {
-      try {
-        return await fn();
-      } finally {
-        this.endScanContext(context.scanExecutionId);
-      }
-    });
-  }
-
-  public getActiveScanContext(): ScanExecutionContext | null {
-    return scanContextStorage.getStore() || this.explicitScanContext;
-  }
-
-  private getOrCreateTelemetry(context: ScanExecutionContext): ScanTelemetry {
-    if (!this.scanTelemetryMap.has(context.scanExecutionId)) {
-      this.scanTelemetryMap.set(context.scanExecutionId, {
-        scanExecutionId: context.scanExecutionId,
-        scanType: context.scanType,
-        scanStartedAt: context.scanStartedAt,
-        providerRequests: 0,
-        providerSuccesses: 0,
-        provider429s: 0,
-        providerErrors: 0,
-        providerTimeouts: 0,
-        failoverCount: 0,
-        cacheHits: 0,
-        cacheMisses: 0,
-        apiRequestsBeforeScan: this.preScanApiAttempts,
-      });
-    }
-    return this.scanTelemetryMap.get(context.scanExecutionId)!;
-  }
-
-  public getScanTelemetry(scanExecutionId?: string): ScanTelemetry | null {
-    if (scanExecutionId) {
-      return this.scanTelemetryMap.get(scanExecutionId) || null;
-    }
-    const current = this.getActiveScanContext();
-    if (current) {
-      return this.scanTelemetryMap.get(current.scanExecutionId) || null;
-    }
-    return this.getLatestScanTelemetry();
-  }
-
-  public getLatestScanTelemetry(): ScanTelemetry | null {
-    const keys = Array.from(this.scanTelemetryMap.keys());
-    if (keys.length === 0) return null;
-    return this.scanTelemetryMap.get(keys[keys.length - 1]) || null;
-  }
-
-  private isProviderRateLimited(scanExecutionId: string, providerId: string): boolean {
-    const set = this.scanRateLimitedProviders.get(scanExecutionId);
-    return set ? set.has(providerId) : false;
-  }
-
-  private markProviderRateLimited(scanExecutionId: string, providerId: string): void {
-    if (!this.scanRateLimitedProviders.has(scanExecutionId)) {
-      this.scanRateLimitedProviders.set(scanExecutionId, new Set());
-    }
-    this.scanRateLimitedProviders.get(scanExecutionId)!.add(providerId);
-  }
-
   /**
-   * Evaluates truthful market data connectivity passively without triggering network calls.
+   * Evaluates truthful market data connectivity, quote freshness, provider reachability,
+   * scanner readiness, and overall system readiness without hardcoded status.
    */
   async getTruthfulMarketHealth(forceProbe = false): Promise<TruthfulMarketHealth> {
     const now = Date.now();
@@ -227,14 +95,28 @@ export class MarketDataManager {
     const isProd = config.nodeEnv === 'production';
     const productionPersistenceReady = config.productionPersistenceReady;
 
-    // 1. Bitget (Crypto) - Public & keyless
-    const bitgetReachable = true;
-    const bitgetQuoteTs: number | null = this.lastSuccessfulQuotes.get('bitget') || null;
-    const bitgetQuoteAge = bitgetQuoteTs ? Math.max(0, now - bitgetQuoteTs) : null;
-    const bitgetFresh = true;
-    const bitgetErrMsg: string | undefined = undefined;
+    // 1. Bitget (Crypto)
+    let bitgetReachable = false;
+    let bitgetQuoteTs: number | null = this.lastSuccessfulQuotes.get('bitget') || null;
+    let bitgetErrMsg: string | undefined;
 
-    // 2. Twelve Data (Forex / Stocks)
+    try {
+      const ticker = await this.getPrice('BTCUSDT', 'bitget', forceProbe);
+      if (ticker.status === 'OK' || (ticker.status === 'STALE' && ticker.price > 0)) {
+        bitgetReachable = true;
+        bitgetQuoteTs = ticker.timestamp || ticker.receivedAt;
+        this.lastSuccessfulQuotes.set('bitget', bitgetQuoteTs);
+      } else {
+        bitgetErrMsg = ticker.errorMessage || 'Bitget ticker returned invalid status or zero price';
+      }
+    } catch (err) {
+      bitgetErrMsg = err instanceof Error ? err.message : String(err);
+    }
+
+    const bitgetQuoteAge = bitgetQuoteTs ? Math.max(0, now - bitgetQuoteTs) : null;
+    const bitgetFresh = bitgetQuoteAge !== null && bitgetQuoteAge <= config.marketDataMaxAgeMs;
+
+    // 2. Twelve Data (Forex) - Passive Health Check (Never auto-fetch on health check)
     const twelveDataConfigured = Boolean(process.env.TWELVE_DATA_API_KEY && process.env.TWELVE_DATA_API_KEY.trim().length > 0);
     const twelveDataReachable = twelveDataConfigured;
     const twelveDataQuoteTs: number | null = this.lastSuccessfulQuotes.get('twelvedata') || null;
@@ -242,7 +124,7 @@ export class MarketDataManager {
     const twelveDataQuoteAge = twelveDataQuoteTs ? Math.max(0, now - twelveDataQuoteTs) : null;
     const twelveDataFresh = twelveDataConfigured;
 
-    // 3. ExchangeRate (Forex Fallback)
+    // 3. ExchangeRate (Forex Fallback) - Passive Health Check
     const exchangeRateConfigured = true;
     const exchangeRateReachable = true;
     const exchangeRateQuoteTs: number | null = this.lastSuccessfulQuotes.get('exchangerate') || null;
@@ -250,38 +132,48 @@ export class MarketDataManager {
     const exchangeRateQuoteAge = exchangeRateQuoteTs ? Math.max(0, now - exchangeRateQuoteTs) : null;
     const exchangeRateFresh = true;
 
-    // 4. Finnhub (Stocks / Forex)
+    // 4. Finnhub (Stock)
     const finnhubConfigured = Boolean(process.env.FINNHUB_API_KEY && process.env.FINNHUB_API_KEY.trim().length > 0);
-    const finnhubReachable = finnhubConfigured;
-    const finnhubQuoteTs: number | null = this.lastSuccessfulQuotes.get('finnhub') || null;
-    const finnhubErrMsg: string | undefined = finnhubConfigured ? undefined : 'FINNHUB_API_KEY environment variable not configured';
-    const finnhubQuoteAge = finnhubQuoteTs ? Math.max(0, now - finnhubQuoteTs) : null;
-    const finnhubFresh = finnhubConfigured;
+    let finnhubReachable = false;
+    let finnhubQuoteTs: number | null = this.lastSuccessfulQuotes.get('finnhub') || null;
+    let finnhubErrMsg: string | undefined;
 
-    // 5. Tiingo (Forex / Stocks / Crypto)
-    const tiingoConfigured = Boolean(process.env.TIINGO_API_KEY && process.env.TIINGO_API_KEY.trim().length > 0);
-    const tiingoReachable = tiingoConfigured;
-    const tiingoQuoteTs: number | null = this.lastSuccessfulQuotes.get('tiingo') || null;
-    const tiingoErrMsg: string | undefined = tiingoConfigured ? undefined : 'TIINGO_API_KEY environment variable not configured';
-    const tiingoQuoteAge = tiingoQuoteTs ? Math.max(0, now - tiingoQuoteTs) : null;
-    const tiingoFresh = tiingoConfigured;
+    if (finnhubConfigured) {
+      try {
+        const ticker = await this.getPrice('AAPL', 'finnhub', forceProbe);
+        if (ticker.status === 'OK' || (ticker.status === 'STALE' && ticker.price > 0)) {
+          finnhubReachable = true;
+          finnhubQuoteTs = ticker.timestamp || ticker.receivedAt;
+          this.lastSuccessfulQuotes.set('finnhub', finnhubQuoteTs);
+        } else {
+          finnhubErrMsg = ticker.errorMessage || 'Finnhub ticker returned invalid status';
+        }
+      } catch (err) {
+        finnhubErrMsg = err instanceof Error ? err.message : String(err);
+      }
+    } else {
+      finnhubErrMsg = 'FINNHUB_API_KEY environment variable not configured';
+    }
+
+    const finnhubQuoteAge = finnhubQuoteTs ? Math.max(0, now - finnhubQuoteTs) : null;
+    const finnhubFresh = finnhubQuoteAge !== null && finnhubQuoteAge <= 24 * 3600 * 1000;
 
     // Asset Class Readiness
     const cryptoReady = bitgetReachable && bitgetFresh;
-    const forexReady = (tiingoReachable && tiingoFresh) || (finnhubReachable && finnhubFresh) || (twelveDataReachable && twelveDataFresh) || (exchangeRateReachable && exchangeRateFresh);
-    const stockReady = (finnhubReachable && finnhubFresh) || (tiingoReachable && tiingoFresh) || (twelveDataReachable && twelveDataFresh);
+    const forexReady = (twelveDataReachable && twelveDataFresh) || (exchangeRateReachable && exchangeRateFresh);
+    const stockReady = (finnhubReachable && finnhubFresh) || (twelveDataReachable && twelveDataFresh);
 
     // Aggregate Connectivity
     const marketDataConnected = cryptoReady || forexReady || stockReady;
 
-    const validQuoteTsList = [bitgetQuoteTs, twelveDataQuoteTs, exchangeRateQuoteTs, finnhubQuoteTs, tiingoQuoteTs].filter((ts): ts is number => ts !== null && ts > 0);
+    const validQuoteTsList = [bitgetQuoteTs, twelveDataQuoteTs, exchangeRateQuoteTs, finnhubQuoteTs].filter((ts): ts is number => ts !== null && ts > 0);
     const lastSuccessfulQuote = validQuoteTsList.length > 0 ? Math.max(...validQuoteTsList) : null;
     const quoteAge = lastSuccessfulQuote ? Math.max(0, now - lastSuccessfulQuote) : null;
     const dataFreshness = quoteAge !== null && quoteAge <= config.marketDataMaxAgeMs;
-    const marketFeedsActive = marketDataConnected;
+    const marketFeedsActive = marketDataConnected && (dataFreshness || cryptoReady || forexReady);
 
     const providerConfigured = true;
-    const providerReachable = bitgetReachable || (twelveDataConfigured && twelveDataReachable) || (finnhubConfigured && finnhubReachable) || (tiingoConfigured && tiingoReachable) || exchangeRateReachable;
+    const providerReachable = bitgetReachable || (twelveDataConfigured && twelveDataReachable) || (finnhubConfigured && finnhubReachable) || exchangeRateReachable;
 
     // Scanner Readiness
     let scannerEnabled = true;
@@ -300,7 +192,7 @@ export class MarketDataManager {
     let overallStatus: 'OPERATIONAL' | 'DEGRADED' | 'UNAVAILABLE' = 'UNAVAILABLE';
     if (!marketDataConnected) {
       overallStatus = 'UNAVAILABLE';
-    } else if (!persistenceCheckPassed || (twelveDataConfigured && !twelveDataReachable) || (finnhubConfigured && !finnhubReachable) || (tiingoConfigured && !tiingoReachable) || !bitgetReachable) {
+    } else if (!persistenceCheckPassed || (twelveDataConfigured && !twelveDataReachable) || (finnhubConfigured && !finnhubReachable) || !bitgetReachable) {
       overallStatus = 'DEGRADED';
     } else {
       overallStatus = 'OPERATIONAL';
@@ -346,15 +238,6 @@ export class MarketDataManager {
           status: finnhubConfigured ? (finnhubReachable ? 'CONNECTED' : 'DEGRADED') : 'UNCONFIGURED',
           errorMessage: finnhubErrMsg,
         },
-        tiingo: {
-          providerConfigured: tiingoConfigured,
-          providerReachable: tiingoReachable,
-          lastSuccessfulQuote: tiingoQuoteTs,
-          quoteAge: tiingoQuoteAge,
-          dataFreshness: tiingoFresh,
-          status: tiingoConfigured ? (tiingoReachable ? 'CONNECTED' : 'DEGRADED') : 'UNCONFIGURED',
-          errorMessage: tiingoErrMsg,
-        },
         exchangerate: {
           providerConfigured: exchangeRateConfigured,
           providerReachable: exchangeRateReachable,
@@ -373,14 +256,14 @@ export class MarketDataManager {
         },
         forex: {
           ready: forexReady,
-          provider: tiingoReachable ? 'tiingo' : (finnhubReachable ? 'finnhub' : (twelveDataReachable ? 'twelvedata' : 'exchangerate')),
-          fallbackActive: !tiingoReachable && (finnhubReachable || twelveDataReachable || exchangeRateReachable),
-          quoteAge: tiingoReachable ? tiingoQuoteAge : (finnhubReachable ? finnhubQuoteAge : (twelveDataReachable ? twelveDataQuoteAge : exchangeRateQuoteAge)),
+          provider: twelveDataReachable ? 'twelvedata' : 'exchangerate',
+          fallbackActive: !twelveDataReachable && exchangeRateReachable,
+          quoteAge: twelveDataReachable ? twelveDataQuoteAge : exchangeRateQuoteAge,
         },
         stock: {
           ready: stockReady,
-          provider: finnhubReachable ? 'finnhub' : (tiingoReachable ? 'tiingo' : (twelveDataReachable ? 'twelvedata' : 'none')),
-          quoteAge: finnhubReachable ? finnhubQuoteAge : (tiingoReachable ? tiingoQuoteAge : twelveDataQuoteAge),
+          provider: finnhubReachable ? 'finnhub' : (twelveDataReachable ? 'twelvedata' : 'none'),
+          quoteAge: finnhubReachable ? finnhubQuoteAge : twelveDataQuoteAge,
         },
       },
     };
@@ -399,10 +282,10 @@ export class MarketDataManager {
   }
 
   /**
-   * Enforces strict provider routing & fallbacks:
-   * - FOREX: Tiingo -> Finnhub -> Twelve Data -> ExchangeRate
-   * - STOCKS: Finnhub -> Tiingo -> Twelve Data
-   * - CRYPTO: Bitget -> Finnhub -> Tiingo -> Twelve Data
+   * Enforces strict asset-class provider routing:
+   * - CRYPTO -> Bitget primary (Never route BTCUSDT, ETHUSDT, etc. to Finnhub as primary)
+   * - FOREX -> Twelve Data primary (Authoritative)
+   * - STOCKS -> Finnhub / Twelve Data according to supported-symbol routing
    */
   public getRoutingForSymbol(appSymbol: string, requestedProvider?: string): {
     assetClass: 'CRYPTO' | 'STOCK' | 'FOREX' | 'INDEX' | 'UNKNOWN';
@@ -410,71 +293,151 @@ export class MarketDataManager {
     fallbackProviders: string[];
   } {
     const assetClass = SymbolNormalizer.getAssetClassification(appSymbol);
-    const cleanReq = requestedProvider ? requestedProvider.toLowerCase().trim() : undefined;
-    const requested = cleanReq === 'forex' ? 'twelvedata' : cleanReq;
+    const cleanRequested = requestedProvider ? requestedProvider.toLowerCase().trim() : undefined;
+    const requested = cleanRequested === 'forex' ? 'twelvedata' : cleanRequested;
 
     const hasFinnhub = Boolean(process.env.FINNHUB_API_KEY && process.env.FINNHUB_API_KEY.trim().length > 0);
     const hasTwelveData = Boolean(process.env.TWELVE_DATA_API_KEY && process.env.TWELVE_DATA_API_KEY.trim().length > 0);
-    const hasTiingo = Boolean(process.env.TIINGO_API_KEY && process.env.TIINGO_API_KEY.trim().length > 0);
 
+    // 1. CRYPTO: Bitget is ALWAYS the primary crypto price source
     if (assetClass === 'CRYPTO') {
-      const defaultChain = ['bitget'];
-      if (hasFinnhub) defaultChain.push('finnhub');
-      if (hasTiingo) defaultChain.push('tiingo');
-      if (hasTwelveData) defaultChain.push('twelvedata');
-
-      let primary = requested || 'bitget';
-      if (!defaultChain.includes(primary)) primary = 'bitget';
-      const fallbacks = defaultChain.filter((p) => p !== primary);
-
-      return { assetClass: 'CRYPTO', primaryProvider: primary, fallbackProviders: fallbacks };
+      const primaryProvider = 'bitget';
+      const fallbackProviders: string[] = [];
+      // Finnhub used ONLY as legitimate secondary fallback if key is configured
+      if (hasFinnhub) {
+        fallbackProviders.push('finnhub');
+      }
+      return { assetClass, primaryProvider, fallbackProviders };
     }
 
+    // 2. FOREX: Twelve Data is the authoritative primary Forex source
     if (assetClass === 'FOREX') {
-      const chain: string[] = [];
-      if (hasTiingo) chain.push('tiingo');
-      if (hasFinnhub) chain.push('finnhub');
-      if (hasTwelveData) chain.push('twelvedata');
-      chain.push('exchangerate');
-
-      let primary = requested || chain[0];
-      if (!chain.includes(primary)) primary = chain[0];
-      const fallbacks = chain.filter((p) => p !== primary);
-
-      return { assetClass: 'FOREX', primaryProvider: primary, fallbackProviders: fallbacks };
+      const primaryProvider = 'twelvedata';
+      const fallbackProviders: string[] = ['exchangerate'];
+      // Finnhub can serve as fallback if configured
+      if (hasFinnhub) {
+        fallbackProviders.push('finnhub');
+      }
+      return { assetClass, primaryProvider, fallbackProviders };
     }
 
+    // 3. STOCKS: Finnhub / Twelve Data routing
     if (assetClass === 'STOCK') {
-      const chain: string[] = [];
-      if (hasFinnhub) chain.push('finnhub');
-      if (hasTiingo) chain.push('tiingo');
-      if (hasTwelveData) chain.push('twelvedata');
-      if (chain.length === 0) chain.push('finnhub');
+      if (requested === 'twelvedata') {
+        const fallbacks: string[] = [];
+        if (hasFinnhub) fallbacks.push('finnhub');
+        return { assetClass, primaryProvider: 'twelvedata', fallbackProviders: fallbacks };
+      }
 
-      let primary = requested || chain[0];
-      if (!chain.includes(primary)) primary = chain[0];
-      const fallbacks = chain.filter((p) => p !== primary);
+      if (requested === 'finnhub') {
+        const fallbacks: string[] = [];
+        if (hasTwelveData) fallbacks.push('twelvedata');
+        return { assetClass, primaryProvider: 'finnhub', fallbackProviders: fallbacks };
+      }
 
-      return { assetClass: 'STOCK', primaryProvider: primary, fallbackProviders: fallbacks };
+      // Default stock routing: Finnhub primary if configured, Twelve Data fallback
+      if (hasFinnhub) {
+        const fallbacks: string[] = [];
+        if (hasTwelveData) fallbacks.push('twelvedata');
+        return { assetClass, primaryProvider: 'finnhub', fallbackProviders: fallbacks };
+      } else if (hasTwelveData) {
+        return { assetClass, primaryProvider: 'twelvedata', fallbackProviders: [] };
+      }
+
+      return { assetClass, primaryProvider: 'finnhub', fallbackProviders: [] };
     }
 
-    return { assetClass: 'UNKNOWN', primaryProvider: requested || 'unknown', fallbackProviders: [] };
+    // 4. Default / Unknown
+    return {
+      assetClass,
+      primaryProvider: requested || 'bitget',
+      fallbackProviders: [],
+    };
+  }
+
+  private selectProviderForSymbol(appSymbol: string): string {
+    return this.getRoutingForSymbol(appSymbol).primaryProvider;
+  }
+
+  private async fetchPriceFromProviderDirect(
+    providerId: string,
+    cleanSymbol: string,
+    assetClass: 'CRYPTO' | 'STOCK' | 'FOREX' | 'INDEX' | 'UNKNOWN',
+    isCritical: boolean
+  ): Promise<NormalizedTicker> {
+    const adapter = this.getProvider(providerId);
+    if (!adapter) {
+      return this.createErrorTicker(
+        cleanSymbol,
+        cleanSymbol,
+        providerId,
+        assetClass,
+        `Provider '${providerId}' is not registered or supported`
+      );
+    }
+
+    if (!quotaManager.canMakeRequest(providerId, isCritical)) {
+      return this.createErrorTicker(
+        cleanSymbol,
+        cleanSymbol,
+        providerId,
+        assetClass,
+        `Request blocked by API Quota/Rate-limit Manager for ${providerId}`
+      );
+    }
+
+    return providerQueue.enqueue(providerId, async () => {
+      const startTime = Date.now();
+      quotaManager.recordRequest(providerId);
+      requestRegistry.record(providerId, 'fetchPrice', cleanSymbol, isCritical ? 'Critical Price Fetch' : 'Standard Price Fetch');
+      try {
+        const result = await adapter.fetchPrice(cleanSymbol);
+        const latency = Date.now() - startTime;
+        const success = result.status === 'OK' && result.price > 0;
+        const is429 = result.errorMessage?.includes('429') || false;
+        const isTimeout = result.errorMessage?.toLowerCase().includes('timeout') || false;
+        quotaManager.recordResponse(
+          providerId,
+          success ? 200 : (is429 ? 429 : 500),
+          latency,
+          isTimeout,
+          result.errorMessage
+        );
+        return result;
+      } catch (err: any) {
+        const latency = Date.now() - startTime;
+        const errMsg = String(err);
+        const is429 = errMsg.includes('429') || errMsg.includes('rate limit');
+        const isTimeout = errMsg.toLowerCase().includes('timeout');
+        quotaManager.recordResponse(
+          providerId,
+          is429 ? 429 : 500,
+          latency,
+          isTimeout,
+          errMsg
+        );
+        return this.createErrorTicker(
+          cleanSymbol,
+          cleanSymbol,
+          providerId,
+          assetClass,
+          `Provider '${providerId}' call failed: ${errMsg}`
+        );
+      }
+    });
   }
 
   /**
-   * Fetches normalized ticker price.
-   * Checks cache first. Rejects requests outside scan context with REJECT_REQUEST: API_REQUEST_OUTSIDE_SCAN.
+   * Fetches normalized ticker price for a given symbol and optional provider.
+   * Reuses cached market data within the 60-second TTL to avoid hitting external rate limits.
+   * If primary provider fails, attempts legitimate fallbacks before returning 503 MARKET_DATA_UNAVAILABLE.
    */
   async getPrice(
     appSymbol: string,
     requestedProvider?: string,
     forceFresh = false,
-    reason: 'USER_CLICK' | 'AUTOMATED_SCANNER' = 'USER_CLICK',
-    globalScanDeadlineMs?: number
+    reason: 'USER_CLICK' | 'AUTOMATED_SCANNER' = 'USER_CLICK'
   ): Promise<NormalizedTicker> {
-    if (globalScanDeadlineMs && globalScanDeadlineMs - Date.now() <= 0) {
-      throw new Error('TIMEOUT: Global scanner deadline reached before starting request');
-    }
     const cleanSymbol = SymbolNormalizer.normalizeAppSymbol(appSymbol);
     if (!cleanSymbol) {
       return this.createErrorTicker(
@@ -486,166 +449,161 @@ export class MarketDataManager {
       );
     }
 
-    const routing = this.getRoutingForSymbol(cleanSymbol, requestedProvider);
-    if (routing.assetClass === 'UNKNOWN') {
+    const { assetClass, primaryProvider, fallbackProviders } = this.getRoutingForSymbol(appSymbol, requestedProvider);
+
+    if (assetClass === 'UNKNOWN') {
       return this.createErrorTicker(
         cleanSymbol,
         appSymbol,
-        routing.primaryProvider,
+        primaryProvider,
         'UNKNOWN',
         'ASSET_NOT_SUPPORTED'
       );
     }
 
-    if (routing.assetClass === 'FOREX') {
+    // Requirement 9: Structured Logging for Forex requests
+    // Format: FOREX_PRICE_REQUEST reason=USER_CLICK symbol=EURUSD
+    // Format: FOREX_PRICE_REQUEST reason=AUTOMATED_SCANNER symbol=EURUSD
+    // Never log PAGE_LOAD or COMPONENT_MOUNT
+    if (assetClass === 'FOREX' || primaryProvider === 'twelvedata' || primaryProvider === 'exchangerate') {
       const validReason = reason === 'AUTOMATED_SCANNER' ? 'AUTOMATED_SCANNER' : 'USER_CLICK';
       logger.info(`FOREX_PRICE_REQUEST reason=${validReason} symbol=${cleanSymbol}`);
     }
 
-    let activeContext = this.getActiveScanContext();
-    const cacheTtlMs = serverConfig.getConfig().marketDataCacheTtlMs;
+    const cacheTtlMs = serverConfig.getConfig().marketDataCacheTtlMs; // 60,000ms
 
-    // 1. CACHE LOOKUP: Always check cache first if not forceFresh
+    // 1. Cache Lookup (when not forcing fresh data)
     if (!forceFresh) {
-      const cachedPrimary = marketCache.get(routing.primaryProvider, cleanSymbol);
+      // Check primary provider cache
+      const cachedPrimary = marketCache.get(primaryProvider, cleanSymbol);
       if (cachedPrimary && cachedPrimary.status === 'OK' && cachedPrimary.price > 0) {
-        if (activeContext) {
-          const telem = this.getOrCreateTelemetry(activeContext);
-          telem.cacheHits++;
-        }
+        const dataAgeMs = Date.now() - cachedPrimary.timestamp;
+        logger.info(`[MarketData Price] Cache hit for ${cleanSymbol}`, {
+          assetClass,
+          primaryProvider,
+          fallbackProvider: 'none',
+          cacheHit: true,
+          cacheMiss: false,
+          priceTimestamp: cachedPrimary.timestamp,
+          dataAgeMs,
+        });
         return cachedPrimary;
       }
 
-      for (const fbId of routing.fallbackProviders) {
+      // Check fallback provider cache if primary cache missed
+      for (const fbId of fallbackProviders) {
         const cachedFallback = marketCache.get(fbId, cleanSymbol);
         if (cachedFallback && cachedFallback.status === 'OK' && cachedFallback.price > 0) {
-          if (activeContext) {
-            const telem = this.getOrCreateTelemetry(activeContext);
-            telem.cacheHits++;
-          }
+          const dataAgeMs = Date.now() - cachedFallback.timestamp;
+          logger.info(`[MarketData Price] Cache hit (fallback: ${fbId}) for ${cleanSymbol}`, {
+            assetClass,
+            primaryProvider,
+            fallbackProvider: fbId,
+            cacheHit: true,
+            cacheMiss: false,
+            priceTimestamp: cachedFallback.timestamp,
+            dataAgeMs,
+          });
           return cachedFallback;
         }
       }
     }
 
-    // 2. CONTEXT BOUNDARY CHECK: If no background scanner context exists, block external requests
-    if (!activeContext && reason !== 'USER_CLICK') {
-      logger.warn(`[MarketDataManager] Rejecting provider price request outside scan context for ${cleanSymbol}`);
-      this.preScanApiAttempts++;
-      return this.createErrorTicker(
-        cleanSymbol,
-        appSymbol,
-        routing.primaryProvider,
-        'ERROR',
-        'REJECT_REQUEST: API_REQUEST_OUTSIDE_SCAN'
-      );
-    }
+    // 2. Cache Miss or forceFresh: Fetch from Primary Provider with request deduplication
+    let primaryResult: NormalizedTicker;
 
-    let telemetry: ScanTelemetry | null = null;
-    if (activeContext) {
-      telemetry = this.getOrCreateTelemetry(activeContext);
-      telemetry.cacheMisses++;
-    }
-
-    // 3. SCAN-LEVEL REQUEST DEDUPLICATION
-    const dedupKey = activeContext 
-      ? `price:${activeContext.scanExecutionId}:${cleanSymbol}:${requestedProvider || 'default'}`
-      : `price:USER_CLICK:${cleanSymbol}:${requestedProvider || 'default'}`;
-    if (this.inFlightScanRequests.has(dedupKey)) {
-      return this.inFlightScanRequests.get(dedupKey)!;
-    }
-
-    const fetchPromise = (async () => {
-      return await this.executePriceFetchWithFailover(
-        cleanSymbol,
-        routing,
-        activeContext,
-        telemetry,
-        forceFresh,
-        cacheTtlMs,
-        globalScanDeadlineMs
-      );
-    })();
-
-    this.inFlightScanRequests.set(dedupKey, fetchPromise);
-    try {
-      return await fetchPromise;
-    } finally {
-      this.inFlightScanRequests.delete(dedupKey);
-    }
-  }
-
-  private async executePriceFetchWithFailover(
-    cleanSymbol: string,
-    routing: { assetClass: any; primaryProvider: string; fallbackProviders: string[] },
-    activeContext: ScanExecutionContext | null,
-    telemetry: ScanTelemetry | null,
-    forceFresh: boolean,
-    cacheTtlMs: number,
-    globalScanDeadlineMs?: number
-  ): Promise<NormalizedTicker> {
-    const providerChain = [routing.primaryProvider, ...routing.fallbackProviders];
-
-    for (let i = 0; i < providerChain.length; i++) {
-      const providerId = providerChain[i];
-
-      if (activeContext && this.isProviderRateLimited(activeContext.scanExecutionId, providerId)) {
-        logger.warn(`[MarketDataManager] Provider '${providerId}' rate-limited during scan ${activeContext.scanExecutionId}. Skipping.`);
-        if (i > 0 && telemetry) telemetry.failoverCount++;
-        continue;
+    if (forceFresh) {
+      primaryResult = await this.fetchPriceFromProviderDirect(primaryProvider, cleanSymbol, assetClass, true);
+      if (primaryResult.status === 'OK' && primaryResult.price > 0) {
+        marketCache.set(primaryProvider, cleanSymbol, primaryResult, cacheTtlMs);
       }
+    } else {
+      primaryResult = await marketCache.getOrFetch(primaryProvider, cleanSymbol, cacheTtlMs, async () => {
+        return this.fetchPriceFromProviderDirect(primaryProvider, cleanSymbol, assetClass, true);
+      });
+    }
 
-      const adapter = this.getProvider(providerId);
-      if (!adapter) continue;
+    if (primaryResult.status === 'OK' && primaryResult.price > 0) {
+      const dataAgeMs = Date.now() - primaryResult.timestamp;
+      logger.info(`[MarketData Price] Live price fetched from primary provider for ${cleanSymbol}`, {
+        assetClass,
+        primaryProvider,
+        fallbackProvider: 'none',
+        cacheHit: false,
+        cacheMiss: true,
+        priceTimestamp: primaryResult.timestamp,
+        dataAgeMs,
+      });
+      return primaryResult;
+    }
 
-      if (telemetry) telemetry.providerRequests++;
+    // 3. Primary provider busy or unavailable: Try legitimate fallback providers if supported
+    if (fallbackProviders.length > 0) {
+      const primaryErr = primaryResult.errorMessage || primaryResult.status || 'Unknown error';
+      logger.info(`[MarketData Price] Routing query for ${cleanSymbol} via fallback providers [${fallbackProviders.join(', ')}] (primary ${primaryProvider} busy or unavailable: ${primaryErr})`, {
+        assetClass,
+        primaryProvider,
+        fallbackProviders,
+      });
 
-      try {
-        const ticker = await providerQueue.enqueue(providerId, async () => {
-          return adapter.fetchPrice(cleanSymbol, globalScanDeadlineMs);
-        }, globalScanDeadlineMs);
+      for (const fbId of fallbackProviders) {
+        let fallbackResult: NormalizedTicker;
 
-        if (ticker && (ticker.status === 'OK' || ticker.price > 0)) {
-          if (telemetry) telemetry.providerSuccesses++;
-          this.lastSuccessfulQuotes.set(providerId, ticker.timestamp || ticker.receivedAt);
-          marketCache.set(providerId, cleanSymbol, ticker, cacheTtlMs);
-          return ticker;
-        }
-
-        const errMsg = ticker?.errorMessage || '';
-        const is429 = errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit');
-        if (is429) {
-          if (telemetry) telemetry.provider429s++;
-          if (activeContext) this.markProviderRateLimited(activeContext.scanExecutionId, providerId);
+        if (forceFresh) {
+          fallbackResult = await this.fetchPriceFromProviderDirect(fbId, cleanSymbol, assetClass, true);
+          if (fallbackResult.status === 'OK' && fallbackResult.price > 0) {
+            marketCache.set(fbId, cleanSymbol, fallbackResult, cacheTtlMs);
+          }
         } else {
-          if (telemetry) telemetry.providerErrors++;
+          fallbackResult = await marketCache.getOrFetch(fbId, cleanSymbol, cacheTtlMs, async () => {
+            return this.fetchPriceFromProviderDirect(fbId, cleanSymbol, assetClass, true);
+          });
         }
-        if (i > 0 && telemetry) telemetry.failoverCount++;
 
-      } catch (err: any) {
-        const errMsg = String(err);
-        const is429 = errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit');
-        const isTimeout = errMsg.toLowerCase().includes('timeout') || errMsg.toLowerCase().includes('aborted');
-
-        if (is429) {
-          if (telemetry) telemetry.provider429s++;
-          if (activeContext) this.markProviderRateLimited(activeContext.scanExecutionId, providerId);
-        } else if (isTimeout) {
-          if (telemetry) telemetry.providerTimeouts++;
-        } else {
-          if (telemetry) telemetry.providerErrors++;
+        if (fallbackResult.status === 'OK' && fallbackResult.price > 0) {
+          const dataAgeMs = Date.now() - fallbackResult.timestamp;
+          logger.info(`[MarketData Price] Live price fetched from fallback provider (${fbId}) for ${cleanSymbol}`, {
+            assetClass,
+            primaryProvider,
+            fallbackProvider: fbId,
+            cacheHit: false,
+            cacheMiss: true,
+            priceTimestamp: fallbackResult.timestamp,
+            dataAgeMs,
+          });
+          return fallbackResult;
         }
-        if (i > 0 && telemetry) telemetry.failoverCount++;
       }
     }
 
-    return this.createErrorTicker(
-      cleanSymbol,
-      cleanSymbol,
-      routing.primaryProvider,
-      routing.assetClass,
-      'MARKET_DATA_UNAVAILABLE: All providers failed'
-    );
+    // 4. All legitimate providers busy: Return MARKET_DATA_UNAVAILABLE (HTTP 503)
+    // Never synthesize, estimate, or return placeholder/stale prices.
+    logger.info(`[MarketData Price] Real-time rate for ${cleanSymbol} is currently unavailable from all primary/fallback providers`, {
+      assetClass,
+      primaryProvider,
+      fallbackProvider: fallbackProviders.join(',') || 'none',
+      cacheHit: false,
+      cacheMiss: true,
+      priceTimestamp: 0,
+      dataAgeMs: 0,
+      lastError: primaryResult?.errorMessage || 'Unknown error',
+    });
+
+    return {
+      symbol: cleanSymbol,
+      rawSymbol: cleanSymbol,
+      provider: primaryProvider,
+      assetType: assetClass,
+      bid: null,
+      ask: null,
+      price: 0,
+      timestamp: 0,
+      receivedAt: Date.now(),
+      source: 'LIVE',
+      isFresh: false,
+      status: 'MARKET_DATA_UNAVAILABLE',
+      errorMessage: primaryResult?.errorMessage || `MARKET_DATA_UNAVAILABLE: All legitimate providers failed for ${cleanSymbol}`,
+    };
   }
 
   private createErrorTicker(
@@ -696,167 +654,100 @@ export class MarketDataManager {
   }
 
   /**
-   * Fetches candles if supported by the specified provider with caching, rate-limit check, deduplication, and fallback.
+   * Fetches candles if supported by the specified provider with caching, rate-limit check, and fallback.
    */
-  async getCandles(
-    appSymbol: string,
-    requestedProvider?: string,
-    timeframe = '1m',
-    limit = 50,
-    critical = false,
-    globalScanDeadlineMs?: number
-  ): Promise<NormalizedCandle[]> {
+  async getCandles(appSymbol: string, requestedProvider?: string, timeframe = '1m', limit = 50, critical = false): Promise<NormalizedCandle[]> {
     const cleanSymbol = SymbolNormalizer.normalizeAppSymbol(appSymbol);
     const routing = this.getRoutingForSymbol(cleanSymbol, requestedProvider);
     let primaryProviderId = (requestedProvider || routing.primaryProvider).toLowerCase();
     if (primaryProviderId === 'forex') {
-      primaryProviderId = 'twelvedata';
+      primaryProviderId = 'twelvedata'; // Twelve Data is authoritative
     }
 
     const ttlMs = this.getTimeframeTtl(timeframe);
-    let activeContext = this.getActiveScanContext();
 
-    // 1. CACHE LOOKUP: Check candles cache first
-    const cachedCandles = marketCache.getCandles(primaryProviderId, cleanSymbol, timeframe);
-    if (cachedCandles && cachedCandles.length > 0) {
-      if (activeContext) {
-        const telem = this.getOrCreateTelemetry(activeContext);
-        telem.cacheHits++;
-      }
-      return cachedCandles;
-    }
+    return marketCache.getOrFetchCandles(primaryProviderId, cleanSymbol, timeframe, ttlMs, async () => {
+      let candles: NormalizedCandle[] = [];
 
-    for (const fbId of routing.fallbackProviders) {
-      const cachedFb = marketCache.getCandles(fbId, cleanSymbol, timeframe);
-      if (cachedFb && cachedFb.length > 0) {
-        if (activeContext) {
-          const telem = this.getOrCreateTelemetry(activeContext);
-          telem.cacheHits++;
+      const adapter = this.getProvider(primaryProviderId);
+      if (adapter && adapter.fetchCandles) {
+        if (quotaManager.canMakeRequest(primaryProviderId, critical)) {
+          candles = await providerQueue.enqueue(primaryProviderId, async () => {
+            const startTime = Date.now();
+            quotaManager.recordRequest(primaryProviderId);
+            requestRegistry.record(primaryProviderId, `fetchCandles:${timeframe}`, cleanSymbol, critical ? 'Critical Candle Fetch' : 'Candle Fetch');
+            try {
+              const res = await adapter.fetchCandles!(cleanSymbol, timeframe, limit);
+              const latency = Date.now() - startTime;
+              if (res && res.length > 0) {
+                quotaManager.recordResponse(primaryProviderId, 200, latency);
+              }
+              return res;
+            } catch (err: any) {
+              const latency = Date.now() - startTime;
+              const errMsg = String(err);
+              const is429 = errMsg.includes('429') || errMsg.includes('rate limit');
+              const isTimeout = errMsg.toLowerCase().includes('timeout');
+              quotaManager.recordResponse(primaryProviderId, is429 ? 429 : 500, latency, isTimeout, errMsg);
+              logger.info(`Primary provider '${primaryProviderId}' candle fetch unavailable for ${cleanSymbol} (${timeframe}): ${errMsg}`);
+              return [];
+            }
+          });
         }
-        return cachedFb;
-      }
-    }
-
-    // 2. CONTEXT BOUNDARY CHECK: If no background scanner context exists, block external requests
-    if (!activeContext) {
-      logger.warn(`[MarketDataManager] Rejecting provider candles request outside scan context for ${cleanSymbol}`);
-      this.preScanApiAttempts++;
-      throw new Error('REJECT_REQUEST: API_REQUEST_OUTSIDE_SCAN');
-    }
-
-    const telemetry = this.getOrCreateTelemetry(activeContext);
-    telemetry.cacheMisses++;
-
-    // 3. SCAN-LEVEL DEDUPLICATION
-    const dedupKey = `candles:${activeContext.scanExecutionId}:${cleanSymbol}:${timeframe}:${limit}:${primaryProviderId}`;
-    if (this.inFlightScanRequests.has(dedupKey)) {
-      return this.inFlightScanRequests.get(dedupKey)!;
-    }
-
-    const fetchPromise = (async () => {
-      return await this.executeCandlesFetchWithFailover(
-        cleanSymbol,
-        primaryProviderId,
-        routing.fallbackProviders,
-        timeframe,
-        limit,
-        critical,
-        activeContext,
-        telemetry,
-        ttlMs,
-        globalScanDeadlineMs
-      );
-    })();
-
-    this.inFlightScanRequests.set(dedupKey, fetchPromise);
-    try {
-      return await fetchPromise;
-    } finally {
-      this.inFlightScanRequests.delete(dedupKey);
-    }
-  }
-
-  private async executeCandlesFetchWithFailover(
-    cleanSymbol: string,
-    primaryProviderId: string,
-    fallbackProviders: string[],
-    timeframe: string,
-    limit: number,
-    critical: boolean,
-    activeContext: ScanExecutionContext,
-    telemetry: ScanTelemetry,
-    ttlMs: number,
-    globalScanDeadlineMs?: number
-  ): Promise<NormalizedCandle[]> {
-    const providerChain = [primaryProviderId, ...fallbackProviders];
-
-    for (let i = 0; i < providerChain.length; i++) {
-      const providerId = providerChain[i];
-
-      if (this.isProviderRateLimited(activeContext.scanExecutionId, providerId)) {
-        logger.warn(`[MarketDataManager] Provider '${providerId}' rate-limited during scan ${activeContext.scanExecutionId}. Skipping candles fetch.`);
-        if (i > 0) telemetry.failoverCount++;
-        continue;
       }
 
-      const adapter = this.getProvider(providerId);
-      if (!adapter || !adapter.fetchCandles) continue;
+      if (candles && candles.length > 0) {
+        return candles;
+      }
 
-      if (!quotaManager.canMakeRequest(providerId, critical)) continue;
-
-      telemetry.providerRequests++;
-      const startTime = Date.now();
-
-      try {
-        const candles = await providerQueue.enqueue(providerId, async () => {
-          quotaManager.recordRequest(providerId);
-          requestRegistry.record(providerId, `fetchCandles:${timeframe}`, cleanSymbol, critical ? 'Critical Candle Fetch' : 'Candle Fetch');
-          const res = await adapter.fetchCandles!(cleanSymbol, timeframe, limit, globalScanDeadlineMs);
-          const latency = Date.now() - startTime;
-          getActiveProfiler()?.recordProviderRequest(latency);
-          getActiveProfiler()?.recordNetworkRequest(providerId, `fetchCandles:${timeframe}`, latency);
-          if (res && res.length > 0) {
-            quotaManager.recordResponse(providerId, 200, latency);
+      // If primary provider failed or is rate-limited, attempt legitimate fallback providers
+      for (const fallbackId of routing.fallbackProviders) {
+        const fallbackAdapter = this.getProvider(fallbackId);
+        if (fallbackAdapter && fallbackAdapter.fetchCandles) {
+          if (quotaManager.canMakeRequest(fallbackId, critical)) {
+            candles = await providerQueue.enqueue(fallbackId, async () => {
+              const startTime = Date.now();
+              quotaManager.recordRequest(fallbackId);
+              requestRegistry.record(fallbackId, `fetchCandles:${timeframe}`, cleanSymbol, critical ? 'Critical Fallback Candle Fetch' : 'Fallback Candle Fetch');
+              try {
+                const res = await fallbackAdapter.fetchCandles!(cleanSymbol, timeframe, limit);
+                const latency = Date.now() - startTime;
+                if (res && res.length > 0) {
+                  quotaManager.recordResponse(fallbackId, 200, latency);
+                  logger.info(`Candles fetched from fallback provider '${fallbackId}' for ${cleanSymbol} (${timeframe})`);
+                }
+                return res;
+              } catch (err: any) {
+                const latency = Date.now() - startTime;
+                const errMsg = String(err);
+                const is429 = errMsg.includes('429') || errMsg.includes('rate limit');
+                const isTimeout = errMsg.toLowerCase().includes('timeout');
+                quotaManager.recordResponse(fallbackId, is429 ? 429 : 500, latency, isTimeout, errMsg);
+                logger.info(`Fallback provider '${fallbackId}' candle fetch unavailable for ${cleanSymbol} (${timeframe}): ${errMsg}`);
+                return [];
+              }
+            });
+            if (candles && candles.length > 0) {
+              return candles;
+            }
           }
-          return res;
-        }, globalScanDeadlineMs);
-
-        if (candles && candles.length > 0) {
-          telemetry.providerSuccesses++;
-          marketCache.setCandles(providerId, cleanSymbol, timeframe, candles, ttlMs);
-          return candles;
         }
-      } catch (err: any) {
-        const latency = Date.now() - startTime;
-        const errMsg = String(err);
-        const is429 = errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit');
-        const isTimeout = errMsg.toLowerCase().includes('timeout') || errMsg.toLowerCase().includes('aborted');
-
-        quotaManager.recordResponse(providerId, is429 ? 429 : 500, latency, isTimeout, errMsg);
-        if (is429) {
-          telemetry.provider429s++;
-          this.markProviderRateLimited(activeContext.scanExecutionId, providerId);
-        } else if (isTimeout) {
-          telemetry.providerTimeouts++;
-        } else {
-          telemetry.providerErrors++;
-        }
-        if (i > 0) telemetry.failoverCount++;
       }
-    }
 
-    // Retrieve expired candles if available
-    const expired = marketCache.getExpiredCandles(primaryProviderId, cleanSymbol, timeframe);
-    if (expired && expired.length > 0) {
-      logger.info(`[MarketData Candles] Serving ${expired.length} expired candles from cache for ${cleanSymbol} (${timeframe})`);
-      return expired;
-    }
+      // If absolutely no provider succeeded, retrieve expired candles as high-quality fallback during rate limits
+      const expired = marketCache.getExpiredCandles(primaryProviderId, cleanSymbol, timeframe);
+      if (expired && expired.length > 0) {
+        logger.info(`[MarketData Candles] Fetch failed or rate-limited. Serving ${expired.length} expired candles from cache for ${cleanSymbol} (${timeframe})`);
+        return expired;
+      }
 
-    return [];
+      logger.info(`No real OHLC candle data currently available for ${cleanSymbol} (${timeframe}) from primary or fallback providers`);
+      return [];
+    });
   }
 
   /**
-   * Tests real API status for all registered providers passively.
+   * Tests real API connectivity for all registered providers.
    */
   async getMarketStatus(): Promise<MarketStatusResponse> {
     const healthPromises = Array.from(this.providers.values()).map((provider) =>
@@ -907,7 +798,7 @@ export class MarketDataManager {
   }
 
   /**
-   * Fetches candles across multiple timeframes concurrently.
+   * Fetches candles across multiple timeframes concurrently for backtests & multi-timeframe analysis.
    */
   async getMultiTimeframeCandles(
     appSymbol: string,

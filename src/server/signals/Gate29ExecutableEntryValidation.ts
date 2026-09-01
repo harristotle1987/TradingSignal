@@ -29,7 +29,7 @@
  */
 
 import { SignalDirection, ExecutionEvidenceState, HistoricalEntryPolicy } from '../../types/index.js';
-import { HISTORICAL_ENTRY_POLICY } from '../config.js';
+import { serverConfig, HISTORICAL_ENTRY_POLICY } from '../config.js';
 import { logger } from '../logger.js';
 
 export interface ExecutableEntryQuote {
