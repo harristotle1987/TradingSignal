@@ -25,6 +25,7 @@
  */
 
 import { logger } from '../logger.js';
+import { AssetType } from '../../types/index.js';
 
 export type AssetClass = 'CRYPTO' | 'FOREX' | 'STOCKS' | 'STOCK' | 'INDEX' | 'UNKNOWN';
 

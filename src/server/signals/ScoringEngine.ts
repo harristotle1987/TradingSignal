@@ -7,7 +7,7 @@ import { Gate28ConfirmationDiversity } from './Gate28ConfirmationDiversity.js';
 import { Gate34ExecutionFrictionStressTest, FrictionStressTestResult } from './Gate34ExecutionFrictionStressTest.js';
 import { logger } from '../logger.js';
 import { serverConfig } from '../config.js';
-import { ASSET_CLASS_GUARDRAILS, AtrTpGenerator } from './AtrTpGenerator.js';
+import { ASSET_CLASS_GUARDRAILS, GuardrailRange, AtrTpGenerator } from './AtrTpGenerator.js';
 import { RiskRewardCalculator, logRrRejectionDiagnostic } from './RiskRewardCalculator.js';
 
 export interface TpCalculationDiagnostics {

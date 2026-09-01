@@ -351,7 +351,7 @@ export const RejectionBreakdown: React.FC<{ candidate: RejectedCandidate }> = ({
 export const AcceptanceBreakdown: React.FC<{ signal: AcceptedSignal }> = ({ signal }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  const score = signal.score ?? signal.confidenceScore ?? 70;
+  const score = signal.score ?? signal.confidenceScore ?? 72;
   const winRate = signal.estimatedWinRate ?? 60;
   const rr = signal.riskRewardRatio ?? 1.8;
 

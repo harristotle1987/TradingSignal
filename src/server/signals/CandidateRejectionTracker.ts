@@ -17,7 +17,7 @@
  * - MARKET_STRUCTURE: Structural break, lower lows in uptrend, higher highs in downtrend, S&R block
  * - RR: Risk/Reward ratio below minimum threshold (gross or net)
  * - SL_TP_VALIDITY: Invalid stop-loss distance, invalid take-profit ordering/distance
- * - FINAL_SCORE_BELOW_70: Composite or core tradeability score below final threshold (70)
+ * - FINAL_SCORE_BELOW_72: Composite or core tradeability score below final threshold (72)
  * - DUPLICATE_OR_EXISTING_SIGNAL: Duplicate active signal or fingerprint match within 24h
  * - COOLDOWN: Asset or strategy cooldown violation
  * - MARKET_SESSION_STATUS: Closed market session (Forex/Stock weekend or holiday)
@@ -33,7 +33,7 @@ import { serverConfig } from '../config.js';
 
 export enum StandardFailedGate {
   FINAL_SCORE_UNREACHABLE = 'FINAL_SCORE_UNREACHABLE',
-  FINAL_SCORE_BELOW_70 = 'FINAL_SCORE_BELOW_70',
+  FINAL_SCORE_BELOW_72 = 'FINAL_SCORE_BELOW_72',
   MTF_ALIGNMENT = 'MTF_ALIGNMENT',
   VALID_ENTRY = 'VALID_ENTRY',
   INVALID_ENTRY = 'INVALID_ENTRY',
@@ -85,8 +85,6 @@ export interface CandidateRejectionAudit {
   statusText?: string;
   rejectionSummary?: string;
   timestamp?: number;
-  isScoreThresholdRejected?: boolean;
-  /** @deprecated Backward-compatible alias for isScoreThresholdRejected */
   is72PlusRejected?: boolean;
   factors?: any;
   tpDiagnostics?: any;
@@ -123,7 +121,7 @@ export class CandidateRejectionTracker {
     }
 
     if (clean.includes('SCORE_BELOW_THRESHOLD') || clean.includes('Composite signal score')) {
-      const minThreshold = serverConfig?.getConfig?.()?.thresholds?.minimumScore || 70;
+      const minThreshold = serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 70;
       return `Signal score (${score}/100) is below the minimum tradeability threshold of ${minThreshold}.`;
     }
 
@@ -150,9 +148,9 @@ export class CandidateRejectionTracker {
    * Records or updates a candidate's evaluation and rejection audit.
    */
   public recordCandidate(audit: CandidateRejectionAudit): void {
-    const minThreshold = serverConfig?.getConfig?.()?.thresholds?.minimumScore || 70;
+    const minThreshold = serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 70;
     const effectiveScore = audit.finalScore ?? audit.score ?? audit.scoreBeforeGate6 ?? 0;
-    const isScoreRejected = (effectiveScore >= minThreshold || (audit.scoreBeforeGate6 ?? 0) >= minThreshold || audit.isScoreThresholdRejected === true || audit.is72PlusRejected === true) && audit.finalDecision === 'REJECTED';
+    const is72Plus = (effectiveScore >= minThreshold || (audit.scoreBeforeGate6 ?? 0) >= minThreshold || audit.is72PlusRejected === true) && audit.finalDecision === 'REJECTED';
     const statusText = audit.finalDecision === 'REJECTED' ? 'REJECTED — NOT TRADEABLE' : (audit.statusText || 'TRADEABLE');
     const rejectionSummary = audit.rejectionSummary || CandidateRejectionTracker.formatHumanReadableSummary(audit.primaryRejectionReason, audit.failedGates, effectiveScore);
     const timestamp = audit.timestamp || Date.now();
@@ -163,7 +161,7 @@ export class CandidateRejectionTracker {
     if (cleanAudit.stopLoss === 0) delete cleanAudit.stopLoss;
     if (cleanAudit.takeProfit === 0) delete cleanAudit.takeProfit;
     if (cleanAudit.tp1 === 0) delete cleanAudit.tp1;
-    if (cleanAudit.tp2 === 0) delete cleanAudit.tp3 ? delete cleanAudit.tp2 : null;
+    if (cleanAudit.tp2 === 0) delete cleanAudit.tp2;
     if (cleanAudit.tp3 === 0) delete cleanAudit.tp3;
     if (cleanAudit.grossRR === 0) delete cleanAudit.grossRR;
     if (cleanAudit.primaryRR === 0) delete cleanAudit.primaryRR;
@@ -174,8 +172,15 @@ export class CandidateRejectionTracker {
     const existing = this.records.get(audit.symbol);
     if (existing) {
       const mergedGates = Array.from(new Set([...existing.failedGates, ...cleanAudit.failedGates]));
-      const everReachedThreshold = (existing.score >= minThreshold) || (existing.scoreBeforeGate6 ?? 0) >= minThreshold || isScoreRejected;
-      const isStillScoreRejected = (everReachedThreshold || effectiveScore >= minThreshold) && cleanAudit.finalDecision === 'REJECTED';
+      // Telemetry now reflects the MOST RECENT evaluation's actual score,
+      // never the historical maximum. A rejected candidate's score can go
+      // up or down between scans, but it must always reflect what was
+      // actually just computed — it must never appear to increase purely
+      // because of a prior evaluation being merged in. The 72+ visibility
+      // flag is tracked independently ("was this ever a 72+ candidate")
+      // and never overwrites the live score.
+      const everReached72Plus = (existing.score >= minThreshold) || (existing.scoreBeforeGate6 ?? 0) >= minThreshold || is72Plus;
+      const isStill72Plus = (everReached72Plus || effectiveScore >= minThreshold) && cleanAudit.finalDecision === 'REJECTED';
 
       this.records.set(audit.symbol, {
         ...existing,
@@ -194,8 +199,7 @@ export class CandidateRejectionTracker {
         tp2RR: cleanAudit.tp2RR || existing.tp2RR,
         tp3RR: cleanAudit.tp3RR || existing.tp3RR,
         failedGates: mergedGates,
-        isScoreThresholdRejected: isStillScoreRejected,
-        is72PlusRejected: isStillScoreRejected,
+        is72PlusRejected: isStill72Plus,
         statusText,
         rejectionSummary,
         timestamp,
@@ -204,8 +208,7 @@ export class CandidateRejectionTracker {
       this.records.set(audit.symbol, {
         ...cleanAudit,
         score: effectiveScore,
-        isScoreThresholdRejected: isScoreRejected,
-        is72PlusRejected: isScoreRejected,
+        is72PlusRejected: is72Plus,
         statusText,
         rejectionSummary,
         timestamp,
@@ -287,9 +290,9 @@ export class CandidateRejectionTracker {
             lowerReason.includes('mtf') ||
             lowerReason.includes('timeframe'));
 
-        const minThreshold = serverConfig?.getConfig?.()?.thresholds?.minimumScore || 70;
+        const minThreshold = serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 70;
         const isScore =
-          record.failedGates.includes(StandardFailedGate.FINAL_SCORE_BELOW_70) ||
+          record.failedGates.includes(StandardFailedGate.FINAL_SCORE_BELOW_72) ||
           record.failedGates.includes(StandardFailedGate.FINAL_SCORE_UNREACHABLE) ||
           lowerReason.includes('score') ||
           (record.finalScore !== undefined && record.finalScore < minThreshold) ||
@@ -416,10 +419,10 @@ export class CandidateRejectionTracker {
       gates.add(CandidateRejectionTracker.mapGate7Code(code));
     }
 
-    const minThreshold = serverConfig?.getConfig?.()?.thresholds?.minimumScore || 70;
-    // A candidate scoring >= minThreshold MUST NOT receive FINAL_SCORE_BELOW_70
+    const minThreshold = serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 70;
+    // A candidate scoring >= minThreshold MUST NOT receive FINAL_SCORE_BELOW_72
     if (score < minThreshold && (score > 0 || rejectionReason.toLowerCase().includes('score'))) {
-      gates.add(StandardFailedGate.FINAL_SCORE_BELOW_70);
+      gates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
     }
 
     if (gates.size === 0) {
@@ -439,12 +442,12 @@ export class CandidateRejectionTracker {
     const failedGates = new Set<StandardFailedGate>();
     const lower = (reason || '').toLowerCase();
 
-    const minThreshold = serverConfig?.getConfig?.()?.thresholds?.minimumScore || 70;
+    const minThreshold = serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 70;
     // The authoritative rule:
-    // score < minThreshold → FINAL_SCORE_BELOW_70
-    // score >= minThreshold → score gate PASSED. MUST NOT receive FINAL_SCORE_BELOW_70.
+    // score < minThreshold → FINAL_SCORE_BELOW_72
+    // score >= minThreshold → score gate PASSED. MUST NOT receive FINAL_SCORE_BELOW_72.
     if (score < minThreshold && (score > 0 || lower.includes('score') || lower.includes('final_score') || lower.includes('hurdle') || lower.includes('tradeability threshold') || lower.includes('scoring criteria'))) {
-      failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_70);
+      failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
     }
 
     if (lower.includes('mtf') || lower.includes('timeframe') || lower.includes('alignment')) {
@@ -503,8 +506,8 @@ export class CandidateRejectionTracker {
     }
 
     if (failedGates.size === 0) {
-      if (score < minThreshold) {
-        failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_70);
+      if (score < 70) {
+        failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
       } else {
         failedGates.add(StandardFailedGate.DATA_INTEGRITY);
       }
@@ -551,10 +554,9 @@ export class CandidateRejectionTracker {
       }
     }
 
-    const minThreshold = serverConfig?.getConfig?.()?.thresholds?.minimumScore || 70;
     const score = rej.compositeMtfScore ?? rej.layer1?.score ?? 0;
-    if (score < minThreshold) {
-      failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_70);
+    if (score < 70) {
+      failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
     }
 
     let primaryReason = rej.rejectionReason || `Gate 6 Layer ${rej.stoppedAtLayer} MTF Analysis Rejected`;
@@ -578,10 +580,10 @@ export class CandidateRejectionTracker {
     const failedGates: Set<StandardFailedGate> = new Set();
     const reason = scoring.rejectionReason || '';
     const reasonLower = reason.toLowerCase();
-    const targetScoreThreshold = thresholds.minimumScore || thresholds.signalThreshold || 70;
+    const targetScoreThreshold = thresholds.signalThreshold || 70;
 
-    if (scoring.score < targetScoreThreshold) {
-      failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_70);
+    if (scoring.score < targetScoreThreshold || scoring.score < 70) {
+      failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
     }
     if (reasonLower.includes('directional') || reasonLower.includes('trend') || 
         (scoring.factors?.higherTfTrendScore && scoring.factors.higherTfTrendScore < 14) ||
@@ -619,8 +621,8 @@ export class CandidateRejectionTracker {
     }
 
     if (failedGates.size === 0) {
-      if (scoring.score < targetScoreThreshold) {
-        failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_70);
+      if (scoring.score < (thresholds.signalThreshold || 70)) {
+        failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
       } else {
         failedGates.add(StandardFailedGate.DATA_INTEGRITY);
       }
@@ -640,10 +642,9 @@ export class CandidateRejectionTracker {
     threshold = 70
   ): { primaryReason: string; failedGates: StandardFailedGate[] } {
     const failedGates: Set<StandardFailedGate> = new Set();
-    const minThreshold = serverConfig?.getConfig?.()?.thresholds?.minimumScore || threshold;
 
-    if (gate8Eval.finalScore < minThreshold) {
-      failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_70);
+    if (gate8Eval.finalScore < threshold) {
+      failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
     }
 
     const factors = gate8Eval.factors || {};
@@ -681,16 +682,16 @@ export class CandidateRejectionTracker {
     }
 
     if (failedGates.size === 0) {
-      if (gate8Eval.finalScore < minThreshold) {
-        failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_70);
+      if (gate8Eval.finalScore < threshold) {
+        failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_72);
       } else {
         failedGates.add(StandardFailedGate.DATA_INTEGRITY);
       }
     }
 
     return {
-      primaryReason: gate8Eval.rejectionReason || (gate8Eval.finalScore < minThreshold
-        ? `FINAL_SCORE_BELOW_70: Core score (${gate8Eval.finalScore}/100) below required threshold of ${minThreshold}`
+      primaryReason: gate8Eval.rejectionReason || (gate8Eval.finalScore < threshold
+        ? `FINAL_SCORE_BELOW_72: Core score (${gate8Eval.finalScore}/100) below required threshold of ${threshold}`
         : `Gate 8 Tradeability Criteria Not Satisfied`),
       failedGates: Array.from(failedGates),
     };

@@ -14,9 +14,10 @@
  * - Duplicate protection: Prevents spamming the same setup.
  */
 
-import { TradingSignal, SignalGenerationResponse, NormalizedCandle, SignalDirection, isActionableSignal } from '../../types/index.js';
+import { TradingSignal, SignalGenerationResponse, NormalizedCandle, NormalizedTicker, SignalDirection, isActionableSignal } from '../../types/index.js';
 import { getDynamicPrecision } from '../../utils/formatters.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
+import { quotaManager } from '../market/QuotaManager.js';
 import { MarketSessionManager } from '../market/MarketSessionManager.js';
 import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 import { ScoringEngine, ScoringResult } from './ScoringEngine.js';
@@ -27,6 +28,7 @@ import { Gate2MTFConfluence } from './Gate2MTFConfluence.js';
 import { Gate3MarketStructure } from './Gate3MarketStructure.js';
 import { Gate3PreliminaryScreen, Gate3PreliminaryScreenResult } from './Gate3PreliminaryScreen.js';
 import { Gate4MomentumVolatility } from './Gate4MomentumVolatility.js';
+import { Gate5SupportResistance } from './Gate5Liquidity.js';
 import { Gate6VolumePriceAction } from './Gate6VolumePriceAction.js';
 import { Gate7MarketContext } from './Gate7MarketContext.js';
 import { Gate8EntryQuality } from './Gate8EntryQuality.js';
@@ -40,18 +42,19 @@ import { Gate17CorrelationExposure } from './Gate17CorrelationExposure.js';
 import { Gate18RegimeStrategySelection } from './Gate18RegimeStrategySelection.js';
 import { Gate20ProbabilityCalibration } from './Gate20ProbabilityCalibration.js';
 import { Gate21WalkForwardValidation } from './Gate21WalkForwardValidation.js';
-import { Gate32AdaptiveCandidateSelection } from './Gate32AdaptiveCandidateSelection.js';
-import { TargetQualityEvaluator } from './TargetQualityEvaluator.js';
+import { Gate32AdaptiveCandidateSelection, Stage2CandidateInput } from './Gate32AdaptiveCandidateSelection.js';
+import { TargetQualityEvaluator, calculateTargetRr } from './TargetQualityEvaluator.js';
 import { Gate22MonteCarloSimulation } from './Gate22MonteCarloSimulation.js';
 import { NvidiaAIService } from './NvidiaAIService.js';
 import { SignalValidator, ValidationResult } from './SignalValidator.js';
-import { TradeRankingEngine } from './TradeRankingEngine.js';
+import { TradeRankingEngine, ValidatedCandidate } from './TradeRankingEngine.js';
 import { SignalLogger } from './SignalLogger.js';
 import { SignalFingerprint } from './SignalFingerprint.js';
 import { CooldownManager } from './CooldownManager.js';
 import { MarketStructureDetector } from './MarketStructureDetector.js';
 import { SignalAuditStore } from './SignalAuditStore.js';
 import { ScannerPersistence } from './ScannerPersistence.js';
+import { OpportunityFunnelStore, OpportunityFunnelEngine } from './Gate26OpportunityFunnel.js';
 import { Gate35SignalFunnelAnalytics } from './Gate35SignalFunnelAnalytics.js';
 import { logger } from '../logger.js';
 

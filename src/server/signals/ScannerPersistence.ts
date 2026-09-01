@@ -145,35 +145,12 @@ export interface PersistedNotification {
   date: string;
 }
 
-export interface ScannerTimingTelemetry {
-  dispatchStartedAt: number;
-  dispatchCompletedAt: number;
-  cronRequestDurationMs: number;
-  cronResponseDurationMs: number;
-  dispatchDurationMs: number;
-  lockWaitMs: number;
-  backgroundStartedAt: number;
-  backgroundCompletedAt: number;
-  backgroundScanDurationMs: number;
-  totalScanDurationMs: number;
-  scanDurationMs: number;
-  timeBudgetExceeded: boolean;
-  providerRequestsStoppedByBudget: boolean;
-  lockAcquired: boolean;
-  instanceId: string;
-  status: string;
-  diagnosticClassification: 'OK' | 'CRON_HTTP_SLOW' | 'BACKGROUND_SCAN_SLOW' | 'LOCK_CONTENTION' | 'SERVERLESS_COLD_START' | 'PROVIDER_API_DELAY';
-  diagnosticMessage?: string;
-  timestamp: number;
-}
-
 export interface ScannerPersistenceData {
   capState: DailyCapState;
   sentSignals: PersistedSentSignal[];
   rejectedCandidates: PersistedRejectedCandidate[];
   notifications: PersistedNotification[];
   deletedSignals?: string[];
-  latestTimingTelemetry?: ScannerTimingTelemetry;
   settings: {
     enabled: boolean;
     notificationsEnabled: boolean;
@@ -187,7 +164,6 @@ const LOCAL_PERSISTENCE_PATH = path.join(process.cwd(), 'scanner_persistence.jso
 // Firestore Collection Paths
 const FIRESTORE_CAP_DOC = 'scanner/cap_state';
 const FIRESTORE_LOCK_DOC = 'scanner/lock_state';
-const FIRESTORE_TELEMETRY_DOC = 'scanner/latest_telemetry';
 const FIRESTORE_SIGNALS_COL = 'scanner_sent_signals';
 const FIRESTORE_REJECTIONS_COL = 'scanner_rejected_candidates';
 const FIRESTORE_NOTIFICATIONS_COL = 'scanner_notifications';
@@ -204,7 +180,6 @@ export class ScannerPersistence {
     isScanning: false,
     lockAcquiredAt: 0,
   };
-  private static latestTimingTelemetry: ScannerTimingTelemetry | null = null;
 
   public static localData: ScannerPersistenceData = {
     capState: {
@@ -721,7 +696,7 @@ export class ScannerPersistence {
       tp3Rr: signal.tp3Rr,
       riskRewardRatio: signal.riskRewardRatio,
       targetQualityScore: signal.targetQualityScore,
-      score: signal.score || signal.confidenceScore || 70,
+      score: signal.score || signal.confidenceScore || 72,
       rankTier: signal.rankTier || (signal.isBestTrade ? 'BEST_TRADE' : signal.isSecondBest ? 'SECOND_BEST' : 'SUGGESTION'),
       strategy: signal.strategy,
       timeframe: signal.timeframe,
@@ -1682,58 +1657,24 @@ export class ScannerPersistence {
   }
 
   /**
-   * Checks if an execution lock is currently active without modifying state.
+   * Attempts to atomically acquire a scanner execution lock for concurrency protection across Vercel serverless containers.
+   * Lock auto-expires after lockTimeoutMs (default 5 minutes) to recover from orphaned crashed instances.
    */
-  static async isLockActive(lockTimeoutMs = 60000): Promise<{ isLocked: boolean; reason?: string; lockAcquiredAt?: number; instanceId?: string }> {
+  static async tryAcquireLock(instanceId: string, lockTimeoutMs = 300000): Promise<{ acquired: boolean; reason?: string }> {
     this.init();
-    const now = Date.now();
-
-    const firestore = getFirestoreAdmin();
-    if (!firestore) {
-      if (this.localLock.isScanning && now - this.localLock.lockAcquiredAt < lockTimeoutMs) {
-        return { isLocked: true, reason: 'Scan lock held in local process.', lockAcquiredAt: this.localLock.lockAcquiredAt, instanceId: this.localLock.instanceId };
-      }
-      return { isLocked: false };
-    }
-
-    try {
-      const snap = await firestore.doc(FIRESTORE_LOCK_DOC).get();
-      if (snap.exists) {
-        const remoteLock = snap.data() as ScanLockState;
-        if (remoteLock.isScanning && now - remoteLock.lockAcquiredAt < lockTimeoutMs) {
-          return { isLocked: true, reason: `Scan lock held in Firestore by instance ${remoteLock.instanceId || 'unknown'}`, lockAcquiredAt: remoteLock.lockAcquiredAt, instanceId: remoteLock.instanceId };
-        }
-      }
-      return { isLocked: false };
-    } catch (err) {
-      logger.warn('[ScannerPersistence] Firestore isLockActive error:', { error: String(err) });
-      if (this.localLock.isScanning && now - this.localLock.lockAcquiredAt < lockTimeoutMs) {
-        return { isLocked: true, reason: 'Scan lock held in local fallback memory.', lockAcquiredAt: this.localLock.lockAcquiredAt, instanceId: this.localLock.instanceId };
-      }
-      return { isLocked: false };
-    }
-  }
-
-  /**
-   * Attempts to atomically acquire a scanner execution lock for concurrency protection across serverless containers.
-   * Lock auto-expires after lockTimeoutMs (default 60 seconds) to recover quickly from orphaned crashed instances.
-   */
-  static async tryAcquireLock(instanceId: string, lockTimeoutMs = 60000): Promise<{ acquired: boolean; reason?: string; lockWaitMs?: number }> {
-    this.init();
-    const startAcquire = Date.now();
     const now = Date.now();
 
     const firestore = getFirestoreAdmin();
     if (!firestore) {
       if (this.isProductionMode()) {
         logger.error('[ScannerPersistence] FAIL CLOSED: Firestore required to acquire lock in production mode.');
-        return { acquired: false, reason: 'FAIL CLOSED: Production mode requires Firestore to acquire concurrency lock across serverless instances.', lockWaitMs: Date.now() - startAcquire };
+        return { acquired: false, reason: 'FAIL CLOSED: Production mode requires Firestore to acquire concurrency lock across serverless instances.' };
       }
       if (this.localLock.isScanning && now - this.localLock.lockAcquiredAt < lockTimeoutMs) {
-        return { acquired: false, reason: 'Scan lock currently held in local process.', lockWaitMs: Date.now() - startAcquire };
+        return { acquired: false, reason: 'Scan lock currently held in local process.' };
       }
       this.localLock = { isScanning: true, lockAcquiredAt: now, instanceId };
-      return { acquired: true, lockWaitMs: Date.now() - startAcquire };
+      return { acquired: true };
     }
 
     try {
@@ -1743,7 +1684,7 @@ export class ScannerPersistence {
         if (snap.exists) {
           const remoteLock = snap.data() as ScanLockState;
           if (remoteLock.isScanning && now - remoteLock.lockAcquiredAt < lockTimeoutMs) {
-            return { acquired: false, reason: `Scan lock currently held in Firestore by instance ${remoteLock.instanceId || 'unknown'}` };
+            return { acquired: false, reason: 'Scan lock currently held in remote Firestore container.' };
           }
         }
         const newLock: ScanLockState = {
@@ -1758,17 +1699,17 @@ export class ScannerPersistence {
       if (result.acquired) {
         this.localLock = { isScanning: true, lockAcquiredAt: now, instanceId };
       }
-      return { ...result, lockWaitMs: Date.now() - startAcquire };
+      return result;
     } catch (err) {
       logger.warn('[ScannerPersistence] Firestore tryAcquireLock error:', { error: String(err) });
       if (this.isProductionMode()) {
-        return { acquired: false, reason: 'FAIL CLOSED: Firestore lock transaction failed in production mode.', lockWaitMs: Date.now() - startAcquire };
+        return { acquired: false, reason: 'FAIL CLOSED: Firestore lock transaction failed in production mode.' };
       }
       if (this.localLock.isScanning && now - this.localLock.lockAcquiredAt < lockTimeoutMs) {
-        return { acquired: false, reason: 'Scan lock held in local fallback memory.', lockWaitMs: Date.now() - startAcquire };
+        return { acquired: false, reason: 'Scan lock held in local fallback memory.' };
       }
       this.localLock = { isScanning: true, lockAcquiredAt: now, instanceId };
-      return { acquired: true, lockWaitMs: Date.now() - startAcquire };
+      return { acquired: true };
     }
   }
 
@@ -1791,49 +1732,5 @@ export class ScannerPersistence {
         logger.warn('[ScannerPersistence] Firestore releaseLock error:', { error: String(err) });
       }
     }
-  }
-
-  /**
-   * Records comprehensive timing telemetry for diagnosis.
-   */
-  static async recordTimingTelemetry(telemetry: ScannerTimingTelemetry): Promise<void> {
-    this.init();
-    this.latestTimingTelemetry = telemetry;
-    this.localData.latestTimingTelemetry = telemetry;
-    this.saveLocalData();
-
-    const firestore = getFirestoreAdmin();
-    if (firestore) {
-      try {
-        await firestore.doc(FIRESTORE_TELEMETRY_DOC).set(telemetry, { merge: true });
-      } catch (err) {
-        logger.warn('[ScannerPersistence] Firestore recordTimingTelemetry error:', { error: String(err) });
-      }
-    }
-  }
-
-  /**
-   * Retrieves the most recent timing telemetry record.
-   */
-  static async getLatestTimingTelemetry(): Promise<ScannerTimingTelemetry | null> {
-    this.init();
-    if (this.latestTimingTelemetry) {
-      return this.latestTimingTelemetry;
-    }
-
-    const firestore = getFirestoreAdmin();
-    if (firestore) {
-      try {
-        const snap = await firestore.doc(FIRESTORE_TELEMETRY_DOC).get();
-        if (snap.exists) {
-          this.latestTimingTelemetry = snap.data() as ScannerTimingTelemetry;
-          return this.latestTimingTelemetry;
-        }
-      } catch (err) {
-        logger.warn('[ScannerPersistence] Firestore getLatestTimingTelemetry error:', { error: String(err) });
-      }
-    }
-
-    return this.localData.latestTimingTelemetry || null;
   }
 }

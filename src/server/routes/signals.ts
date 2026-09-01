@@ -3,6 +3,7 @@
  */
 
 import { Router, Request, Response } from 'express';
+import { SignalGenerationResponse } from '../../types/index.js';
 import { getDynamicPrecision } from '../../utils/formatters.js';
 import { signalEngine } from '../signals/SignalEngine.js';
 import { hourlyScanner } from '../signals/HourlyScanner.js';
@@ -32,6 +33,7 @@ import { Gate6ProgressiveMTF } from '../signals/Gate6ProgressiveMTF.js';
 import { Gate7FinalTradeValidation } from '../signals/Gate7FinalTradeValidation.js';
 import { serverConfig } from '../config.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
+import { marketCache } from '../market/CacheStore.js';
 import { logger } from '../logger.js';
 import { ScannerPersistence, PersistedSentSignal } from '../signals/ScannerPersistence.js';
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
@@ -116,7 +118,7 @@ router.get('/scanner/history', async (_req: Request, res: Response) => {
  * GET & POST /api/scanner/trigger
  * [Access Boundary: Cron-Only]
  * Production entry point for external automated cron scheduler (e.g. cron-job.org, GitHub Actions, curl).
- * Strictly non-blocking: returns 200/202 immediately (< 1-2s, typically < 50ms) while background scan executes.
+ * Supports both GET and POST to maximize compatibility with free external cron providers.
  * Strictly protected server-side by SCANNER_CRON_SECRET token.
  */
 const handleScannerTrigger = async (req: Request, res: Response) => {
@@ -186,19 +188,13 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
 
   if (!isAuthenticated) {
     logger.warn(`[Scanner Trigger] UNAUTHORIZED_TRIGGER_ATTEMPT | duration: ${authDurationMs}ms`);
-    const dispatchCompletedAt = Date.now();
-    const durationMs = dispatchCompletedAt - requestStartTime;
     return res.status(401).json({
       success: false,
       status: 'UNAUTHORIZED',
       message: 'Unauthorized: Invalid or missing SCANNER_CRON_SECRET token.',
       timestamp: Date.now(),
-      dispatchStartedAt: requestStartTime,
-      dispatchCompletedAt,
-      cronRequestDurationMs: durationMs,
-      cronResponseDurationMs: durationMs,
-      dispatchDurationMs: durationMs,
-      lockWaitMs: 0,
+      lastScanTime: 0,
+      nextScanTime: 0,
       candidatesEvaluated: 0,
       acceptedSignalsCount: 0,
       signalsFound: 0,
@@ -216,58 +212,117 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
   logger.info(`[Scanner Diagnostic] EXTERNAL_HOURLY_SCAN_TRIGGERED | Date.now(): ${now} | ISO UTC: ${new Date(now).toISOString()} | Runtime TZ: ${configuredTz}`);
 
   try {
-    // Check if synchronous execution was explicitly requested (e.g. for deterministic testing)
-    const isSync = req.query?.sync === 'true' || req.body?.sync === true;
+    // Directly invoke Market Scan Engine as the single automated scan trigger
+    logger.info(`[Scanner Trigger] MARKET_SCAN_ENGINE_START | triggerTime: ${Date.now()}`);
+    const scanEngineStartTime = Date.now();
+    const result = await hourlyScanner.triggerAutomatedScan(true, requestStartTime);
+    const scanEngineDurationMs = Date.now() - scanEngineStartTime;
+    logger.info(`[Scanner Trigger] MARKET_SCAN_ENGINE_END | duration: ${scanEngineDurationMs}ms | status: ${result.status} | candidates: ${result.candidatesEvaluated} | accepted: ${result.acceptedSignalsCount}`);
 
-    if (isSync) {
-      const syncResult = await hourlyScanner.triggerAutomatedScan(true, requestStartTime, true);
-      const httpCode = syncResult.status === 'ERROR' ? 500 : 200;
-      return res.status(httpCode).json(syncResult);
+    let statusLog = '';
+    if (result.status === 'COMPLETED') {
+      logger.info('EXTERNAL_HOURLY_SCAN_COMPLETED');
+      statusLog = 'EXTERNAL_HOURLY_SCAN_COMPLETED';
+    } else if (result.status === 'SKIPPED_CAP_REACHED' || result.status === 'SCAN_ALREADY_RUNNING') {
+      logger.info('EXTERNAL_HOURLY_SCAN_SKIPPED');
+      statusLog = 'EXTERNAL_HOURLY_SCAN_SKIPPED';
+    } else {
+      logger.error('EXTERNAL_HOURLY_SCAN_FAILED');
+      statusLog = 'EXTERNAL_HOURLY_SCAN_FAILED';
     }
 
-    // GATE 1: Strictly non-blocking dispatch flow
-    const dispatchResult = await hourlyScanner.dispatchAutomatedScan(true, requestStartTime);
-
-    // Refresh cron status in background without blocking the trigger API response
+    const settings = ScannerPersistence.getSettings();
+    const capState = result.capState || await ScannerPersistence.getCapState();
+    const intervalMinutes = [15, 30, 45, 60].includes(Number(settings.intervalMinutes))
+      ? Number(settings.intervalMinutes)
+      : 30;
+    const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || 0;
+    
+    // Refresh cron status completely in the background without blocking the scanner trigger API
     CronJobOrgService.getJobStatus(false).catch((err) => {
       logger.debug('[Scanner Route] Background cron status update deferred', { error: String(err) });
     });
 
-    const settings = ScannerPersistence.getSettings();
-    const intervalMinutes = [15, 30, 45, 60].includes(Number(settings.intervalMinutes))
-      ? Number(settings.intervalMinutes)
-      : 30;
     const cachedCron = CronJobOrgService.getCachedStatus();
-    const nextCronExecution = cachedCron?.nextExecution?.timestamp || (dispatchResult.lastScanTime + intervalMinutes * 60 * 1000);
+    const nextCronExecution = cachedCron?.nextExecution?.timestamp || (lastAutomatedScan + intervalMinutes * 60 * 1000);
+    const nextScanTime = nextCronExecution;
 
-    const httpCode = dispatchResult.status === 'DISPATCHED' ? 202 : (dispatchResult.status === 'ERROR' ? 500 : 200);
+    const httpCode = result.status === 'ERROR' ? 500 : 200;
+    const durationMs = result.scanDurationMs ?? (Date.now() - now);
+    const totalRequestDurationMs = Date.now() - requestStartTime;
 
-    return res.status(httpCode).json({
-      ...dispatchResult,
+    logger.info(`[Scanner Trigger] TOTAL_DURATION | duration: ${totalRequestDurationMs}ms | scanEngineDuration: ${durationMs}ms`);
+
+    // Fast, lightweight HTTP response for cron scheduler with complete state metrics
+    res.status(httpCode).json({
+      success: result.success,
+      status: result.status,
+      message: result.message,
+      timestamp: result.timestamp || Date.now(),
+      lastCronExecution: now,
+      lastAutomatedScan,
+      lastScanCompletedAt: capState.lastScanCompletedAt || Date.now(),
+      lastScanDuration: durationMs,
+      universeSymbolsScanned: result.universeSymbolsScanned ?? capState.universeSymbolsScanned ?? 0,
+      preliminaryCandidatesFound: result.preliminaryCandidatesFound ?? capState.preliminaryCandidatesFound ?? 0,
+      candidatesRejectedPreliminary: result.candidatesRejectedPreliminary ?? capState.candidatesRejectedPreliminary ?? 0,
+      candidatesEvaluated: result.candidatesEvaluated ?? capState.candidatesEvaluated ?? 0,
+      candidatesRejectedFinal: result.candidatesRejectedFinal ?? capState.candidatesRejectedFinal ?? (result.rejectedCount ?? 0),
+      signalsGenerated: result.signalsGenerated ?? result.signalsFound ?? capState.signalsGenerated ?? 0,
+      signalsAccepted: result.signalsAccepted ?? result.acceptedSignalsCount ?? capState.signalsAccepted ?? 0,
+      lastCandidatesEvaluated: result.candidatesEvaluated ?? capState.lastCandidatesEvaluated ?? 0,
+      lastSignalsFound: result.signalsFound ?? result.acceptedSignalsCount ?? capState.lastSignalsFound ?? 0,
+      lastAcceptedSignals: result.acceptedSignalsCount ?? capState.lastAcceptedSignals ?? 0,
+      signalsFound: result.signalsFound ?? result.acceptedSignalsCount ?? capState.lastSignalsFound ?? 0,
+      acceptedSignalsCount: result.acceptedSignalsCount ?? capState.lastAcceptedSignals ?? 0,
       nextCronExecution,
-      nextScanTime: nextCronExecution,
+      lastScanTime: lastAutomatedScan,
+      nextScanTime,
       intervalMinutes,
-      external_hourly_scan_status: dispatchResult.status === 'DISPATCHED' ? 'DISPATCHED_IN_BACKGROUND' : dispatchResult.status,
+      rejectedCount: result.rejectedCount ?? 0,
+      candidatesRejectedBeforeMTF: result.candidatesRejectedBeforeMTF ?? 0,
+      candidatesRejectedByMTF: result.candidatesRejectedByMTF ?? 0,
+      candidatesRejectedByScore: result.candidatesRejectedByScore ?? 0,
+      candidatesRejectedByRR: result.candidatesRejectedByRR ?? 0,
+      candidatesRejectedByStructure: result.candidatesRejectedByStructure ?? 0,
+      rejectionReasons: result.rejectionReasons ?? [],
+      rejectionReasonsCounts: result.rejectionReasonsCounts ?? result.rejectionReasonsAggregated ?? {},
+      candidateRejectionDetails: result.candidateRejectionDetails ?? [],
+      diagnosticsCount: result.diagnosticsCount ?? 0,
+      diagnostics: result.diagnostics ?? [],
+      scanDurationMs: durationMs,
+      scanDuration: `${(durationMs / 1000).toFixed(2)}s`,
+      totalDurationMs: totalRequestDurationMs,
+      globalScanStartMs: result.globalScanStartMs ?? requestStartTime,
+      globalScanDeadlineMs: result.globalScanDeadlineMs ?? (requestStartTime + 24000),
+      currentElapsedMs: result.currentElapsedMs ?? (Date.now() - requestStartTime),
+      remainingBudgetMs: result.remainingBudgetMs ?? Math.max(0, (requestStartTime + 24000) - Date.now()),
+      gate6ElapsedMs: result.gate6ElapsedMs ?? 0,
+      stage3ElapsedMs: result.stage3ElapsedMs ?? 0,
+      timeBudgetExceeded: result.timeBudgetExceeded ?? false,
+      providerRequestsStoppedByBudget: result.providerRequestsStoppedByBudget ?? false,
+      timingTelemetry: result.timingTelemetry,
+      external_hourly_scan_status: statusLog
     });
   } catch (err: unknown) {
-    logger.error('EXTERNAL_HOURLY_SCAN_DISPATCH_FAILED');
+    logger.error('EXTERNAL_HOURLY_SCAN_FAILED');
     const msg = err instanceof Error ? err.message : String(err);
-    const dispatchCompletedAt = Date.now();
-    const totalRequestDurationMs = dispatchCompletedAt - requestStartTime;
-    return res.status(500).json({
+    const totalRequestDurationMs = Date.now() - requestStartTime;
+    res.status(500).json({
       success: false,
       status: 'ERROR',
-      message: 'Failed to dispatch hourly scanner trigger',
+      message: 'Failed to execute hourly scanner trigger',
       external_hourly_scan_status: 'EXTERNAL_HOURLY_SCAN_FAILED',
       timestamp: Date.now(),
-      dispatchStartedAt: requestStartTime,
-      dispatchCompletedAt,
-      cronRequestDurationMs: totalRequestDurationMs,
-      cronResponseDurationMs: totalRequestDurationMs,
-      dispatchDurationMs: totalRequestDurationMs,
-      lockWaitMs: 0,
       lastScanTime: 0,
       nextScanTime: 0,
+      candidatesEvaluated: 0,
+      acceptedSignalsCount: 0,
+      signalsFound: 0,
+      rejectedCount: 0,
+      scanDurationMs: totalRequestDurationMs,
+      scanDuration: `${(totalRequestDurationMs / 1000).toFixed(2)}s`,
+      totalDurationMs: totalRequestDurationMs,
       rejectionReasons: [msg],
     });
   }
@@ -275,30 +330,6 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
 
 router.post('/scanner/trigger', handleScannerTrigger);
 router.get('/scanner/trigger', handleScannerTrigger);
-
-/**
- * GET /api/scanner/telemetry
- * Retrieves latest timing telemetry and diagnostic classification.
- */
-router.get('/scanner/telemetry', async (_req: Request, res: Response) => {
-  try {
-    const telemetry = await ScannerPersistence.getLatestTimingTelemetry();
-    const lockStatus = await ScannerPersistence.isLockActive();
-    res.status(200).json({
-      success: true,
-      telemetry,
-      lockStatus,
-      timestamp: Date.now(),
-    });
-  } catch (err) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to retrieve timing telemetry',
-      error: String(err),
-      timestamp: Date.now(),
-    });
-  }
-});
 
 /**
  * POST /api/scanner/manual-trigger

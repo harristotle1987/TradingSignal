@@ -16,7 +16,6 @@
  * 5. Every rejection records exact structural and mathematical failure reasons.
  */
 
-import { OPERATIONAL_SCAN_BUDGET_MS, HARD_SCAN_DEADLINE_MS } from './ScannerConstants.js';
 import { NormalizedCandle, SignalDirection } from '../../types/index.js';
 import { TechnicalIndicators, MACDResult } from './TechnicalIndicators.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
@@ -681,7 +680,7 @@ export class Gate6ProgressiveMTF {
     globalScanDeadlineMs?: number
   ): Promise<Gate6ProgressiveAnalysisResult> {
     const startMs = globalScanStartMs ?? Date.now();
-    const deadlineMs = globalScanDeadlineMs ?? (startMs + OPERATIONAL_SCAN_BUDGET_MS);
+    const deadlineMs = globalScanDeadlineMs ?? (startMs + 24000);
     const gate6StartMs = Date.now();
 
     let timeBudgetExceeded = false;
@@ -1021,8 +1020,7 @@ export class Gate6ProgressiveMTF {
       const reasonLower = (rej.rejectionReason || '').toLowerCase();
       const isBefore = rej.stoppedAtLayer === 'BEFORE_MTF' || reasonLower.includes('final_score_unreachable') || reasonLower.includes('halting mtf requests');
       const isMTF = !isBefore && (reasonLower.includes('layer 1') || reasonLower.includes('layer 2') || reasonLower.includes('mtf'));
-      const minScore = serverConfig.getConfig().thresholds.minimumScore;
-      const isScore = rej.finalScore < minScore || rej.compositeMtfScore < minScore || rej.maximumPossibleScoreAfterRemainingAnalysis < minScore || reasonLower.includes('score');
+      const isScore = rej.finalScore < 72 || rej.compositeMtfScore < 72 || rej.maximumPossibleScoreAfterRemainingAnalysis < 72 || reasonLower.includes('score');
       const isRR = reasonLower.includes('rr') || reasonLower.includes('risk/reward');
       const isStruct = reasonLower.includes('structure') || reasonLower.includes('support') || reasonLower.includes('resistance');
 

@@ -39,122 +39,90 @@ export class FinnhubAdapter implements IMarketDataProvider {
       );
     }
 
-    const mapping = SymbolNormalizer.toProviderSymbol(appSymbol, this.id);
-    providerSymbol = mapping.providerSymbol;
-    assetType = mapping.assetType;
-    const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(providerSymbol)}&token=${encodeURIComponent(apiKey.trim())}`;
-
-    const maxRetries = 2;
-    let lastErrorMsg = '';
-
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      const configTimeout = serverConfig.getConfig().marketDataTimeoutMs;
-      let timeoutMs = configTimeout;
-      const safetyMargin = 100;
-      if (globalScanDeadlineMs) {
-        const remainingMs = globalScanDeadlineMs - Date.now();
-        if (remainingMs <= safetyMargin) {
-          if (attempt > 0 && lastErrorMsg) {
-            return this.createErrorTicker(appSymbol, providerSymbol, assetType, lastErrorMsg);
-          }
-          throw new Error('TIMEOUT: Global scanner deadline reached before starting request');
-        }
-        timeoutMs = Math.min(configTimeout, remainingMs - safetyMargin);
+    const configTimeout = serverConfig.getConfig().marketDataTimeoutMs;
+    let timeoutMs = configTimeout;
+    const safetyMargin = 100;
+    if (globalScanDeadlineMs) {
+      const remainingMs = globalScanDeadlineMs - Date.now();
+      if (remainingMs <= safetyMargin) {
+        throw new Error('TIMEOUT: Global scanner deadline reached before starting request');
       }
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-      try {
-        const response = await fetch(url, {
-          signal: controller.signal,
-          headers: { 'Accept': 'application/json' },
-        });
-
-        clearTimeout(timeoutId);
-
-        if (response.status === 401 || response.status === 403) {
-          return this.createErrorTicker(appSymbol, providerSymbol, assetType, 'Invalid or unauthorized Finnhub API key');
-        }
-
-        if (response.status === 429) {
-          return this.createErrorTicker(appSymbol, providerSymbol, assetType, 'Finnhub API rate limit exceeded (HTTP 429)');
-        }
-
-        if (!response.ok) {
-          lastErrorMsg = `Finnhub API returned HTTP ${response.status}`;
-          if (response.status >= 500 && attempt < maxRetries) {
-            const backoffMs = 200 * (attempt + 1);
-            if (!globalScanDeadlineMs || (Date.now() + backoffMs < globalScanDeadlineMs - safetyMargin)) {
-              await new Promise((r) => setTimeout(r, backoffMs));
-              continue;
-            }
-          }
-          return this.createErrorTicker(appSymbol, providerSymbol, assetType, lastErrorMsg);
-        }
-
-        const json = (await response.json()) as FinnhubQuoteResponse;
-
-        if (json.error) {
-          return this.createErrorTicker(appSymbol, providerSymbol, assetType, `Finnhub error: ${json.error}`);
-        }
-
-        let price = json.c;
-        const timestampSec = json.t;
-        if ((typeof price !== 'number' || isNaN(price) || !isFinite(price) || price <= 0) && typeof json.pc === 'number' && !isNaN(json.pc) && isFinite(json.pc) && json.pc > 0) {
-          price = json.pc;
-        }
-
-        if (typeof price !== 'number' || isNaN(price) || !isFinite(price) || price <= 0) {
-          return this.createErrorTicker(
-            appSymbol,
-            providerSymbol,
-            assetType,
-            `Finnhub returned no valid price for symbol ${providerSymbol} (c: ${json.c}, pc: ${json.pc})`
-          );
-        }
-
-        const timestamp = (typeof timestampSec === 'number' && timestampSec > 0)
-          ? timestampSec * 1000
-          : receivedAt;
-
-        const isFresh = true;
-
-        return {
-          symbol: SymbolNormalizer.normalizeAppSymbol(appSymbol),
-          rawSymbol: providerSymbol,
-          provider: this.id,
-          assetType,
-          bid: null,
-          ask: null,
-          price,
-          timestamp,
-          receivedAt,
-          source: 'LIVE',
-          isFresh,
-          status: isFresh ? 'OK' : 'STALE',
-        };
-      } catch (err: unknown) {
-        clearTimeout(timeoutId);
-        const msg = err instanceof Error ? err.message : String(err);
-        lastErrorMsg = `Finnhub connection failed: ${msg}`;
-
-        if (msg.includes('TIMEOUT')) {
-          throw err;
-        }
-
-        if (attempt < maxRetries) {
-          const backoffMs = 200 * (attempt + 1);
-          if (!globalScanDeadlineMs || (Date.now() + backoffMs < globalScanDeadlineMs - safetyMargin)) {
-            await new Promise((r) => setTimeout(r, backoffMs));
-            continue;
-          }
-        }
-        return this.createErrorTicker(appSymbol, providerSymbol, assetType, lastErrorMsg);
-      }
+      timeoutMs = Math.min(configTimeout, remainingMs - safetyMargin);
     }
 
-    return this.createErrorTicker(appSymbol, providerSymbol, assetType, lastErrorMsg || 'Finnhub request failed');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const mapping = SymbolNormalizer.toProviderSymbol(appSymbol, this.id);
+      providerSymbol = mapping.providerSymbol;
+      assetType = mapping.assetType;
+      const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(providerSymbol)}&token=${encodeURIComponent(apiKey.trim())}`;
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: { 'Accept': 'application/json' },
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.status === 401 || response.status === 403) {
+        return this.createErrorTicker(appSymbol, providerSymbol, assetType, 'Invalid or unauthorized Finnhub API key');
+      }
+
+      if (response.status === 429) {
+        return this.createErrorTicker(appSymbol, providerSymbol, assetType, 'Finnhub API rate limit exceeded (HTTP 429)');
+      }
+
+      if (!response.ok) {
+        return this.createErrorTicker(appSymbol, providerSymbol, assetType, `Finnhub API returned HTTP ${response.status}`);
+      }
+
+      const json = (await response.json()) as FinnhubQuoteResponse;
+
+      if (json.error) {
+        return this.createErrorTicker(appSymbol, providerSymbol, assetType, `Finnhub error: ${json.error}`);
+      }
+
+      let price = json.c;
+      const timestampSec = json.t;
+      if ((typeof price !== 'number' || isNaN(price) || !isFinite(price) || price <= 0) && typeof json.pc === 'number' && !isNaN(json.pc) && isFinite(json.pc) && json.pc > 0) {
+        price = json.pc;
+      }
+
+      if (typeof price !== 'number' || isNaN(price) || !isFinite(price) || price <= 0) {
+        return this.createErrorTicker(
+          appSymbol,
+          providerSymbol,
+          assetType,
+          `Finnhub returned no valid price for symbol ${providerSymbol} (c: ${json.c}, pc: ${json.pc})`
+        );
+      }
+
+      const timestamp = (typeof timestampSec === 'number' && timestampSec > 0)
+        ? timestampSec * 1000
+        : receivedAt;
+
+      const isFresh = true;
+
+      return {
+        symbol: SymbolNormalizer.normalizeAppSymbol(appSymbol),
+        rawSymbol: providerSymbol,
+        provider: this.id,
+        assetType,
+        bid: null,
+        ask: null,
+        price,
+        timestamp,
+        receivedAt,
+        source: 'LIVE',
+        isFresh,
+        status: isFresh ? 'OK' : 'STALE',
+      };
+    } catch (err: unknown) {
+      clearTimeout(timeoutId);
+      const msg = err instanceof Error ? err.message : String(err);
+      return this.createErrorTicker(appSymbol, providerSymbol, assetType, `Finnhub connection failed: ${msg}`);
+    }
   }
 
   async healthCheck(): Promise<ProviderHealth> {

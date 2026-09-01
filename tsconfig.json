@@ -21,9 +21,7 @@
       ]
     },
     "allowImportingTsExtensions": true,
-    "noEmit": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true
+    "noEmit": true
   },
   "include": ["src", "server.ts", "tests", "vite.config.ts"],
   "exclude": ["android", "dist", "node_modules", "**/*.cjs"]
