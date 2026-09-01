@@ -69,6 +69,25 @@ export interface SignalLogRecord {
   updatedAt?: number;
   isTradeableSignal?: boolean;
   signalClassification?: 'TRADEABLE' | 'WATCHING' | 'QUALIFIED_CANDIDATE' | 'CANDIDATE' | 'REJECTED' | 'FILTERED' | 'BLOCKED' | 'INVALID' | 'EXPIRED_BEFORE_ENTRY' | 'NON_TRADEABLE' | 'ANALYTICS_ONLY' | 'DIAGNOSTIC';
+  provenance?: 'LIVE' | 'HISTORICAL' | 'BACKTEST' | 'SIMULATION' | 'TEST';
+  isSynthetic?: boolean;
+}
+
+/**
+ * Helper to determine if a record represents a legitimate LIVE or HISTORICAL production outcome/signal.
+ * Strictly excludes TEST, SIMULATION, BACKTEST, synthetic, and unclassified records.
+ */
+export function isProductionRecord(record: { provenance?: string; isSynthetic?: boolean; id?: string; signalId?: string } | null | undefined): boolean {
+  if (!record) return false;
+  if (record.isSynthetic) return false;
+
+  const id = record.id || record.signalId || '';
+  if (id.startsWith('test_') || id.startsWith('sim_') || id.startsWith('backtest_') || id.startsWith('mock_') || id.startsWith('funnel_test_')) {
+    return false;
+  }
+
+  const prov = (record.provenance || '').toUpperCase().trim();
+  return prov === 'LIVE' || prov === 'HISTORICAL';
 }
 
 /**
@@ -315,6 +334,16 @@ export class SignalLogger {
       };
     }
 
+    const provRaw = (signal.provenance || '').toUpperCase().trim();
+    let provenance: 'LIVE' | 'HISTORICAL' | 'BACKTEST' | 'SIMULATION' | 'TEST';
+    if (provRaw === 'LIVE' || provRaw === 'HISTORICAL' || provRaw === 'BACKTEST' || provRaw === 'SIMULATION' || provRaw === 'TEST') {
+      provenance = provRaw as any;
+    } else if (process.env.NODE_ENV === 'test' || process.env.TEST_MODE === 'true' || signal.isSynthetic || id.startsWith('test_') || id.startsWith('sim_') || id.startsWith('backtest_')) {
+      provenance = 'TEST';
+    } else {
+      provenance = 'LIVE';
+    }
+
     const record: SignalLogRecord = {
       id,
       snapshotId,
@@ -348,6 +377,8 @@ export class SignalLogger {
       updatedAt: Date.now(),
       isTradeableSignal: signal.isTradeableSignal === true,
       signalClassification: signal.signalClassification,
+      provenance,
+      isSynthetic: Boolean(signal.isSynthetic),
     };
 
     this.logs.set(id, record);
@@ -489,7 +520,8 @@ export class SignalLogger {
    * Strictly filters to explicitly tradeable signals only.
    */
   public static async getSignalLogs(
-    limit = 100
+    limit = 100,
+    productionOnly = true
   ): Promise<SignalLogRecord[]> {
     await this.init();
 
@@ -499,7 +531,7 @@ export class SignalLogger {
     }
 
     const sorted = Array.from(this.logs.values())
-      .filter((r) => isTradeableLogRecord(r))
+      .filter((r) => isTradeableLogRecord(r) && (!productionOnly || isProductionRecord(r)))
       .sort((a, b) => b.timestamp - a.timestamp);
     return sorted.slice(0, limit);
   }

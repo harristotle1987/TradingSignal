@@ -9,12 +9,12 @@
  * 3. Asset Class (CRYPTO, FOREX, STOCKS)
  *
  * INITIAL CONFIGURABLE POLICY:
- * - STRONG_TREND: 75
- * - NORMAL_TREND: 78
- * - RANGE_REVERSAL: 78
- * - BREAKOUT: 78
- * - HIGH_VOLATILITY: 82
- * - TRANSITION: 85
+ * - STRONG_TREND: 72
+ * - NORMAL_TREND: 70
+ * - RANGE_REVERSAL: 70
+ * - BREAKOUT: 70
+ * - HIGH_VOLATILITY: 76
+ * - TRANSITION: 79
  * - UNKNOWN: NO SIGNAL (Execution Blocked)
  *
  * STRICT DISCIPLINE:
@@ -25,7 +25,6 @@
  */
 
 import { logger } from '../logger.js';
-import { AssetType } from '../../types/index.js';
 
 export type AssetClass = 'CRYPTO' | 'FOREX' | 'STOCKS' | 'STOCK' | 'INDEX' | 'UNKNOWN';
 
@@ -73,12 +72,12 @@ export interface RegimeThresholdEvaluationLog {
 export class Gate27RegimeThresholds {
   private static policy: RegimeThresholdPolicyConfig = {
     regimeThresholds: {
-      STRONG_TREND: 75,
-      NORMAL_TREND: 78,
-      RANGE_REVERSAL: 78,
-      BREAKOUT: 78,
-      HIGH_VOLATILITY: 82,
-      TRANSITION: 85,
+      STRONG_TREND: 70,
+      NORMAL_TREND: 70,
+      RANGE_REVERSAL: 70,
+      BREAKOUT: 70,
+      HIGH_VOLATILITY: 74,
+      TRANSITION: 76,
       UNKNOWN: null, // NO SIGNAL
     },
     strategyModifiers: {

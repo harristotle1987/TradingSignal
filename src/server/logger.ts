@@ -13,9 +13,14 @@ interface LogContext {
 
 class Logger {
   private logToFile(message: string) {
-    try {
-      fs.appendFileSync('/tmp/app.log', message + '\n');
-    } catch (e) {}
+    // Fire-and-forget async append. Logging must never block the event
+    // loop — this runs on every info/warn/error/debug call, including hot
+    // paths like per-symbol cache lookups and per-candidate audit records.
+    fs.appendFile('/tmp/app.log', message + '\n', (err) => {
+      if (err) {
+        process.stderr.write(`[Logger] Failed to write to log file: ${err.message}\n`);
+      }
+    });
   }
 
   private formatMessage(level: LogLevel, message: string, context?: LogContext): string {

@@ -678,9 +678,9 @@ export class Gate35SignalFunnelAnalytics {
           funnelMetrics.signals++;
         } else if (r.finalDecision === 'WATCHING' || (r.score >= (r.watchingThreshold || 70) && r.score < (r.qualifiedCandidateThreshold || 75))) {
           funnelMetrics.watching++;
-        } else if (r.finalDecision === 'QUALIFIED' || (r.score >= (r.qualifiedCandidateThreshold || 75) && r.score < (r.signalThreshold || 78))) {
+        } else if (r.finalDecision === 'QUALIFIED' || (r.score >= (r.qualifiedCandidateThreshold || 75) && r.score < (r.signalThreshold || 70))) {
           funnelMetrics.qualified++;
-        } else if (r.score >= (r.signalThreshold || 78)) {
+        } else if (r.score >= (r.signalThreshold || 70)) {
           funnelMetrics.signals++;
         } else {
           funnelMetrics.watching++; // fallback to watching

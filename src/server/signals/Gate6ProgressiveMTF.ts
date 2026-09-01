@@ -16,9 +16,11 @@
  * 5. Every rejection records exact structural and mathematical failure reasons.
  */
 
+import { OPERATIONAL_SCAN_BUDGET_MS, HARD_SCAN_DEADLINE_MS } from './ScannerConstants.js';
 import { NormalizedCandle, SignalDirection } from '../../types/index.js';
 import { TechnicalIndicators, MACDResult } from './TechnicalIndicators.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
+import { serverConfig } from '../config.js';
 import { logger } from '../logger.js';
 
 export interface Gate6Layer1Metrics {
@@ -113,13 +115,18 @@ export interface Gate6CandidateEvaluation {
   asset: string;
   direction: SignalDirection;
   passed: boolean;
-  stoppedAtLayer: 1 | 2 | 'PASSED';
-  layer1: Gate6Layer1Result;
+  stoppedAtLayer: 1 | 2 | 'PASSED' | 'BEFORE_MTF';
+  layer1?: Gate6Layer1Result;
   layer2?: Gate6Layer2Result;
   compositeMtfScore: number;
   candlesMap: Record<string, NormalizedCandle[]>;
   rejectionReason?: string;
   auditTrail: string[];
+  scoreBeforeGate6: number;
+  maximumPossibleScoreAfterRemainingAnalysis: number;
+  scoreAfterGate6: number;
+  finalScore: number;
+  factors?: any;
 }
 
 export interface Gate6ProgressiveAnalysisResult {
@@ -129,10 +136,39 @@ export interface Gate6ProgressiveAnalysisResult {
   survivedCandidates: Gate6CandidateEvaluation[];
   rejectedCandidates: Gate6CandidateEvaluation[];
   summary: string;
+  gate6ElapsedMs?: number;
+  timeBudgetExceeded?: boolean;
+  providerRequestsStoppedByBudget?: boolean;
+  candidatesRejectedBeforeMTF?: number;
+  candidatesRejectedByMTF?: number;
+  candidatesRejectedByScore?: number;
+  candidatesRejectedByRR?: number;
+  candidatesRejectedByStructure?: number;
 }
 
 export class Gate6ProgressiveMTF {
   private static readonly MAX_EXPENSIVE_CANDIDATES = 5;
+
+  private static extractFactors(cand: { preliminaryScore?: number }, l1?: Gate6Layer1Result | null, l2?: Gate6Layer2Result | null, compositeMtfScore?: number): any {
+    return {
+      trendAlignmentScore: l1?.metrics?.trendAlignment?.score,
+      emaStructureScore: l1?.metrics?.emaStructure?.score,
+      momentumScore: l1?.metrics?.momentum?.score,
+      rsiScore: l1?.metrics?.rsi?.score,
+      macdScore: l1?.metrics?.macd?.score,
+      adxScore: l1?.metrics?.adx?.score,
+      marketStructureScore: l1?.metrics?.marketStructure?.score,
+      volatilityAtrScore: l2?.metrics?.atr?.score,
+      supportResistanceScore: l2?.metrics?.supportResistance?.score,
+      marketStructureConfirmationScore: l2?.metrics?.marketStructureConfirmation?.score,
+      compositeMtfScore: compositeMtfScore ?? l1?.score,
+      preliminaryScore: cand?.preliminaryScore,
+      // Standard compatibility keys
+      trendScore: l1?.metrics?.trendAlignment?.score,
+      structureScore: l1?.metrics?.marketStructure?.score,
+      volatilityScore: l2?.metrics?.atr?.score,
+    };
+  }
 
   /**
    * Evaluates Layer 1 (15m & 1h) technical confluence.
@@ -395,11 +431,17 @@ export class Gate6ProgressiveMTF {
       msScore * 0.10
     );
 
+    // MACD disagreement is intentionally EXCLUDED from the hard-veto count
+    // below. It still fully affects compositeLayer1Score (15% weight) as a
+    // soft penalty, and is still recorded in `disagreements` for
+    // diagnostics/telemetry, but it can no longer by itself (or combined
+    // with just one other soft signal) force a hard reject.
+    const hardDisagreements = disagreements.filter((d) => !d.startsWith('MACD:'));
+
     const hasHardContradiction =
-      disagreements.length >= 2 ||
-      trendScore <= 20 ||
-      (msScore <= 20 && !msAligned) ||
-      (macdScore <= 20 && !macdAligned);
+      hardDisagreements.length >= 2 ||
+      trendScore <= 20 ||                  // HTF trend conflict remains a hard safety gate
+      (msScore <= 20 && !msAligned);        // Market-structure contradiction remains hard
 
     const passed = !hasHardContradiction && compositeLayer1Score >= 50;
 
@@ -489,17 +531,50 @@ export class Gate6ProgressiveMTF {
     }
 
     // --- B. Support & Resistance Clearance ---
-    // Compute key swing levels across 4h and 1h
+    // Extract genuine fractal swing pivots across 4h and 1h rather than raw individual bar extremes
+    const extractSwingPivots = (candles: NormalizedCandle[]) => {
+      const pivotsHigh: number[] = [];
+      const pivotsLow: number[] = [];
+      for (let i = 2; i < candles.length - 2; i++) {
+        const c = candles[i];
+        if (
+          c.high >= candles[i - 1].high &&
+          c.high >= candles[i - 2].high &&
+          c.high >= candles[i + 1].high &&
+          c.high >= candles[i + 2].high
+        ) {
+          pivotsHigh.push(c.high);
+        }
+        if (
+          c.low <= candles[i - 1].low &&
+          c.low <= candles[i - 2].low &&
+          c.low <= candles[i + 1].low &&
+          c.low <= candles[i + 2].low
+        ) {
+          pivotsLow.push(c.low);
+        }
+      }
+      return { pivotsHigh, pivotsLow };
+    };
+
     const slice4h = sorted4h.slice(-20);
     const slice1h = sorted1h.slice(-30);
-    const swingHighs = [...slice4h.map(c => c.high), ...slice1h.map(c => c.high)];
-    const swingLows = [...slice4h.map(c => c.low), ...slice1h.map(c => c.low)];
+    const pivots4h = extractSwingPivots(slice4h);
+    const pivots1h = extractSwingPivots(slice1h);
+    const swingHighs = [...pivots4h.pivotsHigh, ...pivots1h.pivotsHigh];
+    const swingLows = [...pivots4h.pivotsLow, ...pivots1h.pivotsLow];
 
-    const resistanceLevels = swingHighs.filter(h => h > currentPrice).sort((a, b) => a - b);
-    const supportLevels = swingLows.filter(l => l < currentPrice).sort((a, b) => b - a);
+    // Exclude immediate intra-bar noise around current price using a dynamic buffer
+    const minBuffer = Math.max(currentPrice * 0.0005, atr1h * 0.15);
+    const resistanceLevels = swingHighs.filter(h => h > currentPrice + minBuffer).sort((a, b) => a - b);
+    const supportLevels = swingLows.filter(l => l < currentPrice - minBuffer).sort((a, b) => b - a);
 
     const nearestResistance = resistanceLevels.length > 0 ? resistanceLevels[0] : currentPrice * 1.05;
     const nearestSupport = supportLevels.length > 0 ? supportLevels[0] : currentPrice * 0.95;
+
+    // --- C. Market Structure Confirmation (5m & 4h) ---
+    const ms5m = TechnicalIndicators.calculateMarketStructure(sorted5m);
+    const ms4h = TechnicalIndicators.calculateMarketStructure(sorted4h);
 
     let srScore = 80;
     let srFavorable = true;
@@ -507,27 +582,33 @@ export class Gate6ProgressiveMTF {
 
     if (isBuy) {
       clearancePct = ((nearestResistance - currentPrice) / currentPrice) * 100;
-      if (clearancePct < 0.15 && currentPrice > 0) {
-        srScore = 30;
-        srFavorable = false;
-        disagreements.push(`Resistance ceiling: Entry is only ${clearancePct.toFixed(2)}% below major resistance (${nearestResistance.toFixed(4)}).`);
+      if (clearancePct < 0.2 && currentPrice > 0) {
+        // Close to major resistance: allow breakout setups if macro structure is bullish or range, penalize if bearish/opposing
+        srScore = ms4h.structureBias === 'BEARISH' ? 40 : 70;
+        if (srScore < 50) {
+          srFavorable = false;
+          disagreements.push(`Resistance ceiling: Entry is only ${clearancePct.toFixed(2)}% below major resistance (${nearestResistance.toFixed(4)}).`);
+        }
       } else if (clearancePct > 1.0) {
         srScore = 95;
+      } else {
+        srScore = 80;
       }
     } else {
       clearancePct = ((currentPrice - nearestSupport) / currentPrice) * 100;
-      if (clearancePct < 0.15 && currentPrice > 0) {
-        srScore = 30;
-        srFavorable = false;
-        disagreements.push(`Support floor: Entry is only ${clearancePct.toFixed(2)}% above major support (${nearestSupport.toFixed(4)}).`);
+      if (clearancePct < 0.2 && currentPrice > 0) {
+        // Close to major support: allow breakdown setups if macro structure is bearish or range, penalize if bullish/opposing
+        srScore = ms4h.structureBias === 'BULLISH' ? 40 : 70;
+        if (srScore < 50) {
+          srFavorable = false;
+          disagreements.push(`Support floor: Entry is only ${clearancePct.toFixed(2)}% above major support (${nearestSupport.toFixed(4)}).`);
+        }
       } else if (clearancePct > 1.0) {
         srScore = 95;
+      } else {
+        srScore = 80;
       }
     }
-
-    // --- C. Market Structure Confirmation (5m & 4h) ---
-    const ms5m = TechnicalIndicators.calculateMarketStructure(sorted5m);
-    const ms4h = TechnicalIndicators.calculateMarketStructure(sorted4h);
 
     let msConfScore = 50;
     let msConfirmed = true;
@@ -583,8 +664,10 @@ export class Gate6ProgressiveMTF {
 
   /**
    * Main progressive orchestration pipeline for Gate 6.
-   * Restricts processing to top 3–5 candidates, executes Layer 1, early-halts failing candidates,
-   * and runs Layer 2 only on surviving candidates.
+   * Progressively evaluates the 8–12 deep candidate pool:
+   * 1. Layer 1 (15m & 1h) early-halts failing candidates after only 1 cheap request.
+   * 2. Layer 2 (5m & 4h) runs ONLY on Layer-1 survivors.
+   * 3. Yields TOP 3–5 fully validated candidates for Stage 3 execution & hard gates.
    */
   public static async analyzeCandidates(
     candidates: Array<{
@@ -593,153 +676,378 @@ export class Gate6ProgressiveMTF {
       htf1h: NormalizedCandle[];
       preliminaryScore: number;
     }>,
-    maxToAnalyze = Gate6ProgressiveMTF.MAX_EXPENSIVE_CANDIDATES
+    targetSurvivors = Gate6ProgressiveMTF.MAX_EXPENSIVE_CANDIDATES,
+    globalScanStartMs?: number,
+    globalScanDeadlineMs?: number
   ): Promise<Gate6ProgressiveAnalysisResult> {
-    const candidatesToAnalyze = candidates.slice(0, Math.min(candidates.length, maxToAnalyze));
+    const startMs = globalScanStartMs ?? Date.now();
+    const deadlineMs = globalScanDeadlineMs ?? (startMs + OPERATIONAL_SCAN_BUDGET_MS);
+    const gate6StartMs = Date.now();
+
+    let timeBudgetExceeded = false;
+    let providerRequestsStoppedByBudget = false;
+
     const survived: Gate6CandidateEvaluation[] = [];
     const rejected: Gate6CandidateEvaluation[] = [];
+    let layer2EvaluationsCount = 0;
+    const maxLayer2Allowed = targetSurvivors; // Max 5 expensive multi-timeframe candle fetches
 
     logger.info(
-      `[Gate 6 Progressive MTF] Analyzing top ${candidatesToAnalyze.length} candidates (from pool of ${candidates.length})...`
+      `[Gate 6 Progressive MTF] Progressively evaluating pool of ${candidates.length} deep candidates with bounded parallelism (Targeting TOP 3–5 fully validated setups)...`
     );
 
-    for (const cand of candidatesToAnalyze) {
-      const asset = cand.asset;
-      const direction = cand.direction;
-      const sorted1h = [...cand.htf1h].sort((a, b) => a.timestamp - b.timestamp);
-      const auditTrail: string[] = [];
+    let analyzedCount = 0;
 
-      auditTrail.push(`[Gate 6] Starting Layer 1 (15m & 1h) analysis for ${asset} (${direction}).`);
+    // STEP 0: PRE-MTF SCORE AUDIT
+    const targetScoreThreshold = serverConfig.getConfig().thresholds.signalThreshold || 70;
 
-      // 1. Fetch ONLY 15m candles first (Layer 1)
-      let candles15m: NormalizedCandle[] = [];
-      try {
-        const fetched15m = await marketDataManager.getCandles(asset, undefined, '15m', 50, false);
-        if (fetched15m && fetched15m.length >= 15) {
-          candles15m = fetched15m.sort((a, b) => a.timestamp - b.timestamp);
+    // Filter candidates entering Gate 6: determine whether candidates with a deterministic score
+    // already below required threshold can mathematically reach required threshold after remaining MTF analysis.
+    const mtfEligibleCandidates: typeof candidates = [];
+
+    for (const cand of candidates) {
+      const scoreBeforeGate6 = cand.preliminaryScore;
+      const maximumPossibleScoreAfterRemainingAnalysis = Math.min(100, scoreBeforeGate6 + 25);
+      const scoreAfterGate6 = scoreBeforeGate6;
+      const finalScore = scoreBeforeGate6;
+
+      if (maximumPossibleScoreAfterRemainingAnalysis < targetScoreThreshold) {
+        // Candidate cannot mathematically reach threshold -> Reject BEFORE expensive MTF requests!
+        analyzedCount++;
+        const auditTrail = [
+          `[Gate 6 Pre-Audit] REJECTED BEFORE MTF. Preliminary score (${scoreBeforeGate6}/100) yields maximum possible score of ${maximumPossibleScoreAfterRemainingAnalysis}/100 (< required threshold ${targetScoreThreshold}). Omitting 15m/5m/4h market data requests.`,
+        ];
+
+        logger.info(
+          `[Gate 6 Early Audit Halt] ${cand.asset} rejected before MTF: preliminary score (${scoreBeforeGate6}/100) max reachable score (${maximumPossibleScoreAfterRemainingAnalysis}) < ${targetScoreThreshold}.`
+        );
+
+        rejected.push({
+          asset: cand.asset,
+          direction: cand.direction,
+          passed: false,
+          stoppedAtLayer: 'BEFORE_MTF',
+          compositeMtfScore: scoreBeforeGate6,
+          candlesMap: { '1h': cand.htf1h },
+          rejectionReason: `FINAL_SCORE_UNREACHABLE: Score before Gate 6 (${scoreBeforeGate6}/100) yields maximum possible score of ${maximumPossibleScoreAfterRemainingAnalysis}/100, which cannot reach actionable threshold ${targetScoreThreshold}. Halting MTF requests.`,
+          auditTrail,
+          scoreBeforeGate6,
+          maximumPossibleScoreAfterRemainingAnalysis,
+          scoreAfterGate6,
+          finalScore,
+          factors: Gate6ProgressiveMTF.extractFactors(cand, null, null, scoreBeforeGate6),
+        });
+      } else {
+        mtfEligibleCandidates.push(cand);
+      }
+    }
+
+    // Bounded parallelism for Layer 1 execution
+    const CONCURRENCY_LIMIT = 6;
+
+    for (let i = 0; i < mtfEligibleCandidates.length; i += CONCURRENCY_LIMIT) {
+      const remainingMs = deadlineMs - Date.now();
+      const currentElapsedMs = Date.now() - startMs;
+
+      // Rule 2: Gate 6 must stop starting expensive work when remainingMs <= 1500ms OR currentElapsedMs >= 22500ms
+      if (remainingMs <= 1500 || currentElapsedMs >= 22500) {
+        timeBudgetExceeded = true;
+        providerRequestsStoppedByBudget = true;
+        logger.warn(
+          `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (22500ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 1 candidate processing.`
+        );
+        break;
+      }
+
+      if (survived.length >= targetSurvivors || layer2EvaluationsCount >= maxLayer2Allowed) {
+        break;
+      }
+
+      const batch = mtfEligibleCandidates.slice(i, i + CONCURRENCY_LIMIT);
+
+      // STEP 1: LAYER 1 (15m + 1h) - Execute 15m fetches in parallel for the batch (1h candles already available)
+      const layer1Results = await Promise.all(
+        batch.map(async (cand) => {
+          const asset = cand.asset;
+          const direction = cand.direction;
+          const sorted1h = [...cand.htf1h].sort((a, b) => a.timestamp - b.timestamp);
+          const auditTrail: string[] = [];
+          const scoreBeforeGate6 = cand.preliminaryScore;
+          const preMaxPossible = Math.min(100, scoreBeforeGate6 + 25);
+
+          auditTrail.push(`[Gate 6] Starting Layer 1 (15m & 1h) analysis for ${asset} (${direction}). Score before Gate 6: ${scoreBeforeGate6}`);
+
+          // Fetch ONLY 15m candles first (Layer 1)
+          let candles15m: NormalizedCandle[] = [];
+          try {
+            const fetched15m = await marketDataManager.getCandles(asset, undefined, '15m', 50, false);
+            if (fetched15m && fetched15m.length >= 15) {
+              candles15m = fetched15m.sort((a, b) => a.timestamp - b.timestamp);
+            }
+          } catch (err: any) {
+            logger.warn(`[Gate 6 MTF] Failed to fetch 15m candles for ${asset}: ${err?.message || err}`);
+          }
+
+          if (candles15m.length < 15) {
+            const evalFail: Gate6CandidateEvaluation = {
+              asset,
+              direction,
+              passed: false,
+              stoppedAtLayer: 1,
+              layer1: {
+                passed: false,
+                score: 0,
+                metrics: {} as any,
+                disagreements: ['15m candles unavailable from market data provider.'],
+                rejectionReason: '15m candles unavailable.',
+              },
+              compositeMtfScore: 0,
+              candlesMap: { '1h': sorted1h },
+              rejectionReason: '15m market candles unavailable; early halted.',
+              auditTrail,
+              scoreBeforeGate6,
+              maximumPossibleScoreAfterRemainingAnalysis: preMaxPossible,
+              scoreAfterGate6: 0,
+              finalScore: 0,
+              factors: Gate6ProgressiveMTF.extractFactors(cand, null, null, 0),
+            };
+            return { cand, candles15m: [], l1Result: null, evalFail };
+          }
+
+          // Evaluate Layer 1
+          const l1Result = Gate6ProgressiveMTF.evaluateLayer1(direction, sorted1h, candles15m);
+
+          if (!l1Result.passed) {
+            auditTrail.push(`[Gate 6 Layer 1 REJECTED] ${l1Result.rejectionReason}. Early halted; 5m/4h skipped.`);
+            logger.info(`[Gate 6 Layer 1 Halt] ${asset} rejected: ${l1Result.rejectionReason}`);
+
+            const evalL1Fail: Gate6CandidateEvaluation = {
+              asset,
+              direction,
+              passed: false,
+              stoppedAtLayer: 1,
+              layer1: l1Result,
+              compositeMtfScore: l1Result.score,
+              candlesMap: { '1h': sorted1h, '15m': candles15m },
+              rejectionReason: l1Result.rejectionReason,
+              auditTrail,
+              scoreBeforeGate6,
+              maximumPossibleScoreAfterRemainingAnalysis: Math.min(100, Math.round(l1Result.score * 0.6 + 40) + 15),
+              scoreAfterGate6: l1Result.score,
+              finalScore: l1Result.score,
+              factors: Gate6ProgressiveMTF.extractFactors(cand, l1Result, null, l1Result.score),
+            };
+            return { cand, candles15m, l1Result, evalFail: evalL1Fail };
+          }
+
+          // POST-LAYER 1 SCORE AUDIT (Before Layer 2 5m & 4h expensive requests)
+          const maxCompositeMtf = Math.round(l1Result.score * 0.6 + 100 * 0.4);
+          const maximumPossibleScoreAfterRemainingAnalysis = Math.min(100, maxCompositeMtf + 15);
+
+          if (maximumPossibleScoreAfterRemainingAnalysis < targetScoreThreshold) {
+            auditTrail.push(`[Gate 6 Post-L1 Audit REJECTED] Post-Layer 1 score (${l1Result.score}/100) yields maximum possible score of ${maximumPossibleScoreAfterRemainingAnalysis}/100 (< required threshold ${targetScoreThreshold}). Halting Layer 2 (5m & 4h) requests.`);
+            logger.info(`[Gate 6 Post-L1 Early Halt] ${asset} rejected before Layer 2: post-L1 max possible score (${maximumPossibleScoreAfterRemainingAnalysis}) < ${targetScoreThreshold}.`);
+
+            const evalPostL1Fail: Gate6CandidateEvaluation = {
+              asset,
+              direction,
+              passed: false,
+              stoppedAtLayer: 1,
+              layer1: l1Result,
+              compositeMtfScore: l1Result.score,
+              candlesMap: { '1h': sorted1h, '15m': candles15m },
+              rejectionReason: `FINAL_SCORE_UNREACHABLE: Post-Layer 1 score (${l1Result.score}/100) yields maximum possible score of ${maximumPossibleScoreAfterRemainingAnalysis}/100, which cannot reach actionable threshold ${targetScoreThreshold}. Halting Layer 2 (5m & 4h) requests.`,
+              auditTrail,
+              scoreBeforeGate6,
+              maximumPossibleScoreAfterRemainingAnalysis,
+              scoreAfterGate6: l1Result.score,
+              finalScore: l1Result.score,
+              factors: Gate6ProgressiveMTF.extractFactors(cand, l1Result, null, l1Result.score),
+            };
+            return { cand, candles15m, l1Result, evalFail: evalPostL1Fail };
+          }
+
+          auditTrail.push(`[Gate 6 Layer 1 PASSED] Score: ${l1Result.score}/100 (Max reachable: ${maximumPossibleScoreAfterRemainingAnalysis}). Requesting Layer 2 (5m & 4h)...`);
+          return { cand, candles15m, sorted1h, l1Result, auditTrail, evalFail: null };
+        })
+      );
+
+      // Process Layer 1 outcomes
+      const layer1SurvivorsInBatch: Array<{
+        cand: typeof mtfEligibleCandidates[0];
+        candles15m: NormalizedCandle[];
+        sorted1h: NormalizedCandle[];
+        l1Result: NonNullable<(typeof layer1Results)[0]['l1Result']>;
+        auditTrail: string[];
+      }> = [];
+
+      for (const res of layer1Results) {
+        analyzedCount++;
+        if (res.evalFail) {
+          // CRITICAL: Immediately stop further analysis for candidates failing Layer 1!
+          rejected.push(res.evalFail);
+        } else if (res.l1Result && res.sorted1h) {
+          layer1SurvivorsInBatch.push({
+            cand: res.cand,
+            candles15m: res.candles15m,
+            sorted1h: res.sorted1h,
+            l1Result: res.l1Result,
+            auditTrail: res.auditTrail!,
+          });
         }
-      } catch (err: any) {
-        logger.warn(`[Gate 6 MTF] Failed to fetch 15m candles for ${asset}: ${err?.message || err}`);
       }
 
-      if (candles15m.length < 15) {
-        const evalFail: Gate6CandidateEvaluation = {
-          asset,
-          direction,
-          passed: false,
-          stoppedAtLayer: 1,
-          layer1: {
-            passed: false,
-            score: 0,
-            metrics: {} as any,
-            disagreements: ['15m candles unavailable from market data provider.'],
-            rejectionReason: '15m candles unavailable.',
-          },
-          compositeMtfScore: 0,
-          candlesMap: { '1h': sorted1h },
-          rejectionReason: '15m market candles unavailable; early halted.',
-          auditTrail,
-        };
-        rejected.push(evalFail);
-        continue;
+      // STEP 2: LAYER 2 (5m + 4h) - Execute ONLY for Layer-1 survivors with parallel fetching
+      const remainingSlots = Math.max(0, targetSurvivors - survived.length);
+      const survivorsToProcess = layer1SurvivorsInBatch.slice(0, remainingSlots);
+
+      if (survivorsToProcess.length > 0) {
+        const remainingMs = deadlineMs - Date.now();
+        const currentElapsedMs = Date.now() - startMs;
+
+        // Stop starting expensive work if deadline is near
+        if (remainingMs <= 1500 || currentElapsedMs >= 22500) {
+          timeBudgetExceeded = true;
+          providerRequestsStoppedByBudget = true;
+          logger.warn(
+            `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (22500ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 2 candidate processing.`
+          );
+        } else {
+          const l2Evaluations = await Promise.all(
+            survivorsToProcess.map(async (survivor) => {
+              const { cand, candles15m, sorted1h, l1Result, auditTrail } = survivor;
+              const asset = cand.asset;
+              const direction = cand.direction;
+              const scoreBeforeGate6 = cand.preliminaryScore;
+
+              let candles5m: NormalizedCandle[] = [];
+              let candles4h: NormalizedCandle[] = [];
+
+              try {
+                const [fetched5m, fetched4h] = await Promise.all([
+                  marketDataManager.getCandles(asset, undefined, '5m', 50, false).catch(() => []),
+                  marketDataManager.getCandles(asset, undefined, '4h', 40, false).catch(() => []),
+                ]);
+                if (fetched5m && fetched5m.length >= 10) candles5m = fetched5m.sort((a, b) => a.timestamp - b.timestamp);
+                if (fetched4h && fetched4h.length >= 10) candles4h = fetched4h.sort((a, b) => a.timestamp - b.timestamp);
+              } catch (err: any) {
+                logger.warn(`[Gate 6 MTF] Error fetching Layer 2 candles for ${asset}: ${err?.message || err}`);
+              }
+
+              const lastPrice = sorted1h[sorted1h.length - 1]?.close || 0;
+              const l2Result = Gate6ProgressiveMTF.evaluateLayer2(direction, lastPrice, candles5m, candles15m, sorted1h, candles4h);
+
+              const candlesMap: Record<string, NormalizedCandle[]> = {
+                '1h': sorted1h,
+                '15m': candles15m,
+              };
+              if (candles5m.length > 0) candlesMap['5m'] = candles5m;
+              if (candles4h.length > 0) candlesMap['4h'] = candles4h;
+
+              const compositeScore = Math.round(l1Result.score * 0.6 + l2Result.score * 0.4);
+              const maximumPossibleScoreAfterRemainingAnalysis = Math.min(100, Math.max(scoreBeforeGate6 + 25, compositeScore + 15));
+              const scoreAfterGate6 = compositeScore;
+              const finalScore = compositeScore;
+
+              if (!l2Result.passed) {
+                auditTrail.push(`[Gate 6 Layer 2 REJECTED] ${l2Result.rejectionReason}.`);
+                logger.info(`[Gate 6 Layer 2 Halt] ${asset} rejected: ${l2Result.rejectionReason}`);
+
+                const evalL2Fail: Gate6CandidateEvaluation = {
+                  asset,
+                  direction,
+                  passed: false,
+                  stoppedAtLayer: 2,
+                  layer1: l1Result,
+                  layer2: l2Result,
+                  compositeMtfScore: compositeScore,
+                  candlesMap,
+                  rejectionReason: l2Result.rejectionReason,
+                  auditTrail,
+                  scoreBeforeGate6,
+                  maximumPossibleScoreAfterRemainingAnalysis,
+                  scoreAfterGate6,
+                  finalScore,
+                  factors: Gate6ProgressiveMTF.extractFactors(cand, l1Result, l2Result, compositeScore),
+                };
+                return { isSuccess: false, evalData: evalL2Fail };
+              }
+
+              auditTrail.push(`[Gate 6 Layer 2 PASSED] Composite MTF Score: ${compositeScore}/100. Candidate survived to Gate 7.`);
+              logger.info(`[Gate 6 MTF Confluence Passed] ${asset} (${direction}) -> Composite MTF Score: ${compositeScore}/100`);
+
+              const evalSuccess: Gate6CandidateEvaluation = {
+                asset,
+                direction,
+                passed: true,
+                stoppedAtLayer: 'PASSED',
+                layer1: l1Result,
+                layer2: l2Result,
+                compositeMtfScore: compositeScore,
+                candlesMap,
+                auditTrail,
+                scoreBeforeGate6,
+                maximumPossibleScoreAfterRemainingAnalysis,
+                scoreAfterGate6,
+                finalScore,
+                factors: Gate6ProgressiveMTF.extractFactors(cand, l1Result, l2Result, compositeScore),
+              };
+              return { isSuccess: true, evalData: evalSuccess };
+            })
+          );
+
+          for (const res of l2Evaluations) {
+            layer2EvaluationsCount++;
+            if (res.isSuccess) {
+              survived.push(res.evalData);
+            } else {
+              rejected.push(res.evalData);
+            }
+          }
+        }
       }
+    }
 
-      // 2. Run Layer 1 Evaluation
-      const l1Result = this.evaluateLayer1(direction, sorted1h, candles15m);
+    const gate6ElapsedMs = Date.now() - gate6StartMs;
 
-      if (!l1Result.passed) {
-        auditTrail.push(`[Gate 6 Layer 1 REJECTED] ${l1Result.rejectionReason}. Early halted; 5m/4h skipped.`);
-        logger.info(`[Gate 6 Layer 1 Halt] ${asset} rejected: ${l1Result.rejectionReason}`);
+    // Calculate mandated rejection telemetry category counters
+    let candidatesRejectedBeforeMTF = 0;
+    let candidatesRejectedByMTF = 0;
+    let candidatesRejectedByScore = 0;
+    let candidatesRejectedByRR = 0;
+    let candidatesRejectedByStructure = 0;
 
-        const evalL1Fail: Gate6CandidateEvaluation = {
-          asset,
-          direction,
-          passed: false,
-          stoppedAtLayer: 1,
-          layer1: l1Result,
-          compositeMtfScore: l1Result.score,
-          candlesMap: { '1h': sorted1h, '15m': candles15m },
-          rejectionReason: l1Result.rejectionReason,
-          auditTrail,
-        };
-        rejected.push(evalL1Fail);
-        // CRITICAL: Do NOT fetch 5m or 4h candles!
-        continue;
-      }
+    for (const rej of rejected) {
+      const reasonLower = (rej.rejectionReason || '').toLowerCase();
+      const isBefore = rej.stoppedAtLayer === 'BEFORE_MTF' || reasonLower.includes('final_score_unreachable') || reasonLower.includes('halting mtf requests');
+      const isMTF = !isBefore && (reasonLower.includes('layer 1') || reasonLower.includes('layer 2') || reasonLower.includes('mtf'));
+      const minScore = serverConfig.getConfig().thresholds.minimumScore;
+      const isScore = rej.finalScore < minScore || rej.compositeMtfScore < minScore || rej.maximumPossibleScoreAfterRemainingAnalysis < minScore || reasonLower.includes('score');
+      const isRR = reasonLower.includes('rr') || reasonLower.includes('risk/reward');
+      const isStruct = reasonLower.includes('structure') || reasonLower.includes('support') || reasonLower.includes('resistance');
 
-      auditTrail.push(`[Gate 6 Layer 1 PASSED] Score: ${l1Result.score}/100. Requesting Layer 2 (5m & 4h)...`);
-
-      // 3. Surviving candidate -> Request Layer 2 (5m and 4h)
-      let candles5m: NormalizedCandle[] = [];
-      let candles4h: NormalizedCandle[] = [];
-
-      try {
-        const [fetched5m, fetched4h] = await Promise.all([
-          marketDataManager.getCandles(asset, undefined, '5m', 50, false).catch(() => []),
-          marketDataManager.getCandles(asset, undefined, '4h', 40, false).catch(() => []),
-        ]);
-        if (fetched5m && fetched5m.length >= 10) candles5m = fetched5m.sort((a, b) => a.timestamp - b.timestamp);
-        if (fetched4h && fetched4h.length >= 10) candles4h = fetched4h.sort((a, b) => a.timestamp - b.timestamp);
-      } catch (err: any) {
-        logger.warn(`[Gate 6 MTF] Error fetching Layer 2 candles for ${asset}: ${err?.message || err}`);
-      }
-
-      const lastPrice = sorted1h[sorted1h.length - 1]?.close || 0;
-      const l2Result = this.evaluateLayer2(direction, lastPrice, candles5m, candles15m, sorted1h, candles4h);
-
-      const candlesMap: Record<string, NormalizedCandle[]> = {
-        '1h': sorted1h,
-        '15m': candles15m,
-      };
-      if (candles5m.length > 0) candlesMap['5m'] = candles5m;
-      if (candles4h.length > 0) candlesMap['4h'] = candles4h;
-
-      const compositeScore = Math.round(l1Result.score * 0.6 + l2Result.score * 0.4);
-
-      if (!l2Result.passed) {
-        auditTrail.push(`[Gate 6 Layer 2 REJECTED] ${l2Result.rejectionReason}.`);
-        logger.info(`[Gate 6 Layer 2 Halt] ${asset} rejected: ${l2Result.rejectionReason}`);
-
-        const evalL2Fail: Gate6CandidateEvaluation = {
-          asset,
-          direction,
-          passed: false,
-          stoppedAtLayer: 2,
-          layer1: l1Result,
-          layer2: l2Result,
-          compositeMtfScore: compositeScore,
-          candlesMap,
-          rejectionReason: l2Result.rejectionReason,
-          auditTrail,
-        };
-        rejected.push(evalL2Fail);
-        continue;
-      }
-
-      auditTrail.push(`[Gate 6 Layer 2 PASSED] Score: ${l2Result.score}/100. Candidate survived to Gate 7.`);
-      logger.info(`[Gate 6 MTF Confluence Passed] ${asset} (${direction}) -> Composite MTF Score: ${compositeScore}/100`);
-
-      const evalSuccess: Gate6CandidateEvaluation = {
-        asset,
-        direction,
-        passed: true,
-        stoppedAtLayer: 'PASSED',
-        layer1: l1Result,
-        layer2: l2Result,
-        compositeMtfScore: compositeScore,
-        candlesMap,
-        auditTrail,
-      };
-      survived.push(evalSuccess);
+      if (isBefore) candidatesRejectedBeforeMTF++;
+      if (isMTF) candidatesRejectedByMTF++;
+      if (isScore) candidatesRejectedByScore++;
+      if (isRR) candidatesRejectedByRR++;
+      if (isStruct) candidatesRejectedByStructure++;
     }
 
     return {
       totalInputCandidates: candidates.length,
-      analyzedCandidatesCount: candidatesToAnalyze.length,
+      analyzedCandidatesCount: analyzedCount,
       survivedCandidatesCount: survived.length,
       survivedCandidates: survived,
       rejectedCandidates: rejected,
-      summary: `Gate 6 analyzed top ${candidatesToAnalyze.length}/${candidates.length} candidates. ${survived.length} passed both Layer 1 & Layer 2.`,
+      summary: `Gate 6 Progressive MTF evaluated ${analyzedCount}/${candidates.length} candidates. Survived: ${survived.length}, Rejected: ${rejected.length} (Before MTF: ${candidatesRejectedBeforeMTF}). Elapsed: ${gate6ElapsedMs}ms.`,
+      gate6ElapsedMs,
+      timeBudgetExceeded,
+      providerRequestsStoppedByBudget,
+      candidatesRejectedBeforeMTF,
+      candidatesRejectedByMTF,
+      candidatesRejectedByScore,
+      candidatesRejectedByRR,
+      candidatesRejectedByStructure,
     };
   }
 }

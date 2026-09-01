@@ -60,6 +60,8 @@ export interface TradeOutcomeRecord {
   durationMs: number;
   tradeEntered?: boolean;
   TRADE_ENTERED?: boolean;
+  provenance?: 'LIVE' | 'HISTORICAL' | 'BACKTEST' | 'SIMULATION' | 'TEST';
+  isSynthetic?: boolean;
 }
 
 export interface MetricSummary {
@@ -111,13 +113,13 @@ export class StrategyPerformanceTracker {
       wins: 0,
       losses: 0,
       breakevens: 0,
-      winRatePct: 50.0,
-      lossRatePct: 50.0,
-      rollingWinRatePct: 50.0,
-      profitFactor: 1.5,
+      winRatePct: 0.0,
+      lossRatePct: 0.0,
+      rollingWinRatePct: 0.0,
+      profitFactor: 0.0,
       totalRealizedR: 0,
       avgR: 0,
-      expectancyR: 0.5,
+      expectancyR: 0.0,
       maxDrawdownR: 0,
       maxLosingStreak: 0,
       currentStreak: 0,
@@ -179,171 +181,89 @@ export class StrategyPerformanceTracker {
     }
 
     this.isInitialized = true;
-
-    // Seed realistic baseline historical trade outcomes if state is newly initialized
-    if (this.state.recentTrades.length === 0) {
-      this.seedInitialBaseline();
-    }
+    this.rebuildAllMetrics();
   }
 
   /**
-   * Seeds realistic baseline historical trades across asset classes, strategies, and regimes.
+   * Rebuilds all metrics from scratch using only real live and historical trades.
+   * Strictly excludes "BACKTEST", "SIMULATION", "TEST", and synthetic trades.
    */
-  private static seedInitialBaseline(): void {
-    const now = Date.now();
-    const hour = 3600000;
+  public static rebuildAllMetrics(): void {
+    this.state.overall = this.createEmptyMetricSummary();
+    this.state.byStrategy = {};
+    this.state.byAsset = {};
+    this.state.byAssetClass = {};
+    this.state.byTimeframe = {};
+    this.state.byRegime = {};
+    this.state.byConfidenceRange = {};
 
-    const sampleTrades: TradeOutcomeRecord[] = [
-      {
-        signalId: 'hist_sig_btc_01',
-        symbol: 'BTCUSDT',
-        assetClass: 'CRYPTO',
-        direction: 'BUY',
-        strategyId: 'strat_2',
-        strategyName: 'Zero-Lag MACD Momentum',
-        marketRegime: 'TRENDING' as MarketRegime,
-        timeframe: '1h',
-        confidenceScore: 92,
-        confidenceRange: '90-100',
-        entryPrice: 91450.0,
-        stopLoss: 89800.0,
-        takeProfit: 95500.0,
-        plannedRR: 2.45,
-        outcomeStatus: 'TP_HIT',
-        realizedRR: 2.45,
-        isWin: true,
-        tradeEntered: true,
-        TRADE_ENTERED: true,
-        timestamp: now - 48 * hour,
-        resolvedAt: now - 38 * hour,
-        durationMs: 10 * hour,
-      },
-      {
-        signalId: 'hist_sig_eur_02',
-        symbol: 'EURUSD',
-        assetClass: 'FOREX',
-        direction: 'BUY',
-        strategyId: 'strat_1',
-        strategyName: 'Multi-EMA Trend Alignment',
-        marketRegime: 'TRENDING' as MarketRegime,
-        timeframe: '15m',
-        confidenceScore: 86,
-        confidenceRange: '80-89',
-        entryPrice: 1.0845,
-        stopLoss: 1.0815,
-        takeProfit: 1.0910,
-        plannedRR: 2.17,
-        outcomeStatus: 'TP_HIT',
-        realizedRR: 2.17,
-        isWin: true,
-        tradeEntered: true,
-        TRADE_ENTERED: true,
-        timestamp: now - 36 * hour,
-        resolvedAt: now - 28 * hour,
-        durationMs: 8 * hour,
-      },
-      {
-        signalId: 'hist_sig_aapl_03',
-        symbol: 'AAPL',
-        assetClass: 'STOCKS',
-        direction: 'BUY',
-        strategyId: 'strat_3',
-        strategyName: 'Donchian Volatility Breakout',
-        marketRegime: 'BREAKOUT' as MarketRegime,
-        timeframe: '1h',
-        confidenceScore: 88,
-        confidenceRange: '80-89',
-        entryPrice: 228.5,
-        stopLoss: 224.0,
-        takeProfit: 238.0,
-        plannedRR: 2.11,
-        outcomeStatus: 'TP_HIT',
-        realizedRR: 2.11,
-        isWin: true,
-        tradeEntered: true,
-        TRADE_ENTERED: true,
-        timestamp: now - 24 * hour,
-        resolvedAt: now - 18 * hour,
-        durationMs: 6 * hour,
-      },
-      {
-        signalId: 'hist_sig_eth_04',
-        symbol: 'ETHUSDT',
-        assetClass: 'CRYPTO',
-        direction: 'SELL',
-        strategyId: 'strat_4',
-        strategyName: 'Bollinger Mean Reversion',
-        marketRegime: 'RANGING' as MarketRegime,
-        timeframe: '1h',
-        confidenceScore: 78,
-        confidenceRange: '70-79',
-        entryPrice: 3420.0,
-        stopLoss: 3490.0,
-        takeProfit: 3260.0,
-        plannedRR: 2.28,
-        outcomeStatus: 'SL_HIT',
-        realizedRR: -1.0,
-        isWin: false,
-        tradeEntered: true,
-        TRADE_ENTERED: true,
-        timestamp: now - 20 * hour,
-        resolvedAt: now - 14 * hour,
-        durationMs: 6 * hour,
-      },
-      {
-        signalId: 'hist_sig_gbp_05',
-        symbol: 'GBPUSD',
-        assetClass: 'FOREX',
-        direction: 'BUY',
-        strategyId: 'strat_1',
-        strategyName: 'Multi-EMA Trend Alignment',
-        marketRegime: 'TRENDING' as MarketRegime,
-        timeframe: '1h',
-        confidenceScore: 91,
-        confidenceRange: '90-100',
-        entryPrice: 1.2890,
-        stopLoss: 1.2840,
-        takeProfit: 1.3000,
-        plannedRR: 2.2,
-        outcomeStatus: 'TP_HIT',
-        realizedRR: 2.2,
-        isWin: true,
-        tradeEntered: true,
-        TRADE_ENTERED: true,
-        timestamp: now - 12 * hour,
-        resolvedAt: now - 4 * hour,
-        durationMs: 8 * hour,
-      },
-      {
-        signalId: 'hist_sig_nvda_06',
-        symbol: 'NVDA',
-        assetClass: 'STOCKS',
-        direction: 'BUY',
-        strategyId: 'strat_2',
-        strategyName: 'Zero-Lag MACD Momentum',
-        marketRegime: 'TRENDING' as MarketRegime,
-        timeframe: '1h',
-        confidenceScore: 84,
-        confidenceRange: '80-89',
-        entryPrice: 132.0,
-        stopLoss: 128.5,
-        takeProfit: 140.0,
-        plannedRR: 2.28,
-        outcomeStatus: 'NO_ENTRY / EXPIRED',
-        realizedRR: 0.0,
-        isWin: false,
-        tradeEntered: false,
-        TRADE_ENTERED: false,
-        timestamp: now - 30 * hour,
-        resolvedAt: now - 6 * hour,
-        durationMs: 24 * hour,
-      },
-    ];
+    const productionTrades = this.state.recentTrades.filter((t) => {
+      const prov = (t.provenance || '').toUpperCase();
+      const isSynthetic = t.isSynthetic || t.signalId?.startsWith('hist_sig_');
+      if (prov === 'BACKTEST' || prov === 'SIMULATION' || prov === 'TEST' || isSynthetic) {
+        return false;
+      }
+      return true;
+    });
 
-    for (const t of sampleTrades) {
-      this.recordTradeOutcome(t);
+    for (const record of productionTrades) {
+      if (!record.confidenceRange && record.confidenceScore) {
+        record.confidenceRange = this.getConfidenceRange(record.confidenceScore);
+      } else if (!record.confidenceRange) {
+        record.confidenceRange = '80-89';
+      }
+
+      // 1. Overall
+      this.updateSummaryMetrics(this.state.overall, record, productionTrades);
+
+      // 2. By Strategy
+      const stratKey = record.strategyId || 'unknown_strategy';
+      if (!this.state.byStrategy[stratKey]) {
+        this.state.byStrategy[stratKey] = this.createEmptyMetricSummary();
+      }
+      const stratTrades = productionTrades.filter((t) => t.strategyId === stratKey);
+      this.updateSummaryMetrics(this.state.byStrategy[stratKey], record, stratTrades);
+
+      // 3. By Asset
+      const symKey = record.symbol.toUpperCase();
+      if (!this.state.byAsset[symKey]) {
+        this.state.byAsset[symKey] = this.createEmptyMetricSummary();
+      }
+      const symTrades = productionTrades.filter((t) => t.symbol.toUpperCase() === symKey);
+      this.updateSummaryMetrics(this.state.byAsset[symKey], record, symTrades);
+
+      // 4. By Asset Class
+      const assetClassKey = record.assetClass || 'CRYPTO';
+      if (!this.state.byAssetClass[assetClassKey]) {
+        this.state.byAssetClass[assetClassKey] = this.createEmptyMetricSummary();
+      }
+      const acTrades = productionTrades.filter((t) => t.assetClass === assetClassKey);
+      this.updateSummaryMetrics(this.state.byAssetClass[assetClassKey], record, acTrades);
+
+      // 5. By Timeframe
+      const tfKey = record.timeframe || '1h';
+      if (!this.state.byTimeframe[tfKey]) {
+        this.state.byTimeframe[tfKey] = this.createEmptyMetricSummary();
+      }
+      const tfTrades = productionTrades.filter((t) => t.timeframe === tfKey);
+      this.updateSummaryMetrics(this.state.byTimeframe[tfKey], record, tfTrades);
+
+      // 6. By Market Regime
+      const regimeKey = record.marketRegime || 'RANGING';
+      if (!this.state.byRegime[regimeKey]) {
+        this.state.byRegime[regimeKey] = this.createEmptyMetricSummary();
+      }
+      const regimeTrades = productionTrades.filter((t) => t.marketRegime === regimeKey);
+      this.updateSummaryMetrics(this.state.byRegime[regimeKey], record, regimeTrades);
+
+      // 7. By Confidence Range
+      const rangeKey = record.confidenceRange;
+      if (!this.state.byConfidenceRange[rangeKey]) {
+        this.state.byConfidenceRange[rangeKey] = this.createEmptyMetricSummary();
+      }
+      const rangeTrades = productionTrades.filter((t) => t.confidenceRange === rangeKey);
+      this.updateSummaryMetrics(this.state.byConfidenceRange[rangeKey], record, rangeTrades);
     }
-    logger.info('[StrategyPerformanceTracker] Seeded baseline historical trade outcomes.');
   }
 
   /**
@@ -384,58 +304,7 @@ export class StrategyPerformanceTracker {
     }
 
     this.state.recentTrades.push(record);
-
-    // 1. Overall metrics
-    this.updateSummaryMetrics(this.state.overall, record, this.state.recentTrades);
-
-    // 2. By Strategy
-    const stratKey = record.strategyId || 'unknown_strategy';
-    if (!this.state.byStrategy[stratKey]) {
-      this.state.byStrategy[stratKey] = this.createEmptyMetricSummary();
-    }
-    const stratTrades = this.state.recentTrades.filter((t) => t.strategyId === stratKey);
-    this.updateSummaryMetrics(this.state.byStrategy[stratKey], record, stratTrades);
-
-    // 3. By Asset (Symbol)
-    const symKey = record.symbol.toUpperCase();
-    if (!this.state.byAsset[symKey]) {
-      this.state.byAsset[symKey] = this.createEmptyMetricSummary();
-    }
-    const symTrades = this.state.recentTrades.filter((t) => t.symbol.toUpperCase() === symKey);
-    this.updateSummaryMetrics(this.state.byAsset[symKey], record, symTrades);
-
-    // 4. By Asset Class
-    const assetClassKey = record.assetClass || 'CRYPTO';
-    if (!this.state.byAssetClass[assetClassKey]) {
-      this.state.byAssetClass[assetClassKey] = this.createEmptyMetricSummary();
-    }
-    const acTrades = this.state.recentTrades.filter((t) => t.assetClass === assetClassKey);
-    this.updateSummaryMetrics(this.state.byAssetClass[assetClassKey], record, acTrades);
-
-    // 5. By Timeframe
-    const tfKey = record.timeframe || '1h';
-    if (!this.state.byTimeframe[tfKey]) {
-      this.state.byTimeframe[tfKey] = this.createEmptyMetricSummary();
-    }
-    const tfTrades = this.state.recentTrades.filter((t) => t.timeframe === tfKey);
-    this.updateSummaryMetrics(this.state.byTimeframe[tfKey], record, tfTrades);
-
-    // 6. By Market Regime
-    const regimeKey = record.marketRegime || 'RANGING';
-    if (!this.state.byRegime[regimeKey]) {
-      this.state.byRegime[regimeKey] = this.createEmptyMetricSummary();
-    }
-    const regimeTrades = this.state.recentTrades.filter((t) => t.marketRegime === regimeKey);
-    this.updateSummaryMetrics(this.state.byRegime[regimeKey], record, regimeTrades);
-
-    // 7. By Confidence Range
-    const rangeKey = record.confidenceRange;
-    if (!this.state.byConfidenceRange[rangeKey]) {
-      this.state.byConfidenceRange[rangeKey] = this.createEmptyMetricSummary();
-    }
-    const rangeTrades = this.state.recentTrades.filter((t) => t.confidenceRange === rangeKey);
-    this.updateSummaryMetrics(this.state.byConfidenceRange[rangeKey], record, rangeTrades);
-
+    this.rebuildAllMetrics();
     this.saveState();
     logger.info(`[StrategyPerformanceTracker] Recorded outcome for ${record.symbol} (${record.outcomeStatus}, ${record.realizedRR}R). Strategy: ${record.strategyName}, Overall WR: ${this.state.overall.winRatePct}% (Rolling: ${this.state.overall.rollingWinRatePct}%)`);
   }
@@ -446,10 +315,10 @@ export class StrategyPerformanceTracker {
       wins: 0,
       losses: 0,
       breakevens: 0,
-      winRatePct: 50.0,
-      lossRatePct: 50.0,
-      rollingWinRatePct: 50.0,
-      profitFactor: 1.0,
+      winRatePct: 0.0,
+      lossRatePct: 0.0,
+      rollingWinRatePct: 0.0,
+      profitFactor: 0.0,
       totalRealizedR: 0,
       avgR: 0,
       expectancyR: 0.0,
@@ -535,15 +404,15 @@ export class StrategyPerformanceTracker {
     }
     summary.profitFactor = totalLossR > 0
       ? Number((totalWinR / totalLossR).toFixed(2))
-      : (totalWinR > 0 ? 3.0 : 1.0);
+      : (totalWinR > 0 ? Number(totalWinR.toFixed(2)) : 0.0);
 
     // Calculate Expectancy: (Win% * AvgWinR) - (Loss% * AvgLossR) (actual entered trades only)
     const winProb = summary.winRatePct / 100;
     const lossProb = summary.totalTrades > 0 ? (summary.losses / summary.totalTrades) : 0.0;
     const winTrades = actualTradesHistory.filter((t) => t.realizedRR > 0);
     const lossTrades = actualTradesHistory.filter((t) => t.realizedRR < 0);
-    const avgWin = winTrades.length > 0 ? winTrades.reduce((acc, t) => acc + t.realizedRR, 0) / winTrades.length : 2.0;
-    const avgLoss = lossTrades.length > 0 ? Math.abs(lossTrades.reduce((acc, t) => acc + t.realizedRR, 0) / lossTrades.length) : 1.0;
+    const avgWin = winTrades.length > 0 ? winTrades.reduce((acc, t) => acc + t.realizedRR, 0) / winTrades.length : 0.0;
+    const avgLoss = lossTrades.length > 0 ? Math.abs(lossTrades.reduce((acc, t) => acc + t.realizedRR, 0) / lossTrades.length) : 0.0;
     summary.expectancyR = Number((winProb * avgWin - lossProb * avgLoss).toFixed(3));
 
     // Calculate Average realized R per trade (actual entered trades only)
@@ -640,12 +509,12 @@ export class StrategyPerformanceTracker {
         wins: 0,
         losses: 0,
         breakevens: 0,
-        winRatePct: 50.0,
-        rollingWinRatePct: 50.0,
-        profitFactor: 1.5,
+        winRatePct: 0.0,
+        rollingWinRatePct: 0.0,
+        profitFactor: 0.0,
         totalRealizedR: 0,
         avgR: 0,
-        expectancyR: 0.5,
+        expectancyR: 0.0,
         maxDrawdownR: 0,
         maxLosingStreak: 0,
         currentStreak: 0,

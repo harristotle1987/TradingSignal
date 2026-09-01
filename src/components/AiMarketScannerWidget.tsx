@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { api } from '../api/client.js';
 import { TradingSignal } from '../types/index.js';
+import { Rejected72PlusPanel } from './Rejected72PlusPanel.js';
 import {
   Sparkles,
   X,
@@ -194,20 +195,23 @@ export function AiMarketScannerWidget({
 
             {/* Error State */}
             {error && !isScanning && (
-              <div className="bg-rose-950/40 border border-rose-900/50 rounded-xl p-3 space-y-2 text-rose-300 text-[11px]">
+              <div className="bg-rose-950/40 border border-rose-900/50 rounded-xl p-3 space-y-2.5 text-rose-300 text-[11px]">
                 <div className="flex items-center gap-1.5 font-semibold text-rose-400">
                   <AlertCircle className="w-4 h-4 shrink-0" />
                   <span>Scan Failed</span>
                 </div>
                 <p className="text-slate-300 text-[10px] leading-relaxed">{error}</p>
-                <button
-                  type="button"
-                  id="btn-retry-ai-scan"
-                  onClick={handleScanBestTrades}
-                  className="px-2.5 py-1 bg-rose-900/50 hover:bg-rose-900 text-rose-200 rounded text-[10px] border border-rose-700/50 transition cursor-pointer font-mono"
-                >
-                  Retry Scan
-                </button>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    id="btn-retry-ai-scan"
+                    onClick={handleScanBestTrades}
+                    className="px-2.5 py-1.5 bg-rose-900/50 hover:bg-rose-900 text-rose-200 rounded-lg text-[10px] border border-rose-700/50 transition cursor-pointer font-mono font-bold uppercase tracking-wider"
+                  >
+                    Retry Scan
+                  </button>
+                </div>
               </div>
             )}
 
@@ -234,7 +238,7 @@ export function AiMarketScannerWidget({
 
                       <div className="space-y-2.5">
                         {scanResult.acceptedSignals.map((sig: TradingSignal, idx: number) => {
-                          const scoreVal = sig.score || sig.confidenceScore || 75;
+                          const scoreVal = sig.score || sig.confidenceScore || 70;
                           const rrVal = (sig as any).netRiskRewardRatio ?? sig.riskRewardRatio ?? 2.0;
                           
                           let whyText = 'Strong MTF trend alignment and momentum confluence';
@@ -324,7 +328,101 @@ export function AiMarketScannerWidget({
                         All candidates failed the existing validation criteria.
                       </p>
 
-                      {scanResult.rejectionReasons && scanResult.rejectionReasons.length > 0 && (
+                      {/* Granular Aggregate Rejection Reasons */}
+                      {scanResult.rejectionReasonsCounts && Object.keys(scanResult.rejectionReasonsCounts).length > 0 && (
+                        <div className="text-left bg-slate-950/90 p-2.5 rounded-lg border border-amber-900/40 text-[9px] font-mono space-y-1.5 mt-2">
+                          <span className="text-amber-400 font-bold block text-[10px] uppercase tracking-wider">
+                            Rejection Reasons Breakdown:
+                          </span>
+                          <div className="grid grid-cols-2 gap-1">
+                            {Object.entries(scanResult.rejectionReasonsCounts).map(([gate, count]) => (
+                              <div key={gate} className="flex items-center justify-between bg-slate-900/80 px-1.5 py-1 rounded border border-slate-800 text-slate-300">
+                                <span className="truncate pr-1 text-slate-400">{gate}</span>
+                                <span className="font-bold text-amber-400 bg-amber-950/60 px-1 rounded">{String(count)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Candidate Specific Audit Trail */}
+                      {scanResult.candidateRejectionDetails && scanResult.candidateRejectionDetails.length > 0 ? (
+                        <div className="text-left bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/80 text-[9px] font-mono text-slate-400 max-h-56 overflow-y-auto space-y-2 mt-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-300 font-semibold block uppercase tracking-wider">Candidate Rejection Telemetry:</span>
+                            {scanResult.candidateRejectionDetails.some((c: any) => c.is72PlusRejected || c.score >= 70 || c.finalScore >= 70) && (
+                              <span className="px-1.5 py-0.5 bg-rose-950 text-rose-300 text-[8px] font-bold rounded border border-rose-800">
+                                70+ REJECTED PRESENT
+                              </span>
+                            )}
+                          </div>
+                          {scanResult.candidateRejectionDetails.map((cand: any, i: number) => {
+                            const is72Plus = cand.is72PlusRejected || (cand.score >= 70 || cand.finalScore >= 70) && cand.finalDecision === 'REJECTED';
+                            return (
+                              <div
+                                key={i}
+                                className={`p-2 rounded border space-y-1 ${
+                                  is72Plus
+                                    ? 'bg-rose-950/20 border-rose-900/60 text-slate-200'
+                                    : 'bg-slate-900/60 border-slate-800/80 text-slate-300'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between font-bold">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-white text-[10px]">{cand.symbol}</span>
+                                    {cand.direction && (
+                                      <span className={`px-1 py-0.2 text-[8px] rounded ${cand.direction === 'BUY' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'}`}>
+                                        {cand.direction}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className={`px-1.5 py-0.2 rounded text-[8.5px] font-bold ${is72Plus ? 'bg-amber-950 text-amber-300 border border-amber-800/80' : 'bg-slate-800 text-slate-400'}`}>
+                                    Score: {cand.score || cand.finalScore}/100
+                                  </span>
+                                </div>
+
+                                {is72Plus && (
+                                  <div className="inline-block px-1.5 py-0.2 bg-rose-900/50 text-rose-300 text-[8px] font-bold rounded border border-rose-700/60 tracking-wide uppercase">
+                                    STATUS: {cand.statusText || 'REJECTED — NOT TRADEABLE'}
+                                  </div>
+                                )}
+
+                                {(cand.entryPrice || cand.stopLoss || cand.takeProfit || cand.tp1) && (
+                                  <div className="grid grid-cols-3 gap-1 bg-slate-950/80 p-1 rounded border border-slate-800 text-[8px]">
+                                    <div>
+                                      <span className="text-slate-500 block">ENTRY</span>
+                                      <span className="text-slate-200 font-semibold">{cand.entryPrice ?? 'N/A'}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-slate-500 block">SL</span>
+                                      <span className="text-rose-400 font-semibold">{cand.stopLoss ?? 'N/A'}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-slate-500 block">TP1</span>
+                                      <span className="text-emerald-400 font-semibold">{cand.tp1 ?? cand.takeProfit ?? 'N/A'}</span>
+                                    </div>
+                                  </div>
+                                )}
+
+                                <p className="text-amber-300/90 text-[8.5px] leading-tight">
+                                  <span className="font-semibold text-rose-300">Reason: </span>
+                                  {cand.rejectionSummary || cand.primaryRejectionReason}
+                                </p>
+
+                                {cand.failedGates && cand.failedGates.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 mt-0.5">
+                                    {cand.failedGates.map((g: string, gi: number) => (
+                                      <span key={gi} className="px-1 py-0.2 bg-slate-900 text-[7.5px] text-rose-300 rounded border border-rose-900/50">
+                                        {g}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : scanResult.rejectionReasons && scanResult.rejectionReasons.length > 0 && (
                         <div className="text-left bg-slate-950/80 p-2 rounded-lg border border-slate-800/80 text-[9px] font-mono text-slate-400 max-h-24 overflow-y-auto space-y-1 mt-2">
                           <span className="text-amber-400 font-semibold block">Validation Audit:</span>
                           {scanResult.rejectionReasons.map((reason: string, i: number) => (
@@ -337,6 +435,11 @@ export function AiMarketScannerWidget({
                     </div>
                   )}
                 </div>
+
+                {/* Dedicated 72+ HIGH-SCORE REJECTED SETUPS Panel */}
+                {scanResult.candidateRejectionDetails && scanResult.candidateRejectionDetails.length > 0 && (
+                  <Rejected72PlusPanel candidates={scanResult.candidateRejectionDetails} compact={true} />
+                )}
               </div>
             )}
           </div>

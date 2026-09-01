@@ -8,6 +8,7 @@ import { marketDataManager } from '../market/MarketDataManager.js';
 import { logger } from '../logger.js';
 import { MarketSessionManager } from '../market/MarketSessionManager.js';
 import { requestRegistry } from '../market/CacheStore.js';
+import { adminAuthMiddleware } from '../middleware/adminAuth.js';
 
 const router = Router();
 
@@ -202,7 +203,7 @@ router.get('/market/session', (req: Request, res: Response) => {
  * POST /api/market/time
  * Allows setting a simulated mock timestamp for timezone/weekend/holiday lock testing.
  */
-router.post('/market/time', (req: Request, res: Response) => {
+router.post('/market/time', adminAuthMiddleware, (req: Request, res: Response) => {
   try {
     if (process.env.NODE_ENV === 'production') {
       return res.status(403).json({
@@ -254,7 +255,7 @@ router.get('/market/requests', (_req: Request, res: Response) => {
  * POST /api/market/requests/clear
  * Clears the external request registry logs.
  */
-router.post('/market/requests/clear', (_req: Request, res: Response) => {
+router.post('/market/requests/clear', adminAuthMiddleware, (_req: Request, res: Response) => {
   requestRegistry.clear();
   res.status(200).json({ success: true, message: 'External request audit logs cleared' });
 });

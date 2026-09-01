@@ -24,6 +24,7 @@
 import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 import { serverConfig } from '../config.js';
 import { logger } from '../logger.js';
+import { RiskRewardCalculator, logRrRejectionDiagnostic } from './RiskRewardCalculator.js';
 
 export interface FrictionBreakdown {
   spread: number;
@@ -83,6 +84,9 @@ export class Gate34ExecutionFrictionStressTest {
     entryPrice: number,
     stopLoss: number,
     takeProfit: number,
+    tp1: number,
+    tp2: number,
+    tp3: number,
     thresholdOverrides?: FrictionTestThresholds
   ): FrictionStressTestResult {
     const cleanSymbol = SymbolNormalizer.normalizeAppSymbol(symbol) || symbol.trim().toUpperCase();
@@ -93,11 +97,16 @@ export class Gate34ExecutionFrictionStressTest {
       assetClassUpper === 'CRYPTO' ? 'CRYPTO' :
       assetClassUpper === 'INDEX' ? 'INDEX' : 'STOCKS';
 
-    const rawRisk = Math.abs(entryPrice - stopLoss);
-    const rawReward = Math.abs(takeProfit - entryPrice);
+    const direction = stopLoss < entryPrice ? 'BUY' : 'SELL';
+    const cfg = serverConfig.getConfig().thresholds;
+    const minGrossRR = thresholdOverrides?.minimumRR ?? cfg.minimumRR ?? 1.80;
+
+    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, minGrossRR);
+    const rawRisk = rrResult.riskDistance;
+    const rawReward = rrResult.rewardDistance;
     
-    // 1. Calculate GROSS_RR
-    const grossRR = rawRisk > 0 ? parseFloat((rawReward / rawRisk).toFixed(2)) : 0;
+    // 1. Calculate GROSS_RR via RiskRewardCalculator (effectiveGrossRR considers multi-target evaluation)
+    const grossRR = rrResult.effectiveGrossRR;
 
     // Build normal and adverse friction breakdowns based on asset-specific profile
     const normalFriction = this.calculateNormalFriction(cleanSymbol, assetClass, entryPrice, rawReward, rawRisk);
@@ -106,9 +115,7 @@ export class Gate34ExecutionFrictionStressTest {
     const normalNetRR = normalFriction.netRR;   // NET_RR
     const adverseNetRR = adverseFriction.netRR; // ADVERSE_NET_RR
 
-    // Resolve safety thresholds
-    const cfg = serverConfig.getConfig().thresholds;
-    const minGrossRR = thresholdOverrides?.minimumRR ?? cfg.minimumRR ?? 1.80;
+    // Resolve remaining safety thresholds
     const minNetRR = thresholdOverrides?.minimumNetRR ?? cfg.minimumNetRR ?? 1.50;
     const minAdverseNetRR = thresholdOverrides?.minimumAdverseNetRR ?? cfg.minimumAdverseNetRR ?? 1.00;
     const enforceAdverseHardGate = thresholdOverrides?.enforceAdverseNetRRHardGate ?? cfg.enforceAdverseNetRRHardGate ?? false;
@@ -126,6 +133,17 @@ export class Gate34ExecutionFrictionStressTest {
       reasons.push(
         `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross R:R (${grossRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${minGrossRR}:1).`
       );
+      logRrRejectionDiagnostic({
+        symbol: cleanSymbol,
+        direction,
+        entryPrice,
+        stopLoss,
+        tp1,
+        tp2,
+        tp3,
+        assetClass,
+        rejectionReason: `GROSS_RR_BELOW_THRESHOLD. Gross R:R (${grossRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${minGrossRR}:1).`,
+      });
     }
 
     // 2. Safety Buffer Check (Reward must be at least minSafetyBufferMult x normal friction)

@@ -6,6 +6,7 @@
 import { NormalizedTicker, NormalizedCandle } from './types.js';
 import { serverConfig } from '../config.js';
 import { logger } from '../logger.js';
+import { getActiveProfiler } from '../signals/ScanPerformanceProfiler.js';
 
 const getEnvInt = (key: string, defaultValue: number): number => {
   const val = process.env[key];
@@ -43,12 +44,22 @@ export interface ExternalRequestRecord {
 
 export class ExternalRequestRegistry {
   private records: ExternalRequestRecord[] = [];
+  // Hard cap so this array can never grow unbounded over a long-running
+  // process. Previously this only shrank via a manual admin-triggered
+  // clear() call.
+  private static readonly MAX_RECORDS = 5000;
 
   record(provider: string, endpoint: string, asset: string, reason: string): void {
     const timestamp = Date.now();
     const entry: ExternalRequestRecord = { provider, endpoint, asset, timestamp, reason };
     this.records.push(entry);
-    logger.info(`[External Request Logged] Provider: ${provider}, Endpoint: ${endpoint}, Asset: ${asset}, Reason: ${reason}`);
+    if (this.records.length > ExternalRequestRegistry.MAX_RECORDS) {
+      this.records.splice(0, this.records.length - ExternalRequestRegistry.MAX_RECORDS);
+    }
+    // Downgraded to debug: this fires on every single outbound
+    // market-data request and was previously logged (and disk-appended)
+    // at info level.
+    logger.debug(`[External Request Logged] Provider: ${provider}, Endpoint: ${endpoint}, Asset: ${asset}, Reason: ${reason}`);
   }
 
   getRecords(): ExternalRequestRecord[] {
@@ -125,14 +136,14 @@ export class MarketDataCache {
 
     if (!entry) {
       this.missesCount++;
-      logger.info(`[Cache MISS] Ticker key: ${key}`);
+      logger.debug(`[Cache MISS] Ticker key: ${key}`);
       return null;
     }
 
     const now = Date.now();
     if (now > entry.expiresAt) {
       this.missesCount++;
-      logger.info(`[Cache STALE/MISS] Ticker key: ${key}`);
+      logger.debug(`[Cache STALE/MISS] Ticker key: ${key}`);
       this.cache.delete(key);
       return null;
     }
@@ -143,13 +154,15 @@ export class MarketDataCache {
 
     if (!isFresh) {
       this.missesCount++;
-      logger.info(`[Cache STALE/MISS] Ticker key: ${key} (Not fresh)`);
+      getActiveProfiler()?.recordCacheMiss();
+      logger.debug(`[Cache STALE/MISS] Ticker key: ${key} (Not fresh)`);
       this.cache.delete(key);
       return null;
     }
 
     this.hitsCount++;
-    logger.info(`[Cache HIT] Ticker key: ${key}`);
+    getActiveProfiler()?.recordCacheHit();
+    logger.debug(`[Cache HIT] Ticker key: ${key}`);
     return {
       ...entry.ticker,
       source: 'CACHE',
@@ -170,7 +183,7 @@ export class MarketDataCache {
       },
       expiresAt: Date.now() + ttlMs,
     });
-    logger.info(`[Cache SET] Ticker key: ${key}, TTL: ${ttlMs}ms`);
+    logger.debug(`[Cache SET] Ticker key: ${key}, TTL: ${ttlMs}ms`);
   }
 
   /**
@@ -193,7 +206,7 @@ export class MarketDataCache {
     // 2. Check in-flight duplicate request
     const existingPromise = this.pendingRequests.get(key);
     if (existingPromise) {
-      logger.info(`[Cache IN-FLIGHT HIT] Ticker key: ${key}`);
+      logger.debug(`[Cache IN-FLIGHT HIT] Ticker key: ${key}`);
       return existingPromise;
     }
 
@@ -221,17 +234,23 @@ export class MarketDataCache {
     const entry = this.candleCache.get(key);
 
     if (!entry) {
-      logger.info(`[Cache MISS] Candles key: ${key}`);
+      this.missesCount++;
+      getActiveProfiler()?.recordCacheMiss();
+      logger.debug(`[Cache MISS] Candles key: ${key}`);
       return null;
     }
 
     if (Date.now() > entry.expiresAt) {
-      logger.info(`[Cache STALE/MISS] Candles key: ${key}`);
+      this.missesCount++;
+      getActiveProfiler()?.recordCacheMiss();
+      logger.debug(`[Cache STALE/MISS] Candles key: ${key}`);
       this.candleCache.delete(key);
       return null;
     }
 
-    logger.info(`[Cache HIT] Candles key: ${key}`);
+    this.hitsCount++;
+    getActiveProfiler()?.recordCacheHit();
+    logger.debug(`[Cache HIT] Candles key: ${key}`);
     return entry.candles;
   }
 
@@ -247,7 +266,7 @@ export class MarketDataCache {
       candles,
       expiresAt: Date.now() + ttlMs,
     });
-    logger.info(`[Cache SET] Candles key: ${key}, TTL: ${ttlMs}ms`);
+    logger.debug(`[Cache SET] Candles key: ${key}, TTL: ${ttlMs}ms`);
   }
 
   async getOrFetchCandles(
@@ -268,7 +287,7 @@ export class MarketDataCache {
     // 2. Check in-flight duplicate request
     const existingPromise = this.pendingCandleRequests.get(key);
     if (existingPromise) {
-      logger.info(`[Cache IN-FLIGHT HIT] Candles key: ${key}`);
+      logger.debug(`[Cache IN-FLIGHT HIT] Candles key: ${key}`);
       return existingPromise;
     }
 
@@ -294,16 +313,22 @@ export class MarketDataCache {
   getGeneric<T>(key: string): T | null {
     const entry = this.genericCache.get(key);
     if (!entry) {
-      logger.info(`[Cache MISS] Generic key: ${key}`);
+      this.missesCount++;
+      getActiveProfiler()?.recordCacheMiss();
+      logger.debug(`[Cache MISS] Generic key: ${key}`);
       return null;
     }
     const now = Date.now();
     if (now > entry.expiresAt) {
-      logger.info(`[Cache STALE/MISS] Generic key: ${key}`);
+      this.missesCount++;
+      getActiveProfiler()?.recordCacheMiss();
+      logger.debug(`[Cache STALE/MISS] Generic key: ${key}`);
       this.genericCache.delete(key);
       return null;
     }
-    logger.info(`[Cache HIT] Generic key: ${key}`);
+    this.hitsCount++;
+    getActiveProfiler()?.recordCacheHit();
+    logger.debug(`[Cache HIT] Generic key: ${key}`);
     return entry.value as T;
   }
 
@@ -313,7 +338,7 @@ export class MarketDataCache {
       value,
       expiresAt: Date.now() + ttlMs,
     });
-    logger.info(`[Cache SET] Generic key: ${key}, TTL: ${ttlMs}ms`);
+    logger.debug(`[Cache SET] Generic key: ${key}, TTL: ${ttlMs}ms`);
   }
 
   /**

@@ -12,6 +12,7 @@
 
 import { useState, useMemo } from 'react';
 import { TargetTracker } from './TargetTracker.js';
+import { Rejected72PlusPanel } from './Rejected72PlusPanel.js';
 import {
   TradingSignal,
   NormalizedTicker,
@@ -44,6 +45,8 @@ import {
   Coins,
   Globe2,
   LineChart,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 export type AssetCategory = 'CRYPTO' | 'FOREX' | 'STOCKS';
@@ -114,6 +117,47 @@ export const ASSET_CATEGORIES: Record<
     ],
   },
 };
+
+
+function CopySignalButton({ signal, precision }: { signal: any, precision: number }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = (e: any) => {
+    e.stopPropagation();
+    
+    let text = `Symbol: ${signal.symbol} (${signal.direction})\n`;
+    text += `Entry: ${signal.entryPrice ? signal.entryPrice.toFixed(precision) : '--'}\n`;
+    text += `Stop Loss: ${signal.stopLoss ? signal.stopLoss.toFixed(precision) : '--'}\n`;
+    if (signal.tp1 !== undefined) {
+      text += `TP1: ${signal.tp1.toFixed(precision)}\n`;
+    }
+    if (signal.tp2 !== undefined) {
+      text += `TP2: ${signal.tp2.toFixed(precision)}\n`;
+    }
+    if (signal.tp3 !== undefined) {
+      text += `TP3: ${signal.tp3.toFixed(precision)}\n`;
+    }
+
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className={`px-3 py-1.5 rounded-lg border text-sm font-mono font-bold flex items-center gap-1.5 shadow-sm transition-colors ${
+        copied 
+          ? 'bg-emerald-950 text-emerald-400 border-emerald-800' 
+          : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+      }`}
+      title="Copy Signal Details"
+    >
+      {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+      {copied ? 'Copied' : 'Copy'}
+    </button>
+  );
+}
 
 interface AssetClassScannerProps {
   selectedSymbol: string;
@@ -405,6 +449,7 @@ export function AssetClassScanner({
                         <TrendingDown className="w-5 h-5" /> SELL
                       </span>
                     )}
+                  <CopySignalButton signal={best} precision={bestPrec} />
                   </div>
                 </div>
 
@@ -440,7 +485,7 @@ export function AssetClassScanner({
                   <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
                     <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Target Quality</span>
                     <span className="text-lg font-bold text-emerald-400 block tracking-tight">
-                      {best.targetQualityScore !== undefined ? `${best.targetQualityScore}/100` : `${best.score || 75}/100`}
+                      {best.targetQualityScore !== undefined ? `${best.targetQualityScore}/100` : `${best.score || 70}/100`}
                     </span>
                   </div>
 
@@ -538,6 +583,7 @@ export function AssetClassScanner({
                         <TrendingDown className="w-5 h-5" /> SELL
                       </span>
                     )}
+                  <CopySignalButton signal={second} precision={secondPrec} />
                   </div>
                 </div>
 
@@ -573,7 +619,7 @@ export function AssetClassScanner({
                   <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-1">
                     <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Target Quality</span>
                     <span className="text-lg font-bold text-emerald-400 block tracking-tight">
-                      {second.targetQualityScore !== undefined ? `${second.targetQualityScore}/100` : `${second.score || 75}/100`}
+                      {second.targetQualityScore !== undefined ? `${second.targetQualityScore}/100` : `${second.score || 70}/100`}
                     </span>
                   </div>
 
@@ -672,7 +718,7 @@ export function AssetClassScanner({
                           <div className="bg-slate-900/80 p-2 rounded border border-slate-800/80">
                             <span className="text-[10px] text-slate-400 block uppercase">Target Quality</span>
                             <strong className="text-emerald-400 text-sm">
-                              {sug.targetQualityScore !== undefined ? `${sug.targetQualityScore}/100` : `${sug.score || 75}/100`}
+                              {sug.targetQualityScore !== undefined ? `${sug.targetQualityScore}/100` : `${sug.score || 70}/100`}
                             </strong>
                           </div>
                           <div className="bg-slate-900/80 p-2 rounded border border-slate-800/80">
@@ -749,6 +795,11 @@ export function AssetClassScanner({
           </div>
         </div>
       ) : null}
+
+      {/* 72+ HIGH-SCORE REJECTED SETUPS PANEL */}
+      {scanResult && scanResult.candidateRejectionDetails && scanResult.candidateRejectionDetails.length > 0 && (
+        <Rejected72PlusPanel candidates={scanResult.candidateRejectionDetails} />
+      )}
     </div>
   );
 }

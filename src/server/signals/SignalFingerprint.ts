@@ -49,6 +49,23 @@ export class SignalFingerprint {
     this.isInitialized = true;
   }
 
+  /**
+   * Removes fingerprint records that have aged out of the
+   * signal-expiration window. Runs on every write so neither the
+   * in-memory Map nor the on-disk snapshot grow unbounded over a
+   * long-running process (previously this only happened once, at
+   * process startup, inside init()).
+   */
+  private static pruneExpired(): void {
+    const now = Date.now();
+    const windowMs = serverConfig.getConfig().signalExpirationMs;
+    for (const [key, rec] of this.records.entries()) {
+      if (now - rec.timestamp >= windowMs) {
+        this.records.delete(key);
+      }
+    }
+  }
+
   private static persist(): void {
     try {
       const arr = Array.from(this.records.values());
@@ -146,6 +163,7 @@ export class SignalFingerprint {
     };
 
     this.records.set(fingerprint, rec);
+    this.pruneExpired();
     this.persist();
     return fingerprint;
   }

@@ -71,6 +71,8 @@ export interface Gate5SelectionResult {
   inputCandidateCount: number;
   selectedCandidateCount: number;
   maxBudgetLimit: number;
+  candidatesAfterRankingCount: number;
+  candidatesAfterCorrelationCount: number;
   selectedCandidates: Gate5RankedCandidate[];
   rankedCandidates: Gate5RankedCandidate[];
   rejectedCandidates: Gate5RankedCandidate[];
@@ -124,6 +126,8 @@ export class Gate5DeepCandidateSelection {
         inputCandidateCount: inputCount,
         selectedCandidateCount: 0,
         maxBudgetLimit,
+        candidatesAfterRankingCount: 0,
+        candidatesAfterCorrelationCount: 0,
         selectedCandidates: [],
         rankedCandidates: [],
         rejectedCandidates: [],
@@ -168,14 +172,20 @@ export class Gate5DeepCandidateSelection {
     });
 
     // 3. Apply Correlation Control & Provider Budget Cap
-    // Max candidates per correlation cluster (default max 2-3)
-    const maxPerCluster = maxBudgetLimit >= 10 ? 3 : 2;
+    // Max candidates per correlation cluster (default max 3-4 for rich pool representation)
+    const maxPerCluster = maxBudgetLimit >= 10 ? 4 : 3;
     const clusterCounts: Record<string, number> = {};
     const selected: Gate5RankedCandidate[] = [];
     const rejected: Gate5RankedCandidate[] = [];
+    let correlationApprovedCount = 0;
 
     // Pass 1: Select top-ranked candidates adhering to cluster caps
     for (const cand of scoredList) {
+      const currentClusterCount = clusterCounts[cand.cluster] || 0;
+      if (currentClusterCount < maxPerCluster) {
+        correlationApprovedCount++;
+      }
+
       if (selected.length >= maxBudgetLimit) {
         cand.selected = false;
         cand.reason = `Budget cap reached (Max ${maxBudgetLimit} deep candidates allowed)`;
@@ -183,7 +193,6 @@ export class Gate5DeepCandidateSelection {
         continue;
       }
 
-      const currentClusterCount = clusterCounts[cand.cluster] || 0;
       if (currentClusterCount < maxPerCluster) {
         cand.selected = true;
         cand.clusterRank = currentClusterCount + 1;
@@ -226,6 +235,8 @@ export class Gate5DeepCandidateSelection {
       inputCandidateCount: inputCount,
       selectedCandidateCount: selected.length,
       maxBudgetLimit,
+      candidatesAfterRankingCount: scoredList.length,
+      candidatesAfterCorrelationCount: Math.min(scoredList.length, correlationApprovedCount),
       selectedCandidates: selected,
       rankedCandidates: scoredList,
       rejectedCandidates: rejected,

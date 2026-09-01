@@ -108,11 +108,11 @@ export class QuotaManager {
     let budgetHealth: ProviderBudgetHealth = 'HIGH';
     if (isLocked || remainingUsable === 0) {
       budgetHealth = 'EXHAUSTED';
-    } else if (remainingUsable <= 1 || errors.length >= 3 || timeouts.length >= 2) {
+    } else if (errors.length >= 3 || timeouts.length >= 2 || (quota.maxPerMinute > 15 ? remainingUsable <= 2 : remainingUsable <= 1)) {
       budgetHealth = 'CRITICAL';
-    } else if (remainingUsable <= 3 || requestsInLastMin >= quota.lowThreshold) {
+    } else if (quota.maxPerMinute > 15 ? remainingUsable <= 6 : remainingUsable <= 2) {
       budgetHealth = 'LOW';
-    } else if (remainingUsable < Math.floor(quota.maxPerMinute * 0.6)) {
+    } else if (remainingUsable < Math.floor(quota.maxPerMinute * 0.75)) {
       budgetHealth = 'NORMAL';
     } else {
       budgetHealth = 'HIGH';
@@ -149,34 +149,48 @@ export class QuotaManager {
   }
 
   /**
-   * Evaluates overall API budget status for deep scan routing:
+   * Evaluates API budget status for deep scan routing:
    * HIGH -> 12 deep candidates
-   * NORMAL -> 8-10 deep candidates
-   * LOW -> 5-6 deep candidates
-   * CRITICAL -> 2-3 deep candidates
+   * NORMAL -> 10 deep candidates
+   * LOW -> 8 deep candidates (matches 8–12 target)
+   * CRITICAL -> 4 deep candidates
    * EXHAUSTED -> 0 deep candidates
    */
-  public getDynamicDeepBudget(): {
+  public getDynamicDeepBudget(category?: string): {
     overallHealth: ProviderBudgetHealth;
     maxDeepCandidates: number;
     metrics: Record<string, ProviderQuotaMetrics>;
     reason: string;
   } {
-    const metrics = this.getAllProviderMetrics();
-    const metricList = Object.values(metrics);
+    const allMetrics = this.getAllProviderMetrics();
+    let relevantProviders = Object.keys(this.providerQuotas);
 
-    // If all providers are locked or exhausted
-    const allExhausted = metricList.every((m) => m.budgetHealth === 'EXHAUSTED');
+    const normCat = (category || '').toUpperCase();
+    if (normCat.includes('CRYPTO')) {
+      relevantProviders = ['bitget'];
+    } else if (normCat.includes('FOREX') || normCat.includes('FX')) {
+      relevantProviders = ['twelvedata', 'exchangerate', 'finnhub'];
+    } else if (normCat.includes('STOCK') || normCat.includes('EQUITY')) {
+      relevantProviders = ['finnhub', 'twelvedata'];
+    }
+
+    const relevantMetrics: Record<string, ProviderQuotaMetrics> = {};
+    for (const p of relevantProviders) {
+      if (allMetrics[p]) relevantMetrics[p] = allMetrics[p];
+    }
+    const metricList = Object.values(relevantMetrics);
+
+    // If all relevant providers are locked or exhausted
+    const allExhausted = metricList.length > 0 && metricList.every((m) => m.budgetHealth === 'EXHAUSTED');
     if (allExhausted) {
       return {
         overallHealth: 'EXHAUSTED',
         maxDeepCandidates: 0,
-        metrics,
-        reason: 'All providers are currently locked or have exhausted usable quota.',
+        metrics: allMetrics,
+        reason: 'All active providers for this category are currently locked or have exhausted usable quota.',
       };
     }
 
-    // Check minimum health among active providers
     const healthLevels: Record<ProviderBudgetHealth, number> = {
       EXHAUSTED: 0,
       CRITICAL: 1,
@@ -194,40 +208,39 @@ export class QuotaManager {
     }
 
     if (minLevel === 0) {
-      // At least one provider exhausted, others may have minimal budget
       return {
         overallHealth: 'CRITICAL',
-        maxDeepCandidates: 3,
-        metrics,
-        reason: 'One or more primary providers are in cooldown or low quota; limiting deep scan to 3 candidates.',
+        maxDeepCandidates: 4,
+        metrics: allMetrics,
+        reason: 'One provider is in cooldown; limiting deep scan candidate pool to 4.',
       };
     } else if (minLevel === 1) {
       return {
         overallHealth: 'CRITICAL',
-        maxDeepCandidates: 3,
-        metrics,
-        reason: 'Provider quotas are in CRITICAL state; limiting deep scan to 2-3 candidates.',
+        maxDeepCandidates: 4,
+        metrics: allMetrics,
+        reason: 'Provider quotas are in CRITICAL state; limiting deep scan to 4 candidates.',
       };
     } else if (minLevel === 2) {
       return {
         overallHealth: 'LOW',
-        maxDeepCandidates: 6,
-        metrics,
-        reason: 'Provider quotas are in LOW state; limiting deep scan to 5-6 candidates.',
+        maxDeepCandidates: 8,
+        metrics: allMetrics,
+        reason: 'Provider quotas are in LOW state; allowing 8 deep candidates (8–12 target architecture).',
       };
     } else if (minLevel === 3) {
       return {
         overallHealth: 'NORMAL',
         maxDeepCandidates: 10,
-        metrics,
-        reason: 'Provider quotas are in NORMAL state; allowing 8-10 deep candidates.',
+        metrics: allMetrics,
+        reason: 'Provider quotas are in NORMAL state; allowing 10 deep candidates (8–12 target architecture).',
       };
     } else {
       return {
         overallHealth: 'HIGH',
         maxDeepCandidates: 12,
-        metrics,
-        reason: 'Provider quotas are HEALTHY with ample capacity; allowing maximum 12 deep candidates.',
+        metrics: allMetrics,
+        reason: 'Provider quotas are HEALTHY with ample capacity; allowing maximum 12 deep candidates (8–12 target architecture).',
       };
     }
   }
