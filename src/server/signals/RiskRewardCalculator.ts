@@ -6,26 +6,15 @@ import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 export interface RiskRewardResult {
   riskDistance: number;
   rewardDistance: number;
-  grossRR: number;          // Selected target's gross R:R (= selectedGrossRR = primaryRR)
-  netRR: number;            // Selected target's net R:R (= selectedNetRR)
-  selectedGrossRR: number;
-  selectedNetRR: number;
-  primaryRR: number;        // Selected target's gross R:R for tradeability/gross-RR pipeline
-  effectiveGrossRR: number; // Selected target's gross R:R (backward compatibility)
-  tp1GrossRR: number;
-  tp2GrossRR: number;
-  tp3GrossRR: number;
-  tp1NetRR: number;
-  tp2NetRR: number;
-  tp3NetRR: number;
-  tp1RR: number;            // tp1NetRR
-  tp2RR: number;            // tp2NetRR
-  tp3RR: number;            // tp3NetRR
-  passedGrossRR: boolean;   // True if tp2GrossRR >= minGrossRR || tp3GrossRR >= minGrossRR and isOrdered
-  passedNetRR: boolean;     // True if tp2NetRR >= minNetRR || tp3NetRR >= minNetRR
-  passedViaTp3: boolean;    // True when TP3 Gross R:R >= minGrossRR satisfied the gate
+  grossRR: number;          // Canonical primary gross R:R (= effectiveGrossRR = primaryRR)
+  effectiveGrossRR: number; // Effective Gross R:R evaluated for gate (TP2 or TP3)
+  tp1RR: number;
+  tp2RR: number;
+  tp3RR: number;
+  primaryRR: number;        // Primary qualifying R:R
+  passedGrossRR: boolean;   // True if effectiveGrossRR >= minRR and isOrdered
+  passedViaTp3: boolean;    // True when TP3 R:R >= minRR satisfied the gate
   isValid: boolean;
-  takeProfit?: number;
   reason?: string;
 }
 
@@ -185,41 +174,19 @@ export class RiskRewardCalculator {
     tp2: number,
     tp3: number,
     direction: SignalDirection,
-    minGrossRR: number = 1.8,
-    minNetRROrSymbol: number | string = 1.5,
-    symbolArg?: string
+    minRR: number = 1.50,
+    symbol?: string
   ): RiskRewardResult {
-    const minRR = typeof minGrossRR === 'number' && !isNaN(minGrossRR) ? minGrossRR : 1.8;
-    let minNet = 1.5;
-    let symbol: string | undefined = undefined;
-
-    if (typeof minNetRROrSymbol === 'number') {
-      minNet = minNetRROrSymbol;
-      symbol = symbolArg;
-    } else if (typeof minNetRROrSymbol === 'string') {
-      symbol = minNetRROrSymbol;
-    }
-
     const invalidResult: RiskRewardResult = {
       riskDistance: 0,
       rewardDistance: 0,
       grossRR: 0,
-      netRR: 0,
-      selectedGrossRR: 0,
-      selectedNetRR: 0,
-      primaryRR: 0,
       effectiveGrossRR: 0,
-      tp1GrossRR: 0,
-      tp2GrossRR: 0,
-      tp3GrossRR: 0,
-      tp1NetRR: 0,
-      tp2NetRR: 0,
-      tp3NetRR: 0,
       tp1RR: 0,
       tp2RR: 0,
       tp3RR: 0,
+      primaryRR: 0,
       passedGrossRR: false,
-      passedNetRR: false,
       isValid: false,
       passedViaTp3: false,
     };
@@ -276,83 +243,61 @@ export class RiskRewardCalculator {
         riskDistance: Number(riskDistance.toFixed(4)),
         rewardDistance: Number(Math.abs(tp2 - entryPrice).toFixed(4)),
         grossRR: tp2GrossRR,
-        netRR: tp2NetRR,
-        selectedGrossRR: tp2GrossRR,
-        selectedNetRR: tp2NetRR,
-        primaryRR: tp2GrossRR,
         effectiveGrossRR: tp2GrossRR,
-        tp1GrossRR,
-        tp2GrossRR,
-        tp3GrossRR,
-        tp1NetRR,
-        tp2NetRR,
-        tp3NetRR,
         tp1RR: tp1NetRR,
         tp2RR: tp2NetRR,
         tp3RR: tp3NetRR,
+        primaryRR: tp2NetRR,
         passedGrossRR: false,
-        passedNetRR: false,
         isValid: false,
         passedViaTp3: false,
-        takeProfit: tp2,
         reason: `Invalid SL/TP placement or ordering relative to entry for direction ${direction}: SL=${stopLoss}, TP1=${tp1}, TP2=${tp2}, TP3=${tp3}`,
       };
     }
 
-    // A candidate passes the Gross R:R gate when:
-    // TP2 Gross R:R >= minRR (default 1.8)
+    // A candidate passes the R:R gate when:
+    // TP2 NET R:R >= 1.5
     // OR
-    // TP3 Gross R:R >= minRR (default 1.8)
+    // TP3 NET R:R >= 1.5
     // TP1 is informational and must not independently qualify a trade.
     let passedViaTp3 = false;
     let selectedTakeProfit = tp2;
-    let selectedGrossRR = tp2GrossRR;
-    let selectedNetRR = tp2NetRR;
+    let primaryRR = tp2NetRR;
+    let grossRR = tp2GrossRR;
     let evaluatedRewardDistance = rawTp2Reward;
 
-    if (tp2GrossRR >= minRR) {
+    if (tp2NetRR >= minRR) {
       selectedTakeProfit = tp2;
-      selectedGrossRR = tp2GrossRR;
-      selectedNetRR = tp2NetRR;
+      primaryRR = tp2NetRR;
+      grossRR = tp2GrossRR;
       passedViaTp3 = false;
       evaluatedRewardDistance = rawTp2Reward;
-    } else if (tp3GrossRR >= minRR) {
+    } else if (tp3NetRR >= minRR) {
       selectedTakeProfit = tp3;
-      selectedGrossRR = tp3GrossRR;
-      selectedNetRR = tp3NetRR;
+      primaryRR = tp3NetRR;
+      grossRR = tp3GrossRR;
       passedViaTp3 = true;
       evaluatedRewardDistance = rawTp3Reward;
     } else {
       selectedTakeProfit = tp2;
-      selectedGrossRR = tp2GrossRR;
-      selectedNetRR = tp2NetRR;
+      primaryRR = tp2NetRR;
+      grossRR = tp2GrossRR;
       passedViaTp3 = false;
       evaluatedRewardDistance = rawTp2Reward;
     }
 
-    const passedGrossRR = isOrdered && (tp2GrossRR >= minRR || tp3GrossRR >= minRR);
-    const passedNetRR = isOrdered && (tp2NetRR >= minNet || tp3NetRR >= minNet);
+    const passedGrossRR = isOrdered && (tp2NetRR >= minRR || tp3NetRR >= minRR);
 
     return {
       riskDistance: Number(riskDistance.toFixed(4)),
       rewardDistance: Number(evaluatedRewardDistance.toFixed(4)),
-      grossRR: selectedGrossRR,
-      netRR: selectedNetRR,
-      selectedGrossRR,
-      selectedNetRR,
-      primaryRR: selectedGrossRR,
-      effectiveGrossRR: selectedGrossRR,
-      tp1GrossRR,
-      tp2GrossRR,
-      tp3GrossRR,
-      tp1NetRR,
-      tp2NetRR,
-      tp3NetRR,
-      tp1RR: tp1NetRR,
+      grossRR, // Expose selected target's gross R:R
+      effectiveGrossRR: primaryRR, // Keep for backward compatibility with Gate 9 checks
+      tp1RR: tp1NetRR, // Expose Net R:R values
       tp2RR: tp2NetRR,
       tp3RR: tp3NetRR,
+      primaryRR, // Expose chosen Net R:R
       passedGrossRR,
-      passedNetRR,
       isValid: true,
       passedViaTp3,
       takeProfit: selectedTakeProfit,

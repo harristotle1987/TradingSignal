@@ -13,7 +13,6 @@ import { adminAuthMiddleware, extractAuthToken } from '../src/server/middleware/
 import { SignalEngine } from '../src/server/signals/SignalEngine.js';
 import { serverConfig } from '../src/server/config.js';
 import { SignalValidator } from '../src/server/signals/SignalValidator.js';
-import { ScoringEngine } from '../src/server/signals/ScoringEngine.js';
 import { MarketStructureDetector } from '../src/server/signals/MarketStructureDetector.js';
 import { CooldownManager } from '../src/server/signals/CooldownManager.js';
 import { CandidateRejectionTracker, StandardFailedGate } from '../src/server/signals/CandidateRejectionTracker.js';
@@ -677,34 +676,6 @@ async function runAll() {
       assert(res.tp2RR === 2.0, `Expected TP2 RR 2.0, got ${res.tp2RR}`);
       assert(res.tp3RR === 4.0, `Expected TP3 RR 4.0, got ${res.tp3RR}`);
       assert(res.primaryRR === res.tp2RR, 'primaryRR must equal TP2 RR');
-    });
-
-    await test('ETHUSDT R:R calculation computes grossRR ~1.59 when minGrossRR=1.5', () => {
-      const ethRes = RiskRewardCalculator.calculate(2481.60, 2464.75, 2495.0, 2508.38, 2530.0, 'BUY', 1.5, 1.5, 'ETHUSDT');
-      assert(ethRes.isValid, 'ETH result must be valid');
-      assert(Math.abs(ethRes.grossRR - 1.59) < 0.05, `Expected grossRR ~1.59, got ${ethRes.grossRR}`);
-      assert(ethRes.grossRR > ethRes.netRR, 'grossRR must be strictly greater than netRR due to friction');
-    });
-
-    await test('ETH-like TP generation constructs TP2 with distance >= riskDistance * minGrossRR (>= 30.33 for 1.8 R:R)', () => {
-      const tpRes = ScoringEngine.calculateThreeTakeProfits(
-        'BUY',
-        2481.60,
-        2464.75,
-        20.0,
-        2470.0,
-        2515.0,
-        2470.0,
-        2520.0,
-        'Multi-Timeframe Trend Confluence',
-        30.0,
-        2,
-        'CRYPTO'
-      );
-      const riskDist = Math.abs(2481.60 - 2464.75); // 16.85
-      const tp2Dist = Math.abs(tpRes.tp2 - 2481.60);
-      assert(tp2Dist >= riskDist * 1.8, `Expected TP2 distance >= ${riskDist * 1.8}, got ${tp2Dist}`);
-      assert(tpRes.tp2 >= 2481.60 + (riskDist * 1.8), `Expected TP2 >= 2511.93, got ${tpRes.tp2}`);
     });
 
     await test('Invalid entry, SL, TP or missing direction cannot produce a fabricated R:R', () => {

@@ -557,23 +557,9 @@ export async function runStagedPipeline(
         const momentumPass = gate4.score >= 40 || (isDirBullish && gate4.momentumDirection === 'BULLISH') || (isDirBearish && gate4.momentumDirection === 'BEARISH');
 
         // Gate 91: Pathways
-        const canonicalRr = RiskRewardCalculator.calculate(
-          baselinePrice,
-          scoring.stopLoss,
-          scoring.tp1,
-          scoring.tp2,
-          scoring.tp3,
-          scoring.direction,
-          thresholds.minimumRR,
-          thresholds.minimumNetRR,
-          asset
-        );
-        const canonicalGrossRR = canonicalRr.grossRR;
-        const canonicalNetRR = canonicalRr.netRR;
-
         const hasStrongTrend = gate2.alignmentScore >= 50 && gate2.confluenceStatus !== 'CONTRADICTION';
         const hasValidEntry = gate8.entryScore >= 40 || (gate8.entryQuality !== 'OVEREXTENDED' && gate8.entryQuality !== 'WAIT_FOR_PULLBACK' && gate8.chaseRisk !== 'EXTREME');
-        const hasGoodRR = canonicalGrossRR >= thresholds.minimumRR;
+        const hasGoodRR = gate9.rrRatio >= thresholds.minimumRR;
         const isStrongTrendPath = hasStrongTrend && hasValidEntry && hasGoodRR;
         const isGoodBreakoutPath = (gate13.breakoutScore >= 45 || (scoring.marketRegime as string) === 'BREAKOUT') && structurePass && hasGoodRR;
         const isGoodReversalPath = (gate12.confirmed || gate15.confirmationStatus === 'CONFIRMED_SWEEP') && structurePass && gate9.riskScore >= 40;
@@ -587,9 +573,9 @@ export async function runStagedPipeline(
         if (gate7.tradingAllowed === 'NO') {
           scoring.isValid = false;
           scoring.rejectionReason = `REJECTED: MARKET_CONTEXT_BLOCKED. ${gate7.reasons.join('; ')}`;
-        } else if (canonicalGrossRR < thresholds.minimumRR) {
+        } else if (gate9.rrRatio < thresholds.minimumRR) {
           scoring.isValid = false;
-          scoring.rejectionReason = `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross R:R (${canonicalGrossRR.toFixed(2)}) below ${thresholds.minimumRR}`;
+          scoring.rejectionReason = `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross R:R (${gate9.rrRatio.toFixed(2)}) below ${thresholds.minimumRR}`;
         } else {
           const compositeScore = Math.round(
             gate2.alignmentScore * 0.25 +
@@ -629,8 +615,8 @@ export async function runStagedPipeline(
         signalThreshold: thresholds.signalThreshold,
         strategyAgreementRatio: scoring.strategyAgreementRatio,
         timeframeAlignmentRatio: scoring.timeframeAlignmentRatio,
-        grossRR: canonicalGrossRR,
-        netRR: canonicalNetRR,
+        grossRR: scoring.riskRewardRatio,
+        netRR: scoring.estimatedFriction?.netRiskRewardRatio,
         adverseNetRR: scoring.estimatedFriction?.adverseNetRiskRewardRatio,
         estimatedWinRate: scoring.estimatedWinRate,
         empiricalProbability: null,

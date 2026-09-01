@@ -481,8 +481,9 @@ export class SignalValidator {
     // Use 0.85 * ATR as the minimum noise hurdle to prevent tight SL hit by normal market noise
     const thresholds = serverConfig.getConfig().thresholds;
     const minSafeStopDistance = 0.85 * atr;
-    const minSafeTargetDistance = 0.85 * atr; // Volatility distance hurdle (A)
-    const minRR = thresholds.minimumRR ?? 1.80;
+    // Use minimumRR * ATR as the minimum take-profit expansion to ensure meaningful profit after fees/slippage
+    const minRR = thresholds.minimumRR ?? 1.50;
+    const minSafeTargetDistance = minRR * atr;
 
     if (risk < minSafeStopDistance) {
       return {
@@ -491,42 +492,35 @@ export class SignalValidator {
       };
     }
 
-    // Verify both A. volatility distance and B. risk-distance R:R geometry
-    const tp1Val = adjustedTp1 ?? adjustedTP;
-    const tp2Val = adjustedTp2 ?? adjustedTP;
-    const tp3Val = adjustedTp3 ?? adjustedTP;
+    // Verify minimum tradeable distance for each target if present
+    if (adjustedTp1 !== undefined && adjustedTp2 !== undefined && adjustedTp3 !== undefined) {
+      const tp1Dist = Math.abs(adjustedTp1 - livePrice);
+      const tp2Dist = Math.abs(adjustedTp2 - livePrice);
+      const tp3Dist = Math.abs(adjustedTp3 - livePrice);
 
-    const rrValidation = RiskRewardCalculator.calculate(livePrice, adjustedSL, tp1Val, tp2Val, tp3Val, direction, thresholds.minimumRR, thresholds.minimumNetRR, symbol);
-    if (!rrValidation.isValid || rrValidation.tp2GrossRR < thresholds.minimumRR) {
-      logRrRejectionDiagnostic({
-        symbol,
-        direction,
-        entryPrice: livePrice,
-        stopLoss: adjustedSL,
-        tp1: tp1Val,
-        tp2: tp2Val,
-        tp3: tp3Val,
-        rejectionReason: `GROSS_RR_BELOW_THRESHOLD. TP2 distance fails risk-distance R:R geometry requirement (${rrValidation.tp2GrossRR.toFixed(2)}:1 gross R:R below minimum ${thresholds.minimumRR}:1)`,
-      });
-      return {
-        isValid: false,
-        message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. TP2 distance fails risk-distance R:R geometry requirement (${rrValidation.tp2GrossRR.toFixed(2)}:1 gross R:R below minimum ${thresholds.minimumRR}:1)`,
-        adjustedStopLoss: adjustedSL,
-        adjustedTakeProfit: tp2Val,
-        adjustedTp1: tp1Val,
-        adjustedTp2: tp2Val,
-        adjustedTp3: tp3Val,
-        adjustedGrossRR: rrValidation.grossRR,
-        adjustedPrimaryRR: rrValidation.primaryRR,
-      };
-    }
-
-    if (tp2Val !== undefined) {
-      const tp2Dist = Math.abs(tp2Val - livePrice);
+      if (tp1Dist < minSafeTargetDistance * 0.5) {
+        return {
+          isValid: false,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP1 distance (${tp1Dist.toFixed(precision)}) is below minimum conservative target distance (${(minSafeTargetDistance * 0.5).toFixed(precision)}, derived as 0.5 * ${minRR} * ATR)`,
+        };
+      }
       if (tp2Dist < minSafeTargetDistance) {
         return {
           isValid: false,
-          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP2 volatility distance (${tp2Dist.toFixed(precision)}) is below minimum volatility hurdle (${minSafeTargetDistance.toFixed(precision)})`,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP2 distance (${tp2Dist.toFixed(precision)}) is below minimum primary target distance (${minSafeTargetDistance.toFixed(precision)}, derived as ${minRR} * ATR)`,
+        };
+      }
+      if (tp3Dist < minSafeTargetDistance * 1.5) {
+        return {
+          isValid: false,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP3 distance (${tp3Dist.toFixed(precision)}) is below minimum extended target distance (${(minSafeTargetDistance * 1.5).toFixed(precision)}, derived as 1.5 * ${minRR} * ATR)`,
+        };
+      }
+    } else {
+      if (reward < minSafeTargetDistance) {
+        return {
+          isValid: false,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected take-profit distance (${reward.toFixed(precision)}) is below minimum volatility profit expansion hurdle (${minSafeTargetDistance.toFixed(precision)}, derived as ${minRR} * ATR of ${atr.toFixed(precision)})`,
         };
       }
     }
@@ -550,8 +544,8 @@ export class SignalValidator {
     }
 
     // 5. Gross Risk / Reward Ratio Check: Minimum acceptable GROSS R:R from config using RiskRewardCalculator canonical module
-    const rrResult = RiskRewardCalculator.calculate(livePrice, adjustedSL, adjustedTp1 ?? adjustedTP, adjustedTp2 ?? adjustedTP, adjustedTp3 ?? adjustedTP, direction, thresholds.minimumRR, thresholds.minimumNetRR, symbol);
-    const rawRR = rrResult.grossRR;
+    const rrResult = RiskRewardCalculator.calculate(livePrice, adjustedSL, adjustedTp1 ?? adjustedTP, adjustedTp2 ?? adjustedTP, adjustedTp3 ?? adjustedTP, direction, thresholds.minimumRR, symbol);
+    const rawRR = rrResult.effectiveGrossRR;
     if (rawRR < thresholds.minimumRR || !rrResult.isValid) {
       logRrRejectionDiagnostic({
         symbol,
@@ -571,7 +565,7 @@ export class SignalValidator {
         adjustedTp1: adjustedTp1 ?? adjustedTP,
         adjustedTp2: adjustedTp2 ?? adjustedTP,
         adjustedTp3: adjustedTp3 ?? adjustedTP,
-        adjustedGrossRR: rrResult.grossRR,
+        adjustedGrossRR: rrResult.effectiveGrossRR,
         adjustedPrimaryRR: rrResult.primaryRR,
         adjustedTp1RR: rrResult.tp1RR,
         adjustedTp2RR: rrResult.tp2RR,

@@ -72,16 +72,9 @@ export interface AtrTpResult {
 
 export class AtrTpGenerator {
   public static applyGuardrail(rawTp: number, range: GuardrailRange, entryPrice: number, isBuy: boolean): number {
-    const rawDist = Math.abs(rawTp - entryPrice);
-    const maxDist = entryPrice * (range.maxPct / 100);
-    const minDist = entryPrice * (range.minPct / 100);
-    // Safety ceiling: cap at maxDist (maxPct). Safety floor: ensure at least minDist (minPct) if rawDist is smaller.
-    // If rawDist is larger than minDist (volatility/risk-derived target), keep rawDist (do not move closer).
-    let dist = Math.min(rawDist, maxDist);
-    if (dist < minDist) {
-      dist = minDist;
-    }
-    return isBuy ? entryPrice + dist : entryPrice - dist;
+    const distPct = (Math.abs(rawTp - entryPrice) / entryPrice) * 100;
+    const clampedPct = Math.min(Math.max(distPct, range.minPct), range.maxPct);
+    return isBuy ? entryPrice * (1 + clampedPct / 100) : entryPrice * (1 - clampedPct / 100);
   }
 
   /**
