@@ -636,7 +636,7 @@ router.post('/signals/refresh', async (req: Request, res: Response) => {
           notificationTimestamp: 0,
           date: new Date(timestamp || Date.now()).toISOString().split('T')[0],
           riskRewardRatio: Number(riskRewardRatio) || 2,
-          score: Number(score) || 75,
+          score: Number(score) || serverConfig.getConfig().thresholds.signalThreshold,
         };
       }
     }
@@ -1976,7 +1976,7 @@ router.get('/signals/gate7/validate/:symbol', async (req: Request, res: Response
       marketRegime: 'TRENDING_UP',
       activeSignals: signalEngine.activeSignals,
       minimumRRThreshold: 1.5,
-      minimumScoreThreshold: 75,
+      minimumScoreThreshold: serverConfig.getConfig().thresholds.signalThreshold,
     });
 
     res.status(200).json({

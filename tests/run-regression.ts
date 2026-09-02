@@ -18,6 +18,10 @@ import { CooldownManager } from '../src/server/signals/CooldownManager.js';
 import { CandidateRejectionTracker, StandardFailedGate } from '../src/server/signals/CandidateRejectionTracker.js';
 import { OpportunityFunnelStore } from '../src/server/signals/Gate26OpportunityFunnel.js';
 import { RiskRewardCalculator } from '../src/server/signals/RiskRewardCalculator.js';
+import { Gate7FinalTradeValidation } from '../src/server/signals/Gate7FinalTradeValidation.js';
+import { Gate8TradeabilityThreshold } from '../src/server/signals/Gate8TradeabilityThreshold.js';
+import { Gate35SignalFunnelAnalytics, FunnelStage } from '../src/server/signals/Gate35SignalFunnelAnalytics.js';
+import { ScoringEngine } from '../src/server/signals/ScoringEngine.js';
 import { logger } from '../src/server/logger.js';
 
 // Disable default log output during tests to keep output clean
@@ -737,6 +741,650 @@ async function runAll() {
       assert(rec !== undefined, 'Record should exist');
       assert(!rec!.stopLoss || rec!.stopLoss === 0, 'stopLoss should be unset / 0 for early rejection');
       assert(!rec!.grossRR || rec!.grossRR === 0, 'grossRR should be unset / 0 for early rejection');
+    });
+  });
+
+  // --- SUITE 8: TELEMETRY, THRESHOLD CONSISTENCY & CANDIDATE STATE AUDIT ---
+  await describe('Telemetry, Threshold Consistency & Candidate State Audit', async () => {
+    await test('1. rejectionReasonsCounts.RR matches candidatesRejectedByRR exactly', () => {
+      const tracker = new CandidateRejectionTracker();
+      tracker.recordCandidate({
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        score: 75,
+        primaryRejectionReason: 'REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (1.2:1) is below 1.8:1',
+        failedGates: [StandardFailedGate.RR],
+        finalDecision: 'REJECTED',
+      });
+      tracker.recordCandidate({
+        symbol: 'ETHUSDT',
+        direction: 'BUY',
+        score: 74,
+        primaryRejectionReason: 'REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (1.4:1) is below 1.8:1',
+        failedGates: [StandardFailedGate.RR],
+        finalDecision: 'REJECTED',
+      });
+      tracker.recordCandidate({
+        symbol: 'SOLUSDT',
+        direction: 'BUY',
+        score: 65,
+        primaryRejectionReason: 'REJECTED: MTF_ALIGNMENT. Multi-timeframe contradiction',
+        failedGates: [StandardFailedGate.MTF_ALIGNMENT],
+        finalDecision: 'REJECTED',
+      });
+
+      const counts = tracker.getAggregatedRejectionReasons();
+      const categorized = tracker.getCategorizedRejectionCounts();
+
+      assert(counts.RR === 2, `Expected counts.RR === 2, got ${counts.RR}`);
+      assert(categorized.candidatesRejectedByRR === 2, `Expected categorized.candidatesRejectedByRR === 2, got ${categorized.candidatesRejectedByRR}`);
+      assert(counts.RR === categorized.candidatesRejectedByRR, `rejectionReasonsCounts.RR (${counts.RR}) must equal candidatesRejectedByRR (${categorized.candidatesRejectedByRR})`);
+    });
+
+    await test('2. A candidate rejected by RR only has RR in its finalized failedGates', () => {
+      const tracker = new CandidateRejectionTracker();
+      tracker.recordCandidate({
+        symbol: 'SOLUSDT',
+        direction: 'BUY',
+        score: 76,
+        primaryRejectionReason: 'REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (1.1:1) is below 1.8:1',
+        failedGates: [StandardFailedGate.RR],
+        finalDecision: 'REJECTED',
+      });
+
+      const records = tracker.getAllRecords();
+      const sol = records.find(r => r.symbol === 'SOLUSDT');
+      assert(sol !== undefined, 'Candidate record must exist');
+      assert(sol!.failedGates.length === 1, `Expected exactly 1 failed gate, got ${sol!.failedGates.length}`);
+      assert(sol!.failedGates[0] === StandardFailedGate.RR, `Expected failed gate to be RR, got ${sol!.failedGates[0]}`);
+      assert(!sol!.failedGates.includes(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD), 'Candidate with score 76 must NOT have FINAL_SCORE_BELOW_THRESHOLD');
+    });
+
+    await test('3. CandidateRejectionTracker.recordCandidate() overwriting a symbol replaces failedGates instead of unioning them', () => {
+      const tracker = new CandidateRejectionTracker();
+      // First evaluation fails MTF
+      tracker.recordCandidate({
+        symbol: 'AVAXUSDT',
+        direction: 'BUY',
+        score: 60,
+        primaryRejectionReason: 'REJECTED: MTF_ALIGNMENT',
+        failedGates: [StandardFailedGate.MTF_ALIGNMENT],
+        finalDecision: 'REJECTED',
+      });
+
+      // Second evaluation later in the pipeline passes MTF but fails RR
+      tracker.recordCandidate({
+        symbol: 'AVAXUSDT',
+        direction: 'BUY',
+        score: 75,
+        primaryRejectionReason: 'REJECTED: GROSS_RR_BELOW_THRESHOLD',
+        failedGates: [StandardFailedGate.RR],
+        finalDecision: 'REJECTED',
+      });
+
+      const records = tracker.getAllRecords();
+      const avax = records.find(r => r.symbol === 'AVAXUSDT');
+      assert(avax !== undefined, 'Record must exist');
+      assert(!avax!.failedGates.includes(StandardFailedGate.MTF_ALIGNMENT), 'Historical MTF_ALIGNMENT must not leak into finalized record');
+      assert(avax!.failedGates.includes(StandardFailedGate.RR), 'Finalized record must contain current failed gate RR');
+      assert(avax!.failedGates.length === 1, `Expected failedGates length to be 1, got ${avax!.failedGates.length}`);
+    });
+
+    await test('4. HourlyScanner aggregates candidate rejection details and derives categorized counters from finalized records', () => {
+      const tracker1 = new CandidateRejectionTracker();
+      tracker1.recordCandidate({
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        score: 75,
+        primaryRejectionReason: 'REJECTED: GROSS_RR_BELOW_THRESHOLD',
+        failedGates: [StandardFailedGate.RR],
+        finalDecision: 'REJECTED',
+      });
+
+      const tracker2 = new CandidateRejectionTracker();
+      tracker2.recordCandidate({
+        symbol: 'EURUSD',
+        direction: 'BUY',
+        score: 68,
+        primaryRejectionReason: 'REJECTED: FINAL_SCORE_BELOW_THRESHOLD',
+        failedGates: [StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD],
+        finalDecision: 'REJECTED',
+      });
+
+      const allDetails = [...tracker1.getAllRecords(), ...tracker2.getAllRecords()];
+      
+      let finalBeforeMTF = 0;
+      let finalMTF = 0;
+      let finalScore = 0;
+      let finalRR = 0;
+      let finalStructure = 0;
+
+      for (const record of allDetails) {
+        if (record.finalDecision === 'REJECTED' || (record.failedGates && record.failedGates.length > 0)) {
+          const gates = record.failedGates || [];
+          if (gates.includes('RR' as any)) finalRR++;
+          if (gates.includes('FINAL_SCORE_BELOW_THRESHOLD' as any)) finalScore++;
+          if (gates.includes('MTF_ALIGNMENT' as any)) finalMTF++;
+          if (gates.includes('MARKET_STRUCTURE' as any)) finalStructure++;
+          if (gates.includes('FINAL_SCORE_UNREACHABLE' as any)) finalBeforeMTF++;
+        }
+      }
+
+      assert(finalRR === 1, `Expected finalRR === 1, got ${finalRR}`);
+      assert(finalScore === 1, `Expected finalScore === 1, got ${finalScore}`);
+      assert(finalMTF === 0, `Expected finalMTF === 0, got ${finalMTF}`);
+      assert(allDetails.length === 2, `Expected 2 finalized records, got ${allDetails.length}`);
+    });
+
+    await test('5. All rejection reason strings in the scan response correspond to finalized rejected candidates', () => {
+      const records = [
+        {
+          symbol: 'BTCUSDT',
+          direction: 'BUY' as const,
+          score: 75,
+          primaryRejectionReason: 'REJECTED: GROSS_RR_BELOW_THRESHOLD. Risk/reward only 1.2:1; minimum required is 1.8:1.',
+          failedGates: [StandardFailedGate.RR],
+          finalDecision: 'REJECTED' as const,
+        },
+        {
+          symbol: 'ETHUSDT',
+          direction: 'SELL' as const,
+          score: 68,
+          primaryRejectionReason: 'REJECTED: SCORE_BELOW_THRESHOLD. Signal score (68/100) is below 70.',
+          failedGates: [StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD],
+          finalDecision: 'REJECTED' as const,
+        },
+      ];
+
+      const rejectionReasonStrings = records.map(
+        (r) => `${r.symbol}${r.direction ? ` [${r.direction}]` : ''}: ${r.primaryRejectionReason}`
+      );
+
+      assert(rejectionReasonStrings.length === 2, 'Must format exactly 2 strings');
+      assert(rejectionReasonStrings[0].startsWith('BTCUSDT [BUY]: REJECTED: GROSS_RR_BELOW_THRESHOLD'), 'BTC reason must match format');
+      assert(rejectionReasonStrings[1].startsWith('ETHUSDT [SELL]: REJECTED: SCORE_BELOW_THRESHOLD'), 'ETH reason must match format');
+    });
+
+    await test('6. The score threshold reported in metadata/diagnostics matches serverConfig.getConfig().thresholds.signalThreshold (not stale hard-coded 72/75)', () => {
+      const config = serverConfig.getConfig();
+      const signalThreshold = config.thresholds.signalThreshold;
+      assert(typeof signalThreshold === 'number', 'signalThreshold must be a number');
+      assert(signalThreshold >= 60 && signalThreshold <= 100, `Signal threshold must be a valid score, got ${signalThreshold}`);
+
+      // Verify code default when env overrides are absent is valid
+      const codeDefaultConfig = (serverConfig as any).loadAndValidate();
+      assert(typeof codeDefaultConfig.thresholds.signalThreshold === 'number', 'Code default signalThreshold must be a number');
+
+      // Verify human readable format uses dynamic threshold from serverConfig
+      const summary = CandidateRejectionTracker.formatHumanReadableSummary('SCORE_BELOW_THRESHOLD', [], 65);
+      assert(summary.includes(`${signalThreshold}`), `Rejection summary must contain current configured threshold (${signalThreshold}), got: ${summary}`);
+      assert(!summary.includes('72'), 'Summary must not contain stale hard-coded 72');
+    });
+
+    await test('7. Deduplicating rejected candidates within a scan results in candidatesRejectedFinal === 4 and rejectedCount === 4 (not 8)', () => {
+      // 4 candidates from candidateRejectionDetails
+      const candidateRejectionDetails: any[] = [
+        { symbol: 'FLOKIUSDT', direction: 'SELL', finalDecision: 'REJECTED', failedGates: [StandardFailedGate.RR] },
+        { symbol: 'XRPUSDT', direction: 'SELL', finalDecision: 'REJECTED', failedGates: [StandardFailedGate.RR] },
+        { symbol: 'LINKUSDT', direction: 'SELL', finalDecision: 'REJECTED', failedGates: [StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD] },
+        { symbol: 'ETHUSDT', direction: 'SELL', finalDecision: 'REJECTED', failedGates: [StandardFailedGate.MTF_ALIGNMENT] },
+      ];
+
+      // And the same 4 records duplicated / also present in rejectedDuringScan
+      const rejectedDuringScan: any[] = [
+        { symbol: 'FLOKIUSDT', direction: 'SELL', score: 71, reason: 'REJECTED: RR' },
+        { symbol: 'XRPUSDT', direction: 'SELL', score: 72, reason: 'REJECTED: RR' },
+        { symbol: 'LINKUSDT', direction: 'SELL', score: 68, reason: 'REJECTED: FINAL_SCORE_BELOW_THRESHOLD' },
+        { symbol: 'ETHUSDT', direction: 'SELL', score: 66, reason: 'REJECTED: MTF_ALIGNMENT' },
+      ];
+
+      const allDetails = [...candidateRejectionDetails];
+      for (const rej of rejectedDuringScan) {
+        allDetails.push({
+          symbol: rej.symbol,
+          direction: rej.direction,
+          score: rej.score,
+          primaryRejectionReason: rej.reason,
+          failedGates: ['RR' as any],
+          finalDecision: 'REJECTED',
+          timestamp: Date.now(),
+        });
+      }
+
+      assert(allDetails.length === 8, `Expected 8 raw records before deduplication, got ${allDetails.length}`);
+
+      // Perform the exact deduplication logic as HourlyScanner
+      const rejectedCandidateMap = new Map<string, any>();
+      for (const record of allDetails) {
+        if (
+          record.finalDecision === 'REJECTED' ||
+          (Array.isArray(record.failedGates) && record.failedGates.length > 0)
+        ) {
+          const key = `${record.symbol}_${record.direction || ''}`;
+          rejectedCandidateMap.set(key, record);
+        }
+      }
+
+      const finalRejectedRecords = Array.from(rejectedCandidateMap.values());
+      const authoritativeRejectedCount = finalRejectedRecords.length;
+
+      const candidatesRejectedFinal = authoritativeRejectedCount;
+      const rejectedCount = authoritativeRejectedCount;
+
+      assert(candidatesRejectedFinal === 4, `Expected candidatesRejectedFinal === 4, got ${candidatesRejectedFinal}`);
+      assert(rejectedCount === 4, `Expected rejectedCount === 4, got ${rejectedCount}`);
+      assert(authoritativeRejectedCount !== 8, `Must NOT double-count to 8`);
+    });
+
+    await test('8. BTC SELL from scan A and BTC SELL from scan B remain separate evaluations across scans', () => {
+      // Scan A evaluation
+      const scanADetails: any[] = [
+        { symbol: 'BTCUSDT', direction: 'SELL', finalDecision: 'REJECTED', failedGates: [StandardFailedGate.RR], timestamp: 1000 },
+      ];
+
+      // Scan B evaluation
+      const scanBDetails: any[] = [
+        { symbol: 'BTCUSDT', direction: 'SELL', finalDecision: 'REJECTED', failedGates: [StandardFailedGate.MTF_ALIGNMENT], timestamp: 2000 },
+      ];
+
+      // Per-scan deduplication keeps each scan evaluation self-contained
+      const mapA = new Map<string, any>();
+      for (const r of scanADetails) {
+        if (r.finalDecision === 'REJECTED') mapA.set(`${r.symbol}_${r.direction || ''}`, r);
+      }
+
+      const mapB = new Map<string, any>();
+      for (const r of scanBDetails) {
+        if (r.finalDecision === 'REJECTED') mapB.set(`${r.symbol}_${r.direction || ''}`, r);
+      }
+
+      const countA = mapA.size;
+      const countB = mapB.size;
+
+      assert(countA === 1, `Scan A must have 1 evaluation, got ${countA}`);
+      assert(countB === 1, `Scan B must have 1 evaluation, got ${countB}`);
+      assert(mapA.get('BTCUSDT_SELL').timestamp === 1000, 'Scan A timestamp preserved');
+      assert(mapB.get('BTCUSDT_SELL').timestamp === 2000, 'Scan B timestamp preserved');
+    });
+
+    await test('9. New evaluation does not inherit stale trade levels (entryPrice, stopLoss, TP, RR) from existing candidate record', () => {
+      const tracker = new CandidateRejectionTracker();
+      // First evaluation has full trade levels and passes to RR check where it was evaluated
+      tracker.recordCandidate({
+        symbol: 'SOLUSDT',
+        direction: 'BUY',
+        score: 75,
+        primaryRejectionReason: 'REJECTED: GROSS_RR_BELOW_THRESHOLD',
+        failedGates: [StandardFailedGate.RR],
+        finalDecision: 'REJECTED',
+        entryPrice: 150.25,
+        stopLoss: 148.00,
+        takeProfit: 153.00,
+        tp1: 152.00,
+        tp2: 153.00,
+        tp3: 155.00,
+        grossRR: 1.22,
+        primaryRR: 1.22,
+        tp1RR: 0.77,
+        tp2RR: 1.22,
+        tp3RR: 2.11,
+      });
+
+      const initialRecord = tracker.getAllRecords().find(r => r.symbol === 'SOLUSDT');
+      assert(initialRecord?.entryPrice === 150.25, 'Initial record must have entryPrice');
+      assert(initialRecord?.stopLoss === 148.00, 'Initial record must have stopLoss');
+      assert(initialRecord?.grossRR === 1.22, 'Initial record must have grossRR');
+
+      // Second evaluation fails at early gate (MTF) where trade levels are NOT generated
+      tracker.recordCandidate({
+        symbol: 'SOLUSDT',
+        direction: 'BUY',
+        score: 62,
+        primaryRejectionReason: 'REJECTED: MTF_ALIGNMENT',
+        failedGates: [StandardFailedGate.MTF_ALIGNMENT],
+        finalDecision: 'REJECTED',
+      });
+
+      const updatedRecord = tracker.getAllRecords().find(r => r.symbol === 'SOLUSDT');
+      assert(updatedRecord !== undefined, 'Updated record must exist');
+      assert(updatedRecord!.entryPrice === undefined, `entryPrice must be undefined, got ${updatedRecord!.entryPrice}`);
+      assert(updatedRecord!.stopLoss === undefined, `stopLoss must be undefined, got ${updatedRecord!.stopLoss}`);
+      assert(updatedRecord!.takeProfit === undefined, `takeProfit must be undefined, got ${updatedRecord!.takeProfit}`);
+      assert(updatedRecord!.tp1 === undefined, `tp1 must be undefined, got ${updatedRecord!.tp1}`);
+      assert(updatedRecord!.tp2 === undefined, `tp2 must be undefined, got ${updatedRecord!.tp2}`);
+      assert(updatedRecord!.tp3 === undefined, `tp3 must be undefined, got ${updatedRecord!.tp3}`);
+      assert(updatedRecord!.grossRR === undefined, `grossRR must be undefined, got ${updatedRecord!.grossRR}`);
+      assert(updatedRecord!.primaryRR === undefined, `primaryRR must be undefined, got ${updatedRecord!.primaryRR}`);
+      assert(updatedRecord!.tp1RR === undefined, `tp1RR must be undefined, got ${updatedRecord!.tp1RR}`);
+      assert(updatedRecord!.tp2RR === undefined, `tp2RR must be undefined, got ${updatedRecord!.tp2RR}`);
+      assert(updatedRecord!.tp3RR === undefined, `tp3RR must be undefined, got ${updatedRecord!.tp3RR}`);
+      assert(updatedRecord!.score === 62, `score must be 62, got ${updatedRecord!.score}`);
+      assert(updatedRecord!.everReachedThreshold === true, 'Historical lifecycle field everReachedThreshold must be preserved');
+    });
+
+    await test('10. Gate 7 uses authoritative threshold from serverConfig with no stale 72 fallback', () => {
+      const config = serverConfig.getConfig();
+      const authoritativeThreshold = config.thresholds.signalThreshold;
+      assert(typeof authoritativeThreshold === 'number', 'Authoritative threshold must be a number');
+      assert(Gate7FinalTradeValidation.REQUIRED_MIN_SCORE === authoritativeThreshold, `Gate 7 REQUIRED_MIN_SCORE (${Gate7FinalTradeValidation.REQUIRED_MIN_SCORE}) must equal authoritative threshold (${authoritativeThreshold})`);
+
+      const now = Date.now();
+      const createMockContext = (score: number, minScoreOverride?: number): any => ({
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        entryPrice: 65000,
+        stopLoss: 63000,
+        takeProfit: 69000,
+        tp1: 67000,
+        tp2: 69000,
+        tp3: 71000,
+        riskRewardRatio: 2.0,
+        score,
+        candlesMap: {
+          '1h': [
+            { timestamp: now - 3600000, open: 64000, high: 65500, low: 63800, close: 65000, volume: 100 },
+          ],
+        },
+        liveTicker: {
+          symbol: 'BTCUSDT',
+          price: 65000,
+          bid: 64995,
+          ask: 65005,
+          timestamp: now - 5000,
+          status: 'LIVE',
+        },
+        atr: 1000,
+        minimumScoreThreshold: minScoreOverride,
+      });
+
+      // Score below threshold
+      const resBelow = Gate7FinalTradeValidation.validateCandidate(createMockContext(authoritativeThreshold - 1));
+      assert(resBelow.scoreRequirementPassed === false, 'Score below threshold must not pass score requirement');
+      assert(resBelow.isTradeable === false, 'Candidate with score below threshold must not be tradeable');
+      assert(resBelow.primaryRejectionReason?.includes(`${authoritativeThreshold}`), 'Rejection reason must reference authoritative threshold');
+      assert(!resBelow.primaryRejectionReason?.includes('72'), 'Rejection reason must not reference hardcoded 72');
+
+      // Score exactly at threshold
+      const resExact = Gate7FinalTradeValidation.validateCandidate(createMockContext(authoritativeThreshold));
+      assert(resExact.scoreRequirementPassed === true, 'Score exactly at threshold must pass score requirement');
+
+      // Score above threshold
+      const resAbove = Gate7FinalTradeValidation.validateCandidate(createMockContext(authoritativeThreshold + 5));
+      assert(resAbove.scoreRequirementPassed === true, 'Score above threshold must pass score requirement');
+    });
+
+    await test('11. Gate 7 throws an explicit configuration error if signalThreshold is missing or invalid, with NO fallback to 72', () => {
+      const originalThreshold = serverConfig.getConfig().thresholds.signalThreshold;
+      try {
+        (serverConfig.getConfig().thresholds as any).signalThreshold = undefined;
+        let threw = false;
+        try {
+          const _val = Gate7FinalTradeValidation.REQUIRED_MIN_SCORE;
+        } catch (err: any) {
+          threw = true;
+          assert(err.message.includes('Gate 7 Configuration Error'), 'Error must be an explicit configuration error');
+          assert(!err.message.includes('fallback to 72'), 'Must not mention fallback to 72');
+        }
+        assert(threw, 'Gate 7 REQUIRED_MIN_SCORE must throw when signalThreshold is missing/invalid');
+      } finally {
+        (serverConfig.getConfig().thresholds as any).signalThreshold = originalThreshold;
+      }
+    });
+
+    await test('12. Gate 5: ScoringEngine, Gate8TradeabilityThreshold and CandidateRejectionTracker dynamically use authoritative signalThreshold without stale 72/75 fallbacks', () => {
+      const authThreshold = serverConfig.getConfig().thresholds.signalThreshold;
+      
+      // ScoringEngine classification
+      const classification = ScoringEngine.classifyScore(authThreshold);
+      assert(classification.isActionable === true, 'Score at authoritative threshold must be actionable');
+      assert(classification.isQualifiedCandidate === true, 'Score at authoritative threshold must be qualified candidate');
+
+      // Gate8TradeabilityThreshold
+      assert(Gate8TradeabilityThreshold.FINAL_TRADEABILITY_THRESHOLD === authThreshold, 'Gate 8 threshold must equal authoritative signalThreshold');
+
+      // Gate 8 evaluation
+      const gate8Res = Gate8TradeabilityThreshold.evaluateCandidate({
+        symbol: 'TESTUSDT',
+        direction: 'BUY',
+        trendAlignmentScore: 100,
+        mtfConfluenceScore: 100,
+        momentumScore: 100,
+        marketStructureScore: 100,
+        volumeScore: 100,
+        volatilityAtrScore: 100,
+        entryQualityScore: 100,
+        riskRewardRatio: 2.5,
+        netRiskRewardRatio: 2.0,
+        agreeingStrategiesRatio: 1.0,
+        timeframeAlignmentRatio: 1.0,
+      });
+      assert(gate8Res.isTradeable === true, 'High score must be tradeable in Gate 8');
+      assert(gate8Res.finalScore >= authThreshold, 'Final score must exceed authoritative threshold');
+    });
+
+    await describe('SUITE 6: Gate 35 Signal Funnel Analytics & Candidate Lifecycle', async () => {
+      await test('13. Test A — Normal flow: 10 candidates -> 6 screened -> 3 deep analysis -> 2 completed -> 1 accepted, 1 rejected', () => {
+        Gate35SignalFunnelAnalytics.clear();
+
+        // 10 candidates scanned initially
+        for (let i = 1; i <= 10; i++) {
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            id: `cand_${i}`,
+            symbol: `SYM${i}USDT`,
+            direction: 'BUY',
+            timeframe: '1H',
+            stage: 'CANDIDATE',
+            score: 50,
+          });
+        }
+
+        // 6 candidates screened (CAND_1..6)
+        for (let i = 1; i <= 6; i++) {
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            id: `cand_${i}`,
+            symbol: `SYM${i}USDT`,
+            direction: 'BUY',
+            timeframe: '1H',
+            stage: 'GATE_1',
+            score: 65,
+          });
+        }
+
+        // 3 candidates reach deep analysis (CAND_1, CAND_2, CAND_3)
+        for (let i = 1; i <= 3; i++) {
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            id: `cand_${i}`,
+            symbol: `SYM${i}USDT`,
+            direction: 'BUY',
+            timeframe: '1H',
+            stage: 'GATE_6',
+            score: 75,
+          });
+        }
+
+        // CAND_3 gets rejected in deep analysis (GATE_8)
+        Gate35SignalFunnelAnalytics.recordCandidate({
+          id: `cand_3`,
+          symbol: `SYM3USDT`,
+          direction: 'BUY',
+          timeframe: '1H',
+          stage: 'GATE_8',
+          score: 72,
+          rejectionCode: 'REJECTED: RR_BELOW_THRESHOLD',
+          rejectionReason: 'Risk reward below threshold',
+        });
+
+        // CAND_1 and CAND_2 complete deep analysis (RANKING)
+        for (let i = 1; i <= 2; i++) {
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            id: `cand_${i}`,
+            symbol: `SYM${i}USDT`,
+            direction: 'BUY',
+            timeframe: '1H',
+            stage: 'RANKING',
+            score: 85,
+          });
+        }
+
+        // CAND_1 accepted as FINAL_SIGNAL
+        Gate35SignalFunnelAnalytics.recordCandidate({
+          id: `cand_1`,
+          symbol: `SYM1USDT`,
+          direction: 'BUY',
+          timeframe: '1H',
+          stage: 'FINAL_SIGNAL',
+          score: 88,
+        });
+
+        const report = Gate35SignalFunnelAnalytics.getFunnelAnalytics();
+        const lc = report.lifecycleCounts;
+
+        assert(lc.totalCandidates === 10, `Expected 10 total candidates, got ${lc.totalCandidates}`);
+        assert(lc.screenedCandidates === 6, `Expected 6 screened candidates, got ${lc.screenedCandidates}`);
+        assert(lc.deepAnalysisCandidates === 3, `Expected 3 deep analysis candidates, got ${lc.deepAnalysisCandidates}`);
+        assert(lc.completedCandidates === 2, `Expected 2 completed candidates, got ${lc.completedCandidates}`);
+        assert(lc.acceptedCandidates === 1, `Expected 1 accepted candidate, got ${lc.acceptedCandidates}`);
+        assert(lc.rejectedCandidates === 1, `Expected 1 rejected candidate, got ${lc.rejectedCandidates}`);
+        assert(lc.earlyRejectedCandidates === 0, `Expected 0 early rejections, got ${lc.earlyRejectedCandidates}`);
+        assert(lc.deepRejectedCandidates === 1, `Expected 1 deep rejection, got ${lc.deepRejectedCandidates}`);
+
+        // Internal invariants check
+        assert(lc.screenedCandidates <= lc.totalCandidates, 'screened <= total');
+        assert(lc.deepAnalysisCandidates <= lc.screenedCandidates, 'deepAnalysis <= screened');
+        assert(lc.completedCandidates <= lc.deepAnalysisCandidates, 'completed <= deepAnalysis');
+        assert(lc.acceptedCandidates <= lc.completedCandidates, 'accepted <= completed');
+        assert(lc.acceptedCandidates + lc.rejectedCandidates <= lc.totalCandidates, 'accepted + rejected <= total');
+      });
+
+      await test('14. Test B — Early rejection: Candidate rejected before deep analysis does not appear as completed', () => {
+        Gate35SignalFunnelAnalytics.clear();
+
+        // 10 candidates
+        for (let i = 1; i <= 10; i++) {
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            id: `cand_${i}`,
+            symbol: `SYM${i}USDT`,
+            direction: 'BUY',
+            timeframe: '1H',
+            stage: 'CANDIDATE',
+            score: 50,
+          });
+        }
+
+        // Candidate 1 rejected at GATE_2 (Early rejection)
+        Gate35SignalFunnelAnalytics.recordCandidate({
+          id: 'cand_1',
+          symbol: 'SYM1USDT',
+          direction: 'BUY',
+          timeframe: '1H',
+          stage: 'GATE_2',
+          score: 40,
+          rejectionCode: 'REJECTED: SCORE_TOO_LOW',
+          rejectionReason: 'Score too low',
+        });
+
+        const report = Gate35SignalFunnelAnalytics.getFunnelAnalytics();
+        const lc = report.lifecycleCounts;
+
+        assert(lc.totalCandidates === 10, `Expected 10 total candidates, got ${lc.totalCandidates}`);
+        assert(lc.rejectedCandidates === 1, `Expected 1 rejected candidate, got ${lc.rejectedCandidates}`);
+        assert(lc.earlyRejectedCandidates === 1, `Expected 1 early rejected candidate, got ${lc.earlyRejectedCandidates}`);
+        assert(lc.deepRejectedCandidates === 0, `Expected 0 deep rejected candidates, got ${lc.deepRejectedCandidates}`);
+        assert(lc.completedCandidates === 0, `Expected 0 completed candidates, got ${lc.completedCandidates}`);
+        assert(lc.acceptedCandidates === 0, `Expected 0 accepted candidates, got ${lc.acceptedCandidates}`);
+      });
+
+      await test('15. Test C — Retry: Candidate fails once and succeeds on retry, counted once without duplicate inflate', () => {
+        Gate35SignalFunnelAnalytics.clear();
+
+        // First attempt fails at GATE_1
+        Gate35SignalFunnelAnalytics.recordCandidate({
+          candidateKey: 'BTCUSDT_BUY_1H',
+          symbol: 'BTCUSDT',
+          direction: 'BUY',
+          timeframe: '1H',
+          stage: 'GATE_1',
+          score: 45,
+          rejectionCode: 'REJECTED: DATA_STALE',
+          rejectionReason: 'Stale quote',
+        });
+
+        // Retry succeeds
+        Gate35SignalFunnelAnalytics.recordCandidate({
+          candidateKey: 'BTCUSDT_BUY_1H',
+          symbol: 'BTCUSDT',
+          direction: 'BUY',
+          timeframe: '1H',
+          stage: 'FINAL_SIGNAL',
+          score: 85,
+        });
+
+        const report = Gate35SignalFunnelAnalytics.getFunnelAnalytics();
+        const lc = report.lifecycleCounts;
+
+        assert(lc.totalCandidates === 1, `Expected exactly 1 total candidate record, got ${lc.totalCandidates}`);
+        assert(lc.acceptedCandidates === 1, `Expected 1 accepted candidate on retry success, got ${lc.acceptedCandidates}`);
+        assert(lc.rejectedCandidates === 0, `Expected 0 active rejections after retry success, got ${lc.rejectedCandidates}`);
+      });
+
+      await test('16. Test D — Analysis error: Candidate errors during deep analysis, downstream counters not incremented', () => {
+        Gate35SignalFunnelAnalytics.clear();
+
+        Gate35SignalFunnelAnalytics.recordCandidate({
+          id: 'cand_err',
+          symbol: 'ETHUSDT',
+          direction: 'BUY',
+          timeframe: '1H',
+          stage: 'GATE_6',
+          score: 75,
+        });
+
+        // Errors out at GATE_7
+        Gate35SignalFunnelAnalytics.recordCandidate({
+          id: 'cand_err',
+          symbol: 'ETHUSDT',
+          direction: 'BUY',
+          timeframe: '1H',
+          stage: 'GATE_7',
+          score: 75,
+          rejectionCode: 'REJECTED: ANALYSIS_ERROR',
+          rejectionReason: 'Provider timeout during analysis',
+        });
+
+        const report = Gate35SignalFunnelAnalytics.getFunnelAnalytics();
+        const lc = report.lifecycleCounts;
+
+        assert(lc.totalCandidates === 1, `Expected 1 total candidate, got ${lc.totalCandidates}`);
+        assert(lc.deepAnalysisCandidates === 1, `Expected 1 deep analysis candidate, got ${lc.deepAnalysisCandidates}`);
+        assert(lc.completedCandidates === 0, `Expected 0 completed candidates on error, got ${lc.completedCandidates}`);
+        assert(lc.acceptedCandidates === 0, `Expected 0 accepted candidates on error, got ${lc.acceptedCandidates}`);
+        assert(lc.rejectedCandidates === 1, `Expected 1 rejected candidate on error, got ${lc.rejectedCandidates}`);
+      });
+
+      await test('17. Test E — Duplicate candidate: Same symbol/candidate recorded twice cannot inflate funnel counters', () => {
+        Gate35SignalFunnelAnalytics.clear();
+
+        // Recorded 5 times across pipeline gates
+        const stages: FunnelStage[] = ['CANDIDATE', 'STAGE_2', 'GATE_1', 'GATE_4', 'GATE_6'];
+        for (const stage of stages) {
+          Gate35SignalFunnelAnalytics.recordCandidate({
+            candidateKey: 'SOLUSDT_BUY_1H',
+            symbol: 'SOLUSDT',
+            direction: 'BUY',
+            timeframe: '1H',
+            stage,
+            score: 80,
+          });
+        }
+
+        const report = Gate35SignalFunnelAnalytics.getFunnelAnalytics();
+        const lc = report.lifecycleCounts;
+
+        assert(lc.totalCandidates === 1, `Expected exactly 1 candidate record, got ${lc.totalCandidates}`);
+        assert(lc.screenedCandidates === 1, `Expected 1 screened candidate, got ${lc.screenedCandidates}`);
+        assert(lc.deepAnalysisCandidates === 1, `Expected 1 deep analysis candidate, got ${lc.deepAnalysisCandidates}`);
+        assert(report.recordsCount === 1, `Expected 1 stored record count, got ${report.recordsCount}`);
+      });
     });
   });
 

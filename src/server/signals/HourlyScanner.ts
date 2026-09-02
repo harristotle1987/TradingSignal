@@ -37,6 +37,7 @@ import { Gate17CorrelationExposure } from './Gate17CorrelationExposure.js';
 import { SignalLifecycleManager } from './SignalLifecycleManager.js';
 import { SignalLogger } from './SignalLogger.js';
 import { CooldownManager } from './CooldownManager.js';
+import { CandidateRejectionTracker } from './CandidateRejectionTracker.js';
 import { SignalFingerprint } from './SignalFingerprint.js';
 import { SignalAuditStore } from './SignalAuditStore.js';
 import { OpportunityFunnelStore } from './Gate26OpportunityFunnel.js';
@@ -396,9 +397,9 @@ export class HourlyScannerService {
           
           assetClass: SymbolNormalizer.getAssetClassification(sig.symbol),
           initialScore: score,
-          watchingThreshold: thresholds.watchingThreshold || 70,
-          qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-          signalThreshold: thresholds.signalThreshold || 70,
+          watchingThreshold: thresholds.watchingThreshold,
+          qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold,
+          signalThreshold: thresholds.signalThreshold,
           strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
           timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
           grossRR,
@@ -433,9 +434,9 @@ export class HourlyScannerService {
         const sigTelemetry = {
           assetClass: SymbolNormalizer.getAssetClassification(sig.symbol),
           initialScore: coreScore,
-          watchingThreshold: thresholds.watchingThreshold || 70,
-          qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-          signalThreshold: thresholds.signalThreshold || 70,
+          watchingThreshold: thresholds.watchingThreshold,
+          qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold,
+          signalThreshold: thresholds.signalThreshold,
           strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
           timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
           grossRR,
@@ -741,9 +742,9 @@ export class HourlyScannerService {
             rejectionReason: allocationCheck.reason,
             assetClass: SymbolNormalizer.getAssetClassification(sig.symbol),
             initialScore: score,
-            watchingThreshold: thresholds.watchingThreshold || 70,
-            qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-            signalThreshold: thresholds.signalThreshold || 70,
+            watchingThreshold: thresholds.watchingThreshold,
+            qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold,
+            signalThreshold: thresholds.signalThreshold,
             strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
             timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
             grossRR,
@@ -833,9 +834,9 @@ export class HourlyScannerService {
             rejectionReason: reason,
             assetClass: SymbolNormalizer.getAssetClassification(sig.symbol),
             initialScore: scoreVal,
-            watchingThreshold: thresholds.watchingThreshold || 70,
-            qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-            signalThreshold: thresholds.signalThreshold || 70,
+            watchingThreshold: thresholds.watchingThreshold,
+            qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold,
+            signalThreshold: thresholds.signalThreshold,
             strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
             timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
             grossRR,
@@ -923,7 +924,7 @@ export class HourlyScannerService {
         Gate36ConfigurableSignalFrequency.recordNotificationCount(1);
 
         // Record Funnel Analytics Final Signal
-        const finalScore = sig.score ?? sig.confidenceScore ?? 70;
+        const finalScore = sig.score ?? sig.confidenceScore ?? thresholds.signalThreshold;
         const grossRR = (sig as any).grossRiskRewardRatio ?? sig.riskRewardRatio ?? 0;
         const netRR = (sig as any).netRiskRewardRatio ?? sig.estimatedFriction?.netRiskRewardRatio ?? 0;
         const adverseNetRR = (sig as any).adverseNetRiskRewardRatio ?? (sig.estimatedFriction as any)?.adverseNetRiskRewardRatio ?? 0;
@@ -939,9 +940,9 @@ export class HourlyScannerService {
           strategy: sig.strategy,
           assetClass: SymbolNormalizer.getAssetClassification(sig.symbol),
           initialScore: finalScore,
-          watchingThreshold: thresholds.watchingThreshold || 70,
-          qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold || 75,
-          signalThreshold: thresholds.signalThreshold || 70,
+          watchingThreshold: thresholds.watchingThreshold,
+          qualifiedCandidateThreshold: thresholds.qualifiedCandidateThreshold,
+          signalThreshold: thresholds.signalThreshold,
           strategyAgreementRatio: (sig as any).strategyAgreementRatio ?? 0.83,
           timeframeAlignmentRatio: (sig as any).timeframeAlignmentRatio ?? 0.83,
           grossRR,
@@ -982,7 +983,7 @@ export class HourlyScannerService {
           dataFreshnessSeconds: 0,
           providerAgreement: true,
           expectedRR: sig.riskRewardRatio,
-          score: sig.score || 70,
+          score: sig.score ?? thresholds.signalThreshold,
           status: 'ACCEPTED',
           rejectionReason: null,
           fingerprint: fp,
@@ -1067,11 +1068,78 @@ export class HourlyScannerService {
             rejectionReason: rej.reason,
             fingerprint: fp,
           });
+
+          allCandidateRejectionDetails.push({
+            symbol: rej.symbol,
+            direction: dir,
+            score: rej.score || 0,
+            primaryRejectionReason: rej.reason,
+            failedGates: [gate as any],
+            finalDecision: 'REJECTED',
+            rejectionSummary: CandidateRejectionTracker.formatHumanReadableSummary(rej.reason, [gate as any], rej.score || 0),
+            timestamp: Date.now(),
+          });
         }
       }
 
+      // Calculate authoritative final scan-wide categorized counts directly from finalized rejection records
+      let finalCandidatesRejectedBeforeMTF = 0;
+      let finalCandidatesRejectedByMTF = 0;
+      let finalCandidatesRejectedByScore = 0;
+      let finalCandidatesRejectedByRR = 0;
+      let finalCandidatesRejectedByStructure = 0;
+      const authoritativeRejectionCounts: Record<string, number> = {};
+
+      for (const record of allCandidateRejectionDetails) {
+        if (record.finalDecision === 'REJECTED' || (record.failedGates && record.failedGates.length > 0)) {
+          const failedGates: string[] = record.failedGates || [];
+          const isBeforeMTF =
+            failedGates.includes('FINAL_SCORE_UNREACHABLE') ||
+            record.stage === 'Gate 6 Pre-Audit' ||
+            record.stage === 'Stage 0' ||
+            record.stage === 'Stage 1';
+          const isMTF = failedGates.includes('MTF_ALIGNMENT');
+          const isScore = failedGates.includes('FINAL_SCORE_BELOW_THRESHOLD');
+          const isRR = failedGates.includes('RR') || failedGates.includes('RR_INVALID');
+          const isStructure = failedGates.includes('MARKET_STRUCTURE');
+
+          if (isBeforeMTF) finalCandidatesRejectedBeforeMTF++;
+          if (isMTF) finalCandidatesRejectedByMTF++;
+          if (isScore) finalCandidatesRejectedByScore++;
+          if (isRR) finalCandidatesRejectedByRR++;
+          if (isStructure) finalCandidatesRejectedByStructure++;
+
+          if (failedGates.length > 0) {
+            const uniqueGates = Array.from(new Set(failedGates));
+            for (const g of uniqueGates) {
+              authoritativeRejectionCounts[g] = (authoritativeRejectionCounts[g] || 0) + 1;
+            }
+          } else {
+            authoritativeRejectionCounts['OTHER_REJECTION'] = (authoritativeRejectionCounts['OTHER_REJECTION'] || 0) + 1;
+          }
+        }
+      }
+
+      // Deduplicate records belonging to the SAME candidate within THIS scan
+      const rejectedCandidateMap = new Map<string, any>();
+      for (const record of allCandidateRejectionDetails) {
+        if (
+          record.finalDecision === 'REJECTED' ||
+          (Array.isArray(record.failedGates) && record.failedGates.length > 0)
+        ) {
+          const key = `${record.symbol}_${record.direction || ''}`;
+          rejectedCandidateMap.set(key, record);
+        }
+      }
+
+      const finalRejectedRecords = Array.from(rejectedCandidateMap.values());
+      const authoritativeRejectedCount = finalRejectedRecords.length;
+
+      const rejectionReasonStrings = finalRejectedRecords.map(
+        (r) => `${r.symbol}${r.direction ? ` [${r.direction}]` : ''}: ${r.primaryRejectionReason || r.rejectionSummary || 'REJECTED'}`
+      );
+
       const scanDurationMs = Date.now() - scanStartTime;
-      const totalCandidatesRejectedFinalCombined = totalCandidatesRejectedFinal + rejectedDuringScan.length;
 
       // 10. Update authoritative lastAutomatedScan metrics ONLY if triggered externally from /api/scanner/trigger
       if (isExternal) {
@@ -1086,7 +1154,7 @@ export class HourlyScannerService {
           preliminaryCandidatesFound: totalPreliminaryCandidatesFound,
           candidatesRejectedPreliminary: totalCandidatesRejectedPreliminary,
           candidatesEvaluated: totalCandidatesEvaluated,
-          candidatesRejectedFinal: totalCandidatesRejectedFinalCombined,
+          candidatesRejectedFinal: authoritativeRejectedCount,
           signalsGenerated: totalSignalsGenerated,
           signalsAccepted: dispatchedCount,
         });
@@ -1101,9 +1169,6 @@ export class HourlyScannerService {
       logger.info(`[Hourly Scanner] Scan cycle complete. Dispatched ${dispatchedCount} new setups. Today's total: ${finalCapState.dailySignalCount}/${finalCapState.dailySignalCap}.`);
       logger.info(`================================================================`);
 
-      const rejectionReasonStrings = rejectedDuringScan.map(
-        (r) => `${r.symbol}${r.direction ? ` [${r.direction}]` : ''}: ${r.reason}`
-      );
       const diagnosticStrings = universeDiagnostics.map(
         (d) => `${d.symbol}: ${d.reason}`
       );
@@ -1138,17 +1203,22 @@ export class HourlyScannerService {
         preliminaryCandidatesFound: totalPreliminaryCandidatesFound,
         candidatesRejectedPreliminary: totalCandidatesRejectedPreliminary,
         candidatesEvaluated: totalCandidatesEvaluated,
-        candidatesRejectedFinal: totalCandidatesRejectedFinalCombined,
+        candidatesRejectedFinal: authoritativeRejectedCount,
         signalsGenerated: totalSignalsGenerated,
         signalsAccepted: dispatchedCount,
         acceptedSignalsCount: dispatchedCount,
         acceptedSignals: selectedSetups,
         signalsFound: totalSignalsGenerated,
         qualifiedSetups: selectedSetups,
-        rejectedCount: rejectedDuringScan.length,
+        rejectedCount: authoritativeRejectedCount,
+        candidatesRejectedBeforeMTF: finalCandidatesRejectedBeforeMTF,
+        candidatesRejectedByMTF: finalCandidatesRejectedByMTF,
+        candidatesRejectedByScore: finalCandidatesRejectedByScore,
+        candidatesRejectedByRR: finalCandidatesRejectedByRR,
+        candidatesRejectedByStructure: finalCandidatesRejectedByStructure,
         rejectionReasons: rejectionReasonStrings,
-        rejectionReasonsAggregated: aggregatedRejectionCounts,
-        rejectionReasonsCounts: aggregatedRejectionCounts,
+        rejectionReasonsAggregated: authoritativeRejectionCounts,
+        rejectionReasonsCounts: authoritativeRejectionCounts,
         candidateRejectionDetails: allCandidateRejectionDetails,
         diagnosticsCount: universeDiagnostics.length,
         diagnostics: diagnosticStrings,

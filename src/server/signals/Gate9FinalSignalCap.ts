@@ -26,6 +26,7 @@
 
 import { TradingSignal } from '../../types/index.js';
 import { logger } from '../logger.js';
+import { serverConfig } from '../config.js';
 
 export interface Gate9CappedCandidate<T = any> {
   signal: TradingSignal;
@@ -54,8 +55,9 @@ export class Gate9FinalSignalCap {
   ): Gate9CapSelectionResult<T> {
     const totalPassed = qualifiedCandidates.length;
 
+    const minThreshold = serverConfig.getConfig().thresholds.signalThreshold;
     if (totalPassed === 0) {
-      logger.info(`[Gate 9 Signal Cap] 0 candidates satisfied Gate 7 hard gates & Gate 8 score >= 70. Publishing 0 signals.`);
+      logger.info(`[Gate 9 Signal Cap] 0 candidates satisfied Gate 7 hard gates & Gate 8 score >= ${minThreshold}. Publishing 0 signals.`);
       return {
         totalPassedCandidates: 0,
         maxCapAllowed: this.MAX_SIGNALS_PER_SCAN,
@@ -63,7 +65,7 @@ export class Gate9FinalSignalCap {
         publishedSignals: [],
         publishedCandidates: [],
         spilloverCandidates: [],
-        zeroSignalsReason: 'Zero candidates satisfied both Gate 7 hard gates and Gate 8 score hurdle (>=70). No signals forced.',
+        zeroSignalsReason: `Zero candidates satisfied both Gate 7 hard gates and Gate 8 score hurdle (>=${minThreshold}). No signals forced.`,
       };
     }
 
@@ -103,7 +105,7 @@ export class Gate9FinalSignalCap {
     logger.info(
       `[Gate 9 Signal Cap] Evaluated ${totalPassed} qualified candidates. ` +
       `Published: ${publishedSignals.length} (Cap: ${this.MAX_SIGNALS_PER_SCAN}). ` +
-      `Selected: [${publishedSignals.map((s) => `${s.symbol} (${s.score ?? 75}/100)`).join(', ')}]`
+      `Selected: [${publishedSignals.map((s) => `${s.symbol} (${s.score ?? minThreshold}/100)`).join(', ')}]`
     );
 
     if (spilloverCandidates.length > 0) {

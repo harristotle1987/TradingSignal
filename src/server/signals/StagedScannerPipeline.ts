@@ -372,7 +372,7 @@ export async function runStagedPipeline(
         if (lowerReason.includes('structure') || lowerReason.includes('s&r') || lowerReason.includes('support')) {
           failedGates.push(StandardFailedGate.MARKET_STRUCTURE);
         }
-        const sigThreshold = serverConfig.getConfig().thresholds.signalThreshold || 70;
+        const sigThreshold = serverConfig.getConfig().thresholds.signalThreshold;
         if (rej.compositeMtfScore < sigThreshold || rej.finalScore < sigThreshold) {
           failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
         }
@@ -832,7 +832,7 @@ export async function runStagedPipeline(
       if (winRate <= effectiveMinWinProb) {
         const reason = `Estimated win rate (${winRate}% <= ${effectiveMinWinProb}% threshold)`;
         const failedGates: StandardFailedGate[] = [StandardFailedGate.WIN_RATE_BELOW_THRESHOLD];
-        if ((scoring.score || 0) < (thresholds.signalThreshold || 70)) {
+        if ((scoring.score || 0) < thresholds.signalThreshold) {
           failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
         }
         if (finalRR < thresholds.minimumRR) {
@@ -863,7 +863,7 @@ export async function runStagedPipeline(
       if (expectancy <= 0) {
         const reason = `Non-positive expectancy (${expectancy}R <= 0)`;
         const failedGates: StandardFailedGate[] = [StandardFailedGate.NEGATIVE_EXPECTANCY];
-        if ((scoring.score || 0) < (thresholds.signalThreshold || 70)) {
+        if ((scoring.score || 0) < thresholds.signalThreshold) {
           failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
         }
         if (finalRR < thresholds.minimumRR) {
@@ -895,7 +895,7 @@ export async function runStagedPipeline(
 
       // -----------------------------------------------------------------
       // STAGE 4: Gate 8 — Final Tradeability Threshold (10-Factor Rubric)
-      // Configured tradeability threshold: >= thresholds.signalThreshold (72).
+      // Configured tradeability threshold: >= thresholds.signalThreshold.
       // Factors: Trend 20, MTF 15, Momentum 10, Structure 15,
       // Volume 10, Volatility/ATR 10, Entry 5, R:R 5, Execution 5, Direction 5 = 100.
       // -----------------------------------------------------------------
@@ -928,7 +928,7 @@ export async function runStagedPipeline(
 
       if (!gate8Eval.isTradeable) {
         const failedGates: StandardFailedGate[] = [];
-        if (gate8Eval.finalScore < (thresholds.signalThreshold || 70) || gate8Eval.finalScore < 70) {
+        if (gate8Eval.finalScore < thresholds.signalThreshold) {
           failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
         }
         const factors: any = gate8Eval.factors || {};
@@ -942,7 +942,7 @@ export async function runStagedPipeline(
         if (factors.rrQuality !== undefined && factors.rrQuality < 3.5) failedGates.push(StandardFailedGate.RR);
 
         if (failedGates.length === 0) {
-          if (gate8Eval.finalScore < (thresholds.signalThreshold || 70)) {
+          if (gate8Eval.finalScore < thresholds.signalThreshold) {
             failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
           } else {
             failedGates.push(StandardFailedGate.DATA_INTEGRITY);
@@ -1206,11 +1206,11 @@ export async function runStagedPipeline(
 
     // -----------------------------------------------------------------
     // GATE 9 — FINAL SIGNAL CAP (Max 3 tradeable signals)
-    // Rank by final score -> Select top 3. If zero reach 75 -> zero signals.
+    // Rank by final score -> Select top 3. If zero reach signalThreshold -> zero signals.
     // -----------------------------------------------------------------
     const gate9Input = filteredCandidates.map((c) => ({
       signal: c.signal,
-      finalScore: c.signal.score || 75,
+      finalScore: c.signal.score || thresholds.signalThreshold,
       data: c,
     }));
     const gate9CapResult = Gate9FinalSignalCap.applySignalCap(gate9Input);
@@ -1241,7 +1241,7 @@ export async function runStagedPipeline(
       rejectionTracker.recordCandidate({
         symbol: sig.symbol,
         direction: sig.direction,
-        score: sig.score || (thresholds.signalThreshold || 70),
+        score: sig.score || thresholds.signalThreshold,
         primaryRejectionReason: 'All mandatory gates passed and qualified for dispatch',
         failedGates: [],
         finalDecision: 'DISPATCHED',
@@ -1342,7 +1342,7 @@ export async function runStagedPipeline(
     logger.info(`  * Gate 5 Deep Selection (Rank / Cluster Cap): ${rejGate5}`);
     logger.info(`  * Gate 6 Layer 1 MTF (15m/1h Disagreement): ${rejGate6L1}`);
     logger.info(`  * Gate 6 Layer 2 MTF (5m/4h Structure / ATR): ${rejGate6L2}`);
-    logger.info(`  * Stage 2 Scoring (<${thresholds.signalThreshold || 70} Score or Setup Mismatch): ${rejStage2}`);
+    logger.info(`  * Stage 2 Scoring (<${thresholds.signalThreshold} Score or Setup Mismatch): ${rejStage2}`);
     logger.info(`  * Stage 3 Gate 7 (13 Mandatory Hard Gates): ${rejGate7}`);
     logger.info(`  * Gate 8 Final Score Threshold (<${thresholds.signalThreshold}): ${rejGate8}`);
     logger.info(`  * Gate 9 Signal Cap (Excess over max 3): ${rejGate9}`);
@@ -1363,8 +1363,8 @@ export async function runStagedPipeline(
 
     profiler.endStage('Stage 3: Final Trade Validation', finalSignals.length);
 
-    const candidates72PlusCount = allCandidateScores.filter((s) => s.score >= (thresholds.signalThreshold || 70)).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= (thresholds.signalThreshold || 70) || r.compositeMtfScore >= (thresholds.signalThreshold || 70))).length;
-    const rejected72PlusCount = allCandidateScores.filter((s) => s.score >= (thresholds.signalThreshold || 70) && !s.passed).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= (thresholds.signalThreshold || 70) || r.compositeMtfScore >= (thresholds.signalThreshold || 70))).length;
+    const candidates72PlusCount = allCandidateScores.filter((s) => s.score >= thresholds.signalThreshold).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= thresholds.signalThreshold || r.compositeMtfScore >= thresholds.signalThreshold)).length;
+    const rejected72PlusCount = allCandidateScores.filter((s) => s.score >= thresholds.signalThreshold && !s.passed).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= thresholds.signalThreshold || r.compositeMtfScore >= thresholds.signalThreshold)).length;
 
     profiler.setFunnelMetrics({
       preliminaryCandidates: stage1OutputCount,

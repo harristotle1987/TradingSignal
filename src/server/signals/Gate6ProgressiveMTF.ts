@@ -698,7 +698,10 @@ export class Gate6ProgressiveMTF {
     let analyzedCount = 0;
 
     // STEP 0: PRE-MTF SCORE AUDIT
-    const targetScoreThreshold = serverConfig.getConfig().thresholds.signalThreshold || 70;
+    const targetScoreThreshold = serverConfig.getConfig().thresholds.signalThreshold;
+    if (typeof targetScoreThreshold !== 'number' || isNaN(targetScoreThreshold)) {
+      throw new Error(`[Gate6ProgressiveMTF] Authoritative signalThreshold is missing or invalid in serverConfig`);
+    }
 
     // Filter candidates entering Gate 6: determine whether candidates with a deterministic score
     // already below required threshold can mathematically reach required threshold after remaining MTF analysis.
@@ -1016,11 +1019,12 @@ export class Gate6ProgressiveMTF {
     let candidatesRejectedByRR = 0;
     let candidatesRejectedByStructure = 0;
 
+    const authThreshold = serverConfig.getConfig().thresholds.signalThreshold;
     for (const rej of rejected) {
       const reasonLower = (rej.rejectionReason || '').toLowerCase();
       const isBefore = rej.stoppedAtLayer === 'BEFORE_MTF' || reasonLower.includes('final_score_unreachable') || reasonLower.includes('halting mtf requests');
       const isMTF = !isBefore && (reasonLower.includes('layer 1') || reasonLower.includes('layer 2') || reasonLower.includes('mtf'));
-      const isScore = rej.finalScore < (serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 70) || rej.compositeMtfScore < (serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 70) || rej.maximumPossibleScoreAfterRemainingAnalysis < (serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 70) || reasonLower.includes('score');
+      const isScore = rej.finalScore < authThreshold || rej.compositeMtfScore < authThreshold || rej.maximumPossibleScoreAfterRemainingAnalysis < authThreshold || reasonLower.includes('score');
       const isRR = reasonLower.includes('rr') || reasonLower.includes('risk/reward');
       const isStruct = reasonLower.includes('structure') || reasonLower.includes('support') || reasonLower.includes('resistance');
 

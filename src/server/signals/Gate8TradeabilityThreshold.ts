@@ -92,7 +92,11 @@ export interface Gate8EvaluationResult {
 
 export class Gate8TradeabilityThreshold {
   public static get FINAL_TRADEABILITY_THRESHOLD(): number {
-    return serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 70;
+    const threshold = serverConfig.getConfig().thresholds.signalThreshold;
+    if (typeof threshold !== 'number' || isNaN(threshold)) {
+      throw new Error(`[Gate8TradeabilityThreshold] Authoritative signalThreshold is missing or invalid in serverConfig`);
+    }
+    return threshold;
   }
 
   /**
@@ -205,7 +209,7 @@ export class Gate8TradeabilityThreshold {
     const finalScore = Math.round(Math.max(0, Math.min(100, rawTotal)));
 
     const finalThreshold = this.FINAL_TRADEABILITY_THRESHOLD;
-    const watchingThreshold = serverConfig?.getConfig?.()?.thresholds?.watchingThreshold || 68;
+    const watchingThreshold = serverConfig.getConfig().thresholds.watchingThreshold;
 
     // Assign Classification based on Final Score
     let classification: Gate8ScoreClassification;

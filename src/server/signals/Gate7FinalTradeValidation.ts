@@ -84,7 +84,12 @@ export interface Gate7ValidationResult {
 
 export class Gate7FinalTradeValidation {
   public static get REQUIRED_MIN_SCORE(): number {
-    return serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 72;
+    const config = serverConfig?.getConfig?.();
+    const threshold = config?.thresholds?.signalThreshold;
+    if (typeof threshold !== 'number' || isNaN(threshold) || threshold <= 0) {
+      throw new Error(`[Gate 7 Configuration Error] Authoritative signalThreshold is unavailable or invalid: ${threshold}`);
+    }
+    return threshold;
   }
   public static get DEFAULT_MIN_RR(): number { return serverConfig.getConfig().thresholds.minimumRR; }
   public static readonly MAX_DATA_AGE_SECONDS = 180; // 3 minutes

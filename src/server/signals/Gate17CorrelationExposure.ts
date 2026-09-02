@@ -21,6 +21,7 @@
 
 import { NormalizedCandle, SignalDirection } from '../../types/index.js';
 import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
+import { serverConfig } from '../config.js';
 
 export type CorrelationLevel = 'LOW_CORRELATION' | 'MODERATE_CORRELATION' | 'HIGH_CORRELATION';
 
@@ -242,9 +243,10 @@ export class Gate17CorrelationExposure {
       const totalClusterExposure = groupCandidates.length + activeCount;
 
       // Rank group candidates descending by score + relativeStrengthScore
+      const minThreshold = serverConfig.getConfig().thresholds.signalThreshold;
       const rankedInCluster = [...groupCandidates].sort((a, b) => {
-        const scoreA = (a.score || 72) + (a.relativeStrengthScore ? (a.relativeStrengthScore - 50) * 0.1 : 0);
-        const scoreB = (b.score || 72) + (b.relativeStrengthScore ? (b.relativeStrengthScore - 50) * 0.1 : 0);
+        const scoreA = (a.score || minThreshold) + (a.relativeStrengthScore ? (a.relativeStrengthScore - 50) * 0.1 : 0);
+        const scoreB = (b.score || minThreshold) + (b.relativeStrengthScore ? (b.relativeStrengthScore - 50) * 0.1 : 0);
         return scoreB - scoreA;
       });
 

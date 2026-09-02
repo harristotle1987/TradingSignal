@@ -22,6 +22,7 @@ import { NormalizedCandle, SignalDirection } from '../../types/index.js';
 import { StrategyEngine } from './StrategyEngine.js';
 import { ScoringEngine, ScoringResult } from './ScoringEngine.js';
 import { SignalValidator } from './SignalValidator.js';
+import { serverConfig } from '../config.js';
 import { StrategyPerformanceTracker, MetricSummary, PERFORMANCE_LEGAL_DISCLAIMER } from './StrategyPerformanceTracker.js';
 import { logger } from '../logger.js';
 
@@ -216,7 +217,7 @@ export class WalkForwardEngine {
         if (!strategyEval.hasStrongConfluence || !strategyEval.dominantDirection) continue;
 
         const scoreResult = ScoringEngine.calculateScore(cleanSym, evalPrice, slicedTfMap, 'NEUTRAL', 100);
-        if (!scoreResult.isValid || scoreResult.score < 75) continue;
+        if (!scoreResult.isValid || scoreResult.score < serverConfig.getConfig().thresholds.signalThreshold) continue;
 
         // Check SignalValidator
         const validation = SignalValidator.validate({
