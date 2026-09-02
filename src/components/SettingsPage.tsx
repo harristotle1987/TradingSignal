@@ -393,9 +393,9 @@ export function SettingsPage({}: SettingsPageProps) {
 
             {/* Schedule */}
             <div className="bg-slate-950 border border-slate-800 rounded-lg p-3.5 space-y-1">
-              <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium font-semibold text-slate-400">Configured Schedule</span>
-              <span className="font-semibold text-white block pt-0.5 text-xs truncate" title={cronJobOrg?.schedule?.intervalDescription || `Every ${scannerSettings?.intervalMinutes ?? 15} minutes`}>
-                {cronJobOrg?.schedule?.intervalDescription || `Every ${scannerSettings?.intervalMinutes ?? 15} minutes`}
+              <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium font-semibold text-slate-400">Execution Frequency</span>
+              <span className="font-semibold text-white block pt-0.5 text-xs truncate" title={cronJobOrg?.schedule?.intervalDescription || `Every 15 minutes`}>
+                {cronJobOrg?.schedule?.intervalDescription || `Every 15 minutes`}
               </span>
             </div>
 

@@ -1,5 +1,6 @@
 import { SignalDirection } from '../../types/index.js';
 import { logger } from '../logger.js';
+import { serverConfig } from '../config.js';
 
 export interface RiskRewardResult {
   riskDistance: number;
@@ -103,8 +104,10 @@ export class RiskRewardCalculator {
     tp2: number,
     tp3: number,
     direction: SignalDirection,
-    minRR: number = 1.50
+    minRR?: number
   ): RiskRewardResult {
+    const configMinRR = minRR ?? serverConfig.getConfig().thresholds.minimumRR;
+    
     const invalidResult: RiskRewardResult = {
       riskDistance: 0,
       rewardDistance: 0,
@@ -190,11 +193,11 @@ export class RiskRewardCalculator {
     let effectiveGrossRR = tp2RR;
     let evaluatedRewardDistance = Math.abs(tp2 - entryPrice);
 
-    if (tp2RR >= minRR) {
+    if (tp2RR >= configMinRR) {
       effectiveGrossRR = tp2RR;
       passedViaTp3 = false;
       evaluatedRewardDistance = Math.abs(tp2 - entryPrice);
-    } else if (tp3RR >= minRR) {
+    } else if (tp3RR >= configMinRR) {
       effectiveGrossRR = tp3RR;
       passedViaTp3 = true;
       evaluatedRewardDistance = Math.abs(tp3 - entryPrice);

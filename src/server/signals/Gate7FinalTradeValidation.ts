@@ -86,7 +86,7 @@ export class Gate7FinalTradeValidation {
   public static get REQUIRED_MIN_SCORE(): number {
     return serverConfig?.getConfig?.()?.thresholds?.signalThreshold || 72;
   }
-  public static readonly DEFAULT_MIN_RR = 1.3;
+  public static get DEFAULT_MIN_RR(): number { return serverConfig.getConfig().thresholds.minimumRR; }
   public static readonly MAX_DATA_AGE_SECONDS = 180; // 3 minutes
 
   /**
