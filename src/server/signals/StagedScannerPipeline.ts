@@ -1363,15 +1363,15 @@ export async function runStagedPipeline(
 
     profiler.endStage('Stage 3: Final Trade Validation', finalSignals.length);
 
-    const candidates72PlusCount = allCandidateScores.filter((s) => s.score >= thresholds.signalThreshold).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= thresholds.signalThreshold || r.compositeMtfScore >= thresholds.signalThreshold)).length;
-    const rejected72PlusCount = allCandidateScores.filter((s) => s.score >= thresholds.signalThreshold && !s.passed).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= thresholds.signalThreshold || r.compositeMtfScore >= thresholds.signalThreshold)).length;
+    const candidatesThresholdPlusCount = allCandidateScores.filter((s) => s.score >= thresholds.signalThreshold).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= thresholds.signalThreshold || r.compositeMtfScore >= thresholds.signalThreshold)).length;
+    const rejectedThresholdPlusCount = allCandidateScores.filter((s) => s.score >= thresholds.signalThreshold && !s.passed).length + gate6Analysis.rejectedCandidates.filter((r) => (r.finalScore >= thresholds.signalThreshold || r.compositeMtfScore >= thresholds.signalThreshold)).length;
 
     profiler.setFunnelMetrics({
       preliminaryCandidates: stage1OutputCount,
       deepCandidates: gate5OutputCount,
       MTFCandidates: deepMtfOutputCount,
-      candidates72Plus: candidates72PlusCount,
-      rejected72PlusCandidates: rejected72PlusCount,
+      candidates72Plus: candidatesThresholdPlusCount,
+      rejected72PlusCandidates: rejectedThresholdPlusCount,
       signalsGenerated: finalSignals.length,
       signalsAccepted: finalSignals.length,
     });

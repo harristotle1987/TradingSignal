@@ -3,8 +3,15 @@
  *
  * Enforces quality-adjusted signal selection with a strict maximum of 3 tradeable signals per scan.
  *
+ * Threshold Architecture:
+ * serverConfig
+ *     ↓
+ * thresholds.signalThreshold
+ *     ↓
+ * final tradeability threshold
+ *
  * Rules:
- * - After all validation (Gate 7 Hard Gates PASS + Gate 8 Score >= 75):
+ * - After all validation (Gate 7 Hard Gates PASS + Gate 8 Score at or above the configured final tradeability threshold):
  * - Allow a MAXIMUM of 3 tradeable signals per scan.
  * - If > 3 candidates pass:
  *     -> rank descending by final score
@@ -48,7 +55,7 @@ export class Gate9FinalSignalCap {
   public static readonly MAX_SIGNALS_PER_SCAN = 3;
 
   /**
-   * Applies Gate 9 signal cap to validated and scored (>=75) candidates.
+   * Applies Gate 9 signal cap to candidates validated and scored at or above the configured final tradeability threshold.
    */
   public static applySignalCap<T = any>(
     qualifiedCandidates: Array<Gate9CappedCandidate<T>>

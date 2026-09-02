@@ -1,7 +1,7 @@
 /**
  * GATE 8 — FINAL TRADEABILITY THRESHOLD
  *
- * Enforces 75 as the strict FINAL tradeability threshold.
+ * `thresholds.signalThreshold` is the centralized authoritative final tradeability threshold.
  *
  * Final Score 10-Factor Weighted Breakdown:
  * - Trend alignment:        20  (Higher timeframe alignment & EMA stack)
@@ -18,19 +18,18 @@
  * TOTAL = 100
  *
  * Classification:
- * - < 60:    REJECT
- * - 60–69:   REJECT
- * - 70–74:   NEAR MISS / WATCHLIST
- * - 75–79:   VALID SIGNAL
- * - 80–84:   STRONG SIGNAL
- * - 85–89:   VERY STRONG SIGNAL
- * - 90–100:  EXCEPTIONAL
+ * - < watchingThreshold:                     REJECT
+ * - watchingThreshold – (signalThreshold - 1): NEAR MISS / WATCHLIST
+ * - signalThreshold – 79:                    VALID SIGNAL
+ * - 80–84:                                   STRONG SIGNAL
+ * - 85–89:                                   VERY STRONG SIGNAL
+ * - 90–100:                                  EXCEPTIONAL
  *
  * Acceptance criteria:
- * - 75 is the final threshold (never applied to preliminary screening).
- * - No candidate below 75 becomes tradeable.
+ * - `thresholds.signalThreshold` is the centralized authoritative final tradeability threshold (never applied to preliminary screening).
+ * - No candidate below `thresholds.signalThreshold` becomes tradeable.
  * - No score manipulation or automatic lowering to manufacture signals.
- * - If zero candidates reach 75 -> produce zero signals.
+ * - If zero candidates reach `thresholds.signalThreshold` -> produce zero signals.
  */
 
 import { SignalDirection } from '../../types/index.js';
@@ -86,7 +85,7 @@ export interface Gate8EvaluationResult {
   isTradeable: boolean;                // true ONLY if finalScore >= FINAL_TRADEABILITY_THRESHOLD
   rejectionReason: string | null;
   scoreRequirementPassed: boolean;
-  marginAboveThreshold: number;        // finalScore - 75
+  marginAboveThreshold: number;        // finalScore - configured final tradeability threshold
   confluenceHighlights: string[];
 }
 

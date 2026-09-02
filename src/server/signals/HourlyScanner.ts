@@ -124,6 +124,104 @@ export class HourlyScannerService {
   }
 
   /**
+   * Deduplicates rejection details across pipeline evaluations within the current scan cycle,
+   * producing one authoritative deduplicated rejection set and consistent categorized counters.
+   */
+  public static processRejectionDetails(allCandidateRejectionDetails: any[]): {
+    finalRejectedRecords: any[];
+    authoritativeRejectedCount: number;
+    finalCandidatesRejectedBeforeMTF: number;
+    finalCandidatesRejectedByMTF: number;
+    finalCandidatesRejectedByScore: number;
+    finalCandidatesRejectedByRR: number;
+    finalCandidatesRejectedByStructure: number;
+    authoritativeRejectionCounts: Record<string, number>;
+    rejectionReasonStrings: string[];
+  } {
+    const rejectedCandidateMap = new Map<string, any>();
+    for (const record of allCandidateRejectionDetails) {
+      if (
+        record.finalDecision === 'REJECTED' ||
+        (Array.isArray(record.failedGates) && record.failedGates.length > 0) ||
+        record.primaryRejectionReason
+      ) {
+        const key = `${record.symbol}_${record.direction || ''}`;
+        // Preserve the most complete/current evaluation record without merging historical failedGates
+        rejectedCandidateMap.set(key, record);
+      }
+    }
+
+    const finalRejectedRecords = Array.from(rejectedCandidateMap.values());
+    const authoritativeRejectedCount = finalRejectedRecords.length;
+
+    let finalCandidatesRejectedBeforeMTF = 0;
+    let finalCandidatesRejectedByMTF = 0;
+    let finalCandidatesRejectedByScore = 0;
+    let finalCandidatesRejectedByRR = 0;
+    let finalCandidatesRejectedByStructure = 0;
+    const authoritativeRejectionCounts: Record<string, number> = {};
+
+    for (const record of finalRejectedRecords) {
+      const failedGates: string[] = Array.isArray(record.failedGates) ? record.failedGates : [];
+      const reason: string = record.primaryRejectionReason || record.rejectionReason || record.reason || record.rejectionSummary || '';
+
+      const isBeforeMTF =
+        failedGates.includes('FINAL_SCORE_UNREACHABLE') ||
+        record.stage === 'Gate 6 Pre-Audit' ||
+        record.stage === 'Stage 0' ||
+        record.stage === 'Stage 1';
+      const isMTF = failedGates.includes('MTF_ALIGNMENT') || reason.includes('MTF');
+      const isScore =
+        failedGates.includes('FINAL_SCORE_BELOW_THRESHOLD') ||
+        failedGates.includes('SCORE_TOO_LOW') ||
+        failedGates.includes('SCORE') ||
+        failedGates.includes('FINAL_SCORE_UNREACHABLE') ||
+        reason.includes('SCORE');
+      const isRR =
+        failedGates.includes('RR') ||
+        failedGates.includes('RR_INVALID') ||
+        failedGates.includes('GROSS_RR_BELOW_THRESHOLD') ||
+        failedGates.includes('NET_RR_BELOW_THRESHOLD') ||
+        failedGates.includes('ADVERSE_NET_RR_BELOW_THRESHOLD') ||
+        reason.includes('RR');
+      const isStructure = failedGates.includes('MARKET_STRUCTURE') || reason.includes('STRUCTURE');
+
+      if (isBeforeMTF) finalCandidatesRejectedBeforeMTF++;
+      if (isMTF) finalCandidatesRejectedByMTF++;
+      if (isScore) finalCandidatesRejectedByScore++;
+      if (isRR) finalCandidatesRejectedByRR++;
+      if (isStructure) finalCandidatesRejectedByStructure++;
+
+      if (failedGates.length > 0) {
+        const uniqueGates = Array.from(new Set(failedGates));
+        for (const g of uniqueGates) {
+          authoritativeRejectionCounts[g] = (authoritativeRejectionCounts[g] || 0) + 1;
+        }
+      } else {
+        const match = reason.match(/REJECTED:\s*([A-Z0-9_]+)/);
+        const fallbackGate = match ? match[1] : 'OTHER_REJECTION';
+        authoritativeRejectionCounts[fallbackGate] = (authoritativeRejectionCounts[fallbackGate] || 0) + 1;
+      }
+    }
+
+    const rejectionReasonStrings = finalRejectedRecords.map(
+      (r) => `${r.symbol}${r.direction ? ` [${r.direction}]` : ''}: ${r.primaryRejectionReason || r.rejectionSummary || 'REJECTED'}`
+    );
+
+    return {
+      finalRejectedRecords,
+      authoritativeRejectedCount,
+      finalCandidatesRejectedBeforeMTF,
+      finalCandidatesRejectedByMTF,
+      finalCandidatesRejectedByScore,
+      finalCandidatesRejectedByRR,
+      finalCandidatesRejectedByStructure,
+      authoritativeRejectionCounts,
+      rejectionReasonStrings,
+    };
+  }
+
+  /**
    * Initializes the hourly scanner in Authoritative Cron-Driven Mode.
    * Background setInterval loop is removed to eliminate competing timers against cron-job.org.
    * All automated scans are driven authoritatively through /api/scanner/trigger.
@@ -1082,62 +1180,17 @@ export class HourlyScannerService {
         }
       }
 
-      // Calculate authoritative final scan-wide categorized counts directly from finalized rejection records
-      let finalCandidatesRejectedBeforeMTF = 0;
-      let finalCandidatesRejectedByMTF = 0;
-      let finalCandidatesRejectedByScore = 0;
-      let finalCandidatesRejectedByRR = 0;
-      let finalCandidatesRejectedByStructure = 0;
-      const authoritativeRejectionCounts: Record<string, number> = {};
-
-      for (const record of allCandidateRejectionDetails) {
-        if (record.finalDecision === 'REJECTED' || (record.failedGates && record.failedGates.length > 0)) {
-          const failedGates: string[] = record.failedGates || [];
-          const isBeforeMTF =
-            failedGates.includes('FINAL_SCORE_UNREACHABLE') ||
-            record.stage === 'Gate 6 Pre-Audit' ||
-            record.stage === 'Stage 0' ||
-            record.stage === 'Stage 1';
-          const isMTF = failedGates.includes('MTF_ALIGNMENT');
-          const isScore = failedGates.includes('FINAL_SCORE_BELOW_THRESHOLD');
-          const isRR = failedGates.includes('RR') || failedGates.includes('RR_INVALID');
-          const isStructure = failedGates.includes('MARKET_STRUCTURE');
-
-          if (isBeforeMTF) finalCandidatesRejectedBeforeMTF++;
-          if (isMTF) finalCandidatesRejectedByMTF++;
-          if (isScore) finalCandidatesRejectedByScore++;
-          if (isRR) finalCandidatesRejectedByRR++;
-          if (isStructure) finalCandidatesRejectedByStructure++;
-
-          if (failedGates.length > 0) {
-            const uniqueGates = Array.from(new Set(failedGates));
-            for (const g of uniqueGates) {
-              authoritativeRejectionCounts[g] = (authoritativeRejectionCounts[g] || 0) + 1;
-            }
-          } else {
-            authoritativeRejectionCounts['OTHER_REJECTION'] = (authoritativeRejectionCounts['OTHER_REJECTION'] || 0) + 1;
-          }
-        }
-      }
-
-      // Deduplicate records belonging to the SAME candidate within THIS scan
-      const rejectedCandidateMap = new Map<string, any>();
-      for (const record of allCandidateRejectionDetails) {
-        if (
-          record.finalDecision === 'REJECTED' ||
-          (Array.isArray(record.failedGates) && record.failedGates.length > 0)
-        ) {
-          const key = `${record.symbol}_${record.direction || ''}`;
-          rejectedCandidateMap.set(key, record);
-        }
-      }
-
-      const finalRejectedRecords = Array.from(rejectedCandidateMap.values());
-      const authoritativeRejectedCount = finalRejectedRecords.length;
-
-      const rejectionReasonStrings = finalRejectedRecords.map(
-        (r) => `${r.symbol}${r.direction ? ` [${r.direction}]` : ''}: ${r.primaryRejectionReason || r.rejectionSummary || 'REJECTED'}`
-      );
+      const {
+        finalRejectedRecords,
+        authoritativeRejectedCount,
+        finalCandidatesRejectedBeforeMTF,
+        finalCandidatesRejectedByMTF,
+        finalCandidatesRejectedByScore,
+        finalCandidatesRejectedByRR,
+        finalCandidatesRejectedByStructure,
+        authoritativeRejectionCounts,
+        rejectionReasonStrings,
+      } = HourlyScannerService.processRejectionDetails(allCandidateRejectionDetails);
 
       const scanDurationMs = Date.now() - scanStartTime;
 
@@ -1219,7 +1272,7 @@ export class HourlyScannerService {
         rejectionReasons: rejectionReasonStrings,
         rejectionReasonsAggregated: authoritativeRejectionCounts,
         rejectionReasonsCounts: authoritativeRejectionCounts,
-        candidateRejectionDetails: allCandidateRejectionDetails,
+        candidateRejectionDetails: finalRejectedRecords,
         diagnosticsCount: universeDiagnostics.length,
         diagnostics: diagnosticStrings,
         capState: finalCapState,

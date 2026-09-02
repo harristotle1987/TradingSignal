@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { Gate31NewsRiskClassification, ScheduledNewsEvent } from '../src/server/signals/Gate31NewsRiskClassification.js';
 import { HistoricalPerformanceManager } from '../src/server/signals/HistoricalPerformanceManager.js';
 import { StrategyPerformanceTracker, TradeOutcomeRecord } from '../src/server/signals/StrategyPerformanceTracker.js';
@@ -21,6 +23,7 @@ import { RiskRewardCalculator } from '../src/server/signals/RiskRewardCalculator
 import { Gate7FinalTradeValidation } from '../src/server/signals/Gate7FinalTradeValidation.js';
 import { Gate8TradeabilityThreshold } from '../src/server/signals/Gate8TradeabilityThreshold.js';
 import { Gate35SignalFunnelAnalytics, FunnelStage } from '../src/server/signals/Gate35SignalFunnelAnalytics.js';
+import { HourlyScannerService } from '../src/server/signals/HourlyScanner.js';
 import { ScoringEngine } from '../src/server/signals/ScoringEngine.js';
 import { logger } from '../src/server/logger.js';
 
@@ -1384,6 +1387,146 @@ async function runAll() {
         assert(lc.screenedCandidates === 1, `Expected 1 screened candidate, got ${lc.screenedCandidates}`);
         assert(lc.deepAnalysisCandidates === 1, `Expected 1 deep analysis candidate, got ${lc.deepAnalysisCandidates}`);
         assert(report.recordsCount === 1, `Expected 1 stored record count, got ${report.recordsCount}`);
+      });
+    });
+
+    // --- SUITE 7: GATE 7 HOURLYSCANNER REJECTION DEDUPLICATION AND COUNTER CONSISTENCY ---
+    await describe('SUITE 7: Gate 7 HourlyScanner Rejection Deduplication & Counter Consistency', async () => {
+      await test('18. Duplicate records: Multiple evaluation logs for the same candidate key produce 1 deduplicated rejection record', () => {
+        const rawLogs = [
+          {
+            symbol: 'SOLUSDT',
+            direction: 'BUY',
+            score: 70,
+            primaryRejectionReason: 'REJECTED: SCORE_TOO_LOW',
+            failedGates: ['FINAL_SCORE_BELOW_THRESHOLD'],
+            finalDecision: 'REJECTED',
+          },
+          {
+            symbol: 'SOLUSDT',
+            direction: 'BUY',
+            score: 70,
+            primaryRejectionReason: 'REJECTED: GROSS_RR_BELOW_THRESHOLD',
+            failedGates: ['RR'],
+            finalDecision: 'REJECTED',
+          },
+        ];
+
+        const res = HourlyScannerService.processRejectionDetails(rawLogs);
+
+        assert(res.finalRejectedRecords.length === 1, `Expected 1 deduplicated record, got ${res.finalRejectedRecords.length}`);
+        assert(res.authoritativeRejectedCount === 1, `Expected rejectedCount 1, got ${res.authoritativeRejectedCount}`);
+        assert(res.rejectionReasonStrings.length === 1, `Expected rejectionReasons.length 1, got ${res.rejectionReasonStrings.length}`);
+        assert(res.finalRejectedRecords[0].primaryRejectionReason === 'REJECTED: GROSS_RR_BELOW_THRESHOLD', 'Expected latest record reason');
+      });
+
+      await test('19. Two distinct candidates: BTCUSDT (BUY) and ETHUSDT (SELL) produce 2 distinct deduplicated records', () => {
+        const rawLogs = [
+          {
+            symbol: 'BTCUSDT',
+            direction: 'BUY',
+            score: 65,
+            primaryRejectionReason: 'REJECTED: SCORE_TOO_LOW',
+            failedGates: ['FINAL_SCORE_BELOW_THRESHOLD'],
+            finalDecision: 'REJECTED',
+          },
+          {
+            symbol: 'ETHUSDT',
+            direction: 'SELL',
+            score: 60,
+            primaryRejectionReason: 'REJECTED: MTF_ALIGNMENT',
+            failedGates: ['MTF_ALIGNMENT'],
+            finalDecision: 'REJECTED',
+          },
+        ];
+
+        const res = HourlyScannerService.processRejectionDetails(rawLogs);
+
+        assert(res.finalRejectedRecords.length === 2, `Expected 2 distinct records, got ${res.finalRejectedRecords.length}`);
+        assert(res.authoritativeRejectedCount === 2, `Expected rejectedCount 2, got ${res.authoritativeRejectedCount}`);
+        assert(res.rejectionReasonStrings.length === 2, `Expected 2 rejection reason strings, got ${res.rejectionReasonStrings.length}`);
+      });
+
+      await test('20. Multi-gate rejection: Candidate failing score and RR counts once as rejected and once in each category', () => {
+        const rawLogs = [
+          {
+            symbol: 'SOLUSDT',
+            direction: 'BUY',
+            score: 60,
+            primaryRejectionReason: 'REJECTED: SCORE_AND_RR',
+            failedGates: ['FINAL_SCORE_BELOW_THRESHOLD', 'RR'],
+            finalDecision: 'REJECTED',
+          },
+        ];
+
+        const res = HourlyScannerService.processRejectionDetails(rawLogs);
+
+        assert(res.authoritativeRejectedCount === 1, `Expected 1 total rejected candidate, got ${res.authoritativeRejectedCount}`);
+        assert(res.finalCandidatesRejectedByScore === 1, `Expected 1 score rejection, got ${res.finalCandidatesRejectedByScore}`);
+        assert(res.finalCandidatesRejectedByRR === 1, `Expected 1 RR rejection, got ${res.finalCandidatesRejectedByRR}`);
+        
+        // Category sum (1 + 1 = 2) exceeds total rejectedCount (1)
+        const categorySum = res.finalCandidatesRejectedByScore + res.finalCandidatesRejectedByRR;
+        assert(categorySum === 2 && categorySum > res.authoritativeRejectedCount, 'Category totals may exceed total rejectedCount');
+      });
+
+      await test('21. Historical versus current evaluation: Current evaluation overwrites older record without merging historical failedGates', () => {
+        const rawLogs = [
+          {
+            symbol: 'BTCUSDT',
+            direction: 'BUY',
+            score: 50,
+            primaryRejectionReason: 'REJECTED: FINAL_SCORE_UNREACHABLE',
+            failedGates: ['FINAL_SCORE_UNREACHABLE'],
+            finalDecision: 'REJECTED',
+          },
+          {
+            symbol: 'BTCUSDT',
+            direction: 'BUY',
+            score: 72,
+            primaryRejectionReason: 'REJECTED: MTF_ALIGNMENT',
+            failedGates: ['MTF_ALIGNMENT'],
+            finalDecision: 'REJECTED',
+          },
+        ];
+
+        const res = HourlyScannerService.processRejectionDetails(rawLogs);
+
+        assert(res.finalRejectedRecords.length === 1, `Expected 1 candidate record, got ${res.finalRejectedRecords.length}`);
+        const rec = res.finalRejectedRecords[0];
+        assert(rec.primaryRejectionReason === 'REJECTED: MTF_ALIGNMENT', 'Must preserve current evaluation reason');
+        assert(rec.failedGates.length === 1 && rec.failedGates[0] === 'MTF_ALIGNMENT', 'Must not merge historical failedGates');
+      });
+
+      await test('22. Counter consistency: candidateRejectionDetails.length === rejectedCount === candidatesRejectedFinal === rejectionReasons.length', () => {
+        const rawLogs = [
+          { symbol: 'ADAUSDT', direction: 'BUY', score: 55, primaryRejectionReason: 'REJECTED: SCORE_TOO_LOW', failedGates: ['FINAL_SCORE_BELOW_THRESHOLD'], finalDecision: 'REJECTED' },
+          { symbol: 'ADAUSDT', direction: 'BUY', score: 55, primaryRejectionReason: 'REJECTED: SCORE_TOO_LOW', failedGates: ['FINAL_SCORE_BELOW_THRESHOLD'], finalDecision: 'REJECTED' },
+          { symbol: 'XRPUSDT', direction: 'SELL', score: 62, primaryRejectionReason: 'REJECTED: RR', failedGates: ['RR'], finalDecision: 'REJECTED' },
+        ];
+
+        const res = HourlyScannerService.processRejectionDetails(rawLogs);
+
+        const candidateRejectionDetailsLength = res.finalRejectedRecords.length;
+        const rejectedCount = res.authoritativeRejectedCount;
+        const candidatesRejectedFinal = res.authoritativeRejectedCount;
+        const rejectionReasonsLength = res.rejectionReasonStrings.length;
+
+        assert(
+          candidateRejectionDetailsLength === rejectedCount &&
+          rejectedCount === candidatesRejectedFinal &&
+          candidatesRejectedFinal === rejectionReasonsLength,
+          `Inconsistent counters: candidateRejectionDetails (${candidateRejectionDetailsLength}), rejectedCount (${rejectedCount}), candidatesRejectedFinal (${candidatesRejectedFinal}), rejectionReasons (${rejectionReasonsLength})`
+        );
+        assert(rejectedCount === 2, `Expected exactly 2 deduplicated rejected candidates, got ${rejectedCount}`);
+      });
+
+      await test('23. Gate 10: StagedScannerPipeline uses candidatesThresholdPlusCount and rejectedThresholdPlusCount without stale 72Plus variable names', () => {
+        const pipelineContent = fs.readFileSync(path.join(process.cwd(), 'src/server/signals/StagedScannerPipeline.ts'), 'utf-8');
+        assert(!pipelineContent.includes('candidates72PlusCount'), 'StagedScannerPipeline.ts must not contain candidates72PlusCount');
+        assert(!pipelineContent.includes('rejected72PlusCount'), 'StagedScannerPipeline.ts must not contain rejected72PlusCount');
+        assert(pipelineContent.includes('candidatesThresholdPlusCount'), 'StagedScannerPipeline.ts must contain candidatesThresholdPlusCount');
+        assert(pipelineContent.includes('rejectedThresholdPlusCount'), 'StagedScannerPipeline.ts must contain rejectedThresholdPlusCount');
       });
     });
   });
