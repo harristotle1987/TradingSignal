@@ -11,7 +11,7 @@
  * final tradeability threshold
  *
  * Rules:
- * - After all validation (Gate 7 Hard Gates PASS + Gate 8 Score at or above the configured final tradeability threshold):
+ * - After all validation (Gate 7 Hard Gates PASS + Gate 8 score meets the configured final tradeability threshold):
  * - Allow a MAXIMUM of 3 tradeable signals per scan.
  * - If > 3 candidates pass:
  *     -> rank descending by final score

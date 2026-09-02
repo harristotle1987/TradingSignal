@@ -82,7 +82,7 @@ export interface Gate8EvaluationResult {
   finalScore: number;                  // 0 - 100
   factors: Gate8ScoreFactors;
   classification: Gate8ScoreClassification;
-  isTradeable: boolean;                // true ONLY if finalScore >= FINAL_TRADEABILITY_THRESHOLD
+  isTradeable: boolean;                // true ONLY if finalScore meets configured final tradeability threshold
   rejectionReason: string | null;
   scoreRequirementPassed: boolean;
   marginAboveThreshold: number;        // finalScore - configured final tradeability threshold
