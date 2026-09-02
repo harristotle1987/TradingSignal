@@ -456,7 +456,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
       setLastGenResult(result);
       if (result.candidateRejectionDetails) {
         const list72 = result.candidateRejectionDetails.filter(
-          (c: any) => c.is72PlusRejected || (c.score >= 70 || c.finalScore >= 70)
+          (c: any) => c.isQualifiedRejected || (c.score >= 70 || c.finalScore >= 70)
         );
         if (list72.length > 0) {
           setRejected72PlusCandidates((prev) => {

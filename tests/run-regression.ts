@@ -622,7 +622,7 @@ async function runAll() {
       const nvdaAudit = allRecords.find((r) => r.symbol === 'NVDA');
 
       assert(nvdaAudit !== undefined, 'Record for NVDA must exist');
-      assert(nvdaAudit?.is72PlusRejected === true, 'Candidate scoring 76 and rejected must be marked is72PlusRejected = true');
+      assert(nvdaAudit?.isQualifiedRejected === true, 'Candidate scoring 76 and rejected must be marked isQualifiedRejected = true');
       assert(nvdaAudit?.score === 76, 'Score must be preserved as 76');
       assert(nvdaAudit?.rejectionSummary !== undefined, 'Human-readable rejection summary must be generated for UI');
     });

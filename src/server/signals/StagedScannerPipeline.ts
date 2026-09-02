@@ -363,7 +363,7 @@ export async function runStagedPipeline(
 
       if (rej.stoppedAtLayer === 'BEFORE_MTF' || lowerReason.includes('final_score_unreachable')) {
         failedGates.push(StandardFailedGate.FINAL_SCORE_UNREACHABLE);
-        failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+        failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
       } else {
         failedGates.push(StandardFailedGate.MTF_ALIGNMENT);
         if (lowerReason.includes('atr') || lowerReason.includes('volatility')) {
@@ -374,7 +374,7 @@ export async function runStagedPipeline(
         }
         const sigThreshold = serverConfig.getConfig().thresholds.signalThreshold || 70;
         if (rej.compositeMtfScore < sigThreshold || rej.finalScore < sigThreshold) {
-          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
         }
       }
 
@@ -833,7 +833,7 @@ export async function runStagedPipeline(
         const reason = `Estimated win rate (${winRate}% <= ${effectiveMinWinProb}% threshold)`;
         const failedGates: StandardFailedGate[] = [StandardFailedGate.WIN_RATE_BELOW_THRESHOLD];
         if ((scoring.score || 0) < (thresholds.signalThreshold || 70)) {
-          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
         }
         if (finalRR < thresholds.minimumRR) {
           failedGates.push(StandardFailedGate.RR);
@@ -864,7 +864,7 @@ export async function runStagedPipeline(
         const reason = `Non-positive expectancy (${expectancy}R <= 0)`;
         const failedGates: StandardFailedGate[] = [StandardFailedGate.NEGATIVE_EXPECTANCY];
         if ((scoring.score || 0) < (thresholds.signalThreshold || 70)) {
-          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
         }
         if (finalRR < thresholds.minimumRR) {
           failedGates.push(StandardFailedGate.RR);
@@ -929,7 +929,7 @@ export async function runStagedPipeline(
       if (!gate8Eval.isTradeable) {
         const failedGates: StandardFailedGate[] = [];
         if (gate8Eval.finalScore < (thresholds.signalThreshold || 70) || gate8Eval.finalScore < 70) {
-          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
         }
         const factors: any = gate8Eval.factors || {};
         if (factors.trendAlignment !== undefined && factors.trendAlignment < 14) failedGates.push(StandardFailedGate.TREND);
@@ -943,7 +943,7 @@ export async function runStagedPipeline(
 
         if (failedGates.length === 0) {
           if (gate8Eval.finalScore < (thresholds.signalThreshold || 70)) {
-            failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_72);
+            failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
           } else {
             failedGates.push(StandardFailedGate.DATA_INTEGRITY);
           }

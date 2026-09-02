@@ -22,7 +22,7 @@ export interface RejectedCandidateTelemetry {
   statusText?: string;
   rejectionSummary?: string;
   timestamp?: number;
-  is72PlusRejected?: boolean;
+  isQualifiedRejected?: boolean;
   mtfStatus?: string;
   netRiskRewardRatio?: number;
 }
@@ -46,8 +46,8 @@ export function Rejected72PlusPanel({
       if (!cand) return false;
       const scoreVal = cand.score ?? cand.finalScore ?? cand.scoreBeforeGate6 ?? 0;
       const decision = cand.finalDecision ?? 'REJECTED';
-      const isRejected = decision === 'REJECTED' || cand.is72PlusRejected || cand.statusText?.includes('REJECTED');
-      const meetsScore = scoreVal >= 70 || cand.is72PlusRejected === true;
+      const isRejected = decision === 'REJECTED' || cand.isQualifiedRejected || cand.statusText?.includes('REJECTED');
+      const meetsScore = scoreVal >= 70 || cand.isQualifiedRejected === true;
       return meetsScore && isRejected;
     });
   }, [candidates]);
