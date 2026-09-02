@@ -111,11 +111,11 @@ class ConfigService {
 
     const thresholds: SignalThresholds = {
       minimumScore: authoritativeMinScore,
-      watchingThreshold: parseInt(process.env.THRESHOLD_WATCHING_SCORE || '68', 10),
-      qualifiedCandidateThreshold: parseInt(process.env.THRESHOLD_QUALIFIED_CANDIDATE_SCORE || '75', 10),
+      watchingThreshold: parseInt(process.env.THRESHOLD_WATCHING_SCORE || '65', 10),
+      qualifiedCandidateThreshold: parseInt(process.env.THRESHOLD_QUALIFIED_CANDIDATE_SCORE || '68', 10),
       signalThreshold: authoritativeMinScore,
-      minimumRR: parseFloat(process.env.THRESHOLD_MIN_RR || '1.8'),
-      minimumNetRR: parseFloat(process.env.THRESHOLD_MIN_NET_RR || '1.5'),
+      minimumRR: parseFloat(process.env.THRESHOLD_MIN_RR || '1.5'),
+      minimumNetRR: parseFloat(process.env.THRESHOLD_MIN_NET_RR || '1.2'),
       minimumAdverseNetRR: process.env.THRESHOLD_MIN_ADVERSE_NET_RR ? parseFloat(process.env.THRESHOLD_MIN_ADVERSE_NET_RR) : 1.0,
       enforceAdverseNetRRHardGate: process.env.ENFORCE_ADVERSE_NET_RR_HARD_GATE === 'true',
       minimumWinProbability: rawWinProb <= 1.0 ? rawWinProb * 100 : rawWinProb,

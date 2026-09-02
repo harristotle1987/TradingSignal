@@ -99,7 +99,7 @@ export class Gate34ExecutionFrictionStressTest {
 
     const direction = stopLoss < entryPrice ? 'BUY' : 'SELL';
     const cfg = serverConfig.getConfig().thresholds;
-    const minGrossRR = thresholdOverrides?.minimumRR ?? cfg.minimumRR ?? 1.80;
+    const minGrossRR = thresholdOverrides?.minimumRR ?? cfg.minimumRR ?? 1.50;
 
     const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, minGrossRR);
     const rawRisk = rrResult.riskDistance;

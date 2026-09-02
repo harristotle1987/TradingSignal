@@ -203,7 +203,7 @@ export class ScannerPersistence {
       enabled: true,
       notificationsEnabled: true,
       notifyOnNoTrade: false,
-      intervalMinutes: 30,
+      intervalMinutes: 15,
     },
   };
 
@@ -259,7 +259,7 @@ export class ScannerPersistence {
               enabled: parsed.settings?.enabled ?? true,
               notificationsEnabled: parsed.settings?.notificationsEnabled ?? true,
               notifyOnNoTrade: parsed.settings?.notifyOnNoTrade ?? false,
-              intervalMinutes: [15, 30, 45, 60].includes(parsedInterval) ? parsedInterval : 30,
+              intervalMinutes: [15, 30, 45, 60].includes(parsedInterval) ? parsedInterval : 15,
             },
           };
           logger.info('[ScannerPersistence] Loaded persisted scanner state from disk.');

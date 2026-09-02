@@ -83,7 +83,7 @@ export interface Gate8EvaluationResult {
   finalScore: number;                  // 0 - 100
   factors: Gate8ScoreFactors;
   classification: Gate8ScoreClassification;
-  isTradeable: boolean;                // true ONLY if finalScore >= 75
+  isTradeable: boolean;                // true ONLY if finalScore >= FINAL_TRADEABILITY_THRESHOLD
   rejectionReason: string | null;
   scoreRequirementPassed: boolean;
   marginAboveThreshold: number;        // finalScore - 75
@@ -145,7 +145,7 @@ export class Gate8TradeabilityThreshold {
 
     // Factor 8: R:R Quality (Weight: 5)
     // Net Risk-Reward evaluation
-    const effRr = input.netRiskRewardRatio ?? input.riskRewardRatio ?? 1.8;
+    const effRr = input.netRiskRewardRatio ?? input.riskRewardRatio ?? 1.5;
     let rrScore = 3.5;
     if (effRr >= 3.0) rrScore = 5.0;
     else if (effRr >= 2.5) rrScore = 4.5;

@@ -235,7 +235,7 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
     const capState = result.capState || await ScannerPersistence.getCapState();
     const intervalMinutes = [15, 30, 45, 60].includes(Number(settings.intervalMinutes))
       ? Number(settings.intervalMinutes)
-      : 30;
+      : 15;
     const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || 0;
     
     // Refresh cron status completely in the background without blocking the scanner trigger API

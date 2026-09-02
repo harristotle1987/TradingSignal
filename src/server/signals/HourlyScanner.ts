@@ -1238,7 +1238,7 @@ export class HourlyScannerService {
     const validIntervals = [15, 30, 45, 60];
     const intervalMinutes = validIntervals.includes(Number(settings.intervalMinutes))
       ? Number(settings.intervalMinutes)
-      : 30;
+      : 15;
 
     const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || 0;
     
@@ -1295,7 +1295,7 @@ export class HourlyScannerService {
       notifyOnNoTrade: settings.notifyOnNoTrade,
       intervalMinutes: [15, 30, 45, 60].includes(Number(settings.intervalMinutes))
         ? Number(settings.intervalMinutes)
-        : 30,
+        : 15,
       signalsSentTimestamps: [],
       lastScanTime: 0,
       limit: 5,
@@ -1311,7 +1311,7 @@ export class HourlyScannerService {
     if (options.intervalMinutes !== undefined) {
       const val = Number(options.intervalMinutes);
       if (![15, 30, 45, 60].includes(val)) {
-        options.intervalMinutes = 30;
+        options.intervalMinutes = 15;
       } else {
         options.intervalMinutes = val;
       }
