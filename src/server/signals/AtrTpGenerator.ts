@@ -51,8 +51,6 @@ export interface AtrTpInput {
   direction: SignalDirection;
   entryPrice: number;
   atr: number;
-  stopLoss?: number;
-  riskDistance?: number;
   precision?: number;
   isAggressive?: boolean;
   volatilityRegime?: VolatilityRegime;
@@ -190,25 +188,6 @@ export class AtrTpGenerator {
       tp2: { ...baseGuardrails.tp2, ...customGuardrails?.tp2 },
       tp3: { ...baseGuardrails.tp3, ...customGuardrails?.tp3 },
     };
-
-    // Calculate required 1.8R distance and target path if stopLoss or riskDistance is available
-    const riskDistance = input.riskDistance ?? (input.stopLoss && input.stopLoss > 0 ? Math.abs(entryPrice - input.stopLoss) : 0);
-    const required1_8R = riskDistance * 1.8;
-
-    if (riskDistance > 0) {
-      const maxTp3Dist = entryPrice * (guardrails.tp3.maxPct / 100);
-      if (required1_8R <= maxTp3Dist) {
-        if (isBuy) {
-          if (rawTp3 - entryPrice < required1_8R) {
-            rawTp3 = entryPrice + required1_8R;
-          }
-        } else {
-          if (entryPrice - rawTp3 < required1_8R) {
-            rawTp3 = entryPrice - required1_8R;
-          }
-        }
-      }
-    }
 
     const applyGuardrail = (rawTp: number, range: GuardrailRange): number => {
       return AtrTpGenerator.applyGuardrail(rawTp, range, entryPrice, isBuy);

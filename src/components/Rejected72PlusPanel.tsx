@@ -27,17 +27,17 @@ export interface RejectedCandidateTelemetry {
   netRiskRewardRatio?: number;
 }
 
-interface RejectedThresholdPanelProps {
+interface Rejected72PlusPanelProps {
   candidates?: RejectedCandidateTelemetry[];
   title?: string;
   compact?: boolean;
 }
 
-export function RejectedThresholdPanel({
+export function Rejected72PlusPanel({
   candidates = [],
   title = '70+ HIGH-SCORE REJECTED SETUPS',
   compact = false,
-}: RejectedThresholdPanelProps) {
+}: Rejected72PlusPanelProps) {
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
 
   const qualifyingCandidates = useMemo(() => {

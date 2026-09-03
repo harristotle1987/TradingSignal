@@ -33,8 +33,7 @@ export interface RrDiagnosticInput {
 /**
   * Logs the 10-point diagnostic for every candidate rejected by R:R.
   */
-export function logRrRejectionDiagnostic(input: RrDiagnosticInput, minRR?: number): void {
-  const effectiveMinRR = minRR ?? serverConfig.getConfig().thresholds.minimumRR;
+export function logRrRejectionDiagnostic(input: RrDiagnosticInput, minRR: number = 1.50): void {
   const {
     symbol,
     direction,
@@ -50,7 +49,7 @@ export function logRrRejectionDiagnostic(input: RrDiagnosticInput, minRR?: numbe
 
   const riskDistance = Math.abs(entryPrice - stopLoss);
   const isBuy = direction === 'BUY';
-  const requiredMinRTarget = isBuy ? entryPrice + (riskDistance * effectiveMinRR) : entryPrice - (riskDistance * effectiveMinRR);
+  const requiredMinRTarget = isBuy ? entryPrice + (riskDistance * minRR) : entryPrice - (riskDistance * minRR);
 
   const distTP1 = Math.abs(tp1 - entryPrice);
   const distTP2 = Math.abs(tp2 - entryPrice);
@@ -68,24 +67,24 @@ export function logRrRejectionDiagnostic(input: RrDiagnosticInput, minRR?: numbe
   const maxTp3Pct = upperAsset.includes('CRYPTO') ? 25 : (upperAsset.includes('FOREX') ? 8 : 15);
   const maxTp3AllowedDistance = entryPrice * (maxTp3Pct / 100);
 
-  const fartherTargetExists = (riskDistance * effectiveMinRR) <= maxTp3AllowedDistance;
+  const fartherTargetExists = (riskDistance * minRR) <= maxTp3AllowedDistance;
 
-  let fartherTargetRejectionReason = `No structural/liquidity target achieves ${effectiveMinRR}R within maximum TP guardrails.`;
+  let fartherTargetRejectionReason = `No structural/liquidity target achieves ${minRR}R within maximum TP guardrails.`;
   if (!fartherTargetExists) {
-    fartherTargetRejectionReason = `Required ${effectiveMinRR}R distance (${(riskDistance * effectiveMinRR).toFixed(4)}) exceeds maximum allowed TP3 guardrail distance (${maxTp3AllowedDistance.toFixed(4)}, ${maxTp3Pct}% of entry).`;
-  } else if (distTP3 / (riskDistance || 1) < effectiveMinRR) {
-    fartherTargetRejectionReason = `Generated TP3 R:R (${(distTP3 / (riskDistance || 1)).toFixed(2)}:1) remains below ${effectiveMinRR}:1 minimum requirement even at maximum structural/ATR expansion.`;
+    fartherTargetRejectionReason = `Required ${minRR}R distance (${(riskDistance * minRR).toFixed(4)}) exceeds maximum allowed TP3 guardrail distance (${maxTp3AllowedDistance.toFixed(4)}, ${maxTp3Pct}% of entry).`;
+  } else if (distTP3 / (riskDistance || 1) < minRR) {
+    fartherTargetRejectionReason = `Generated TP3 R:R (${(distTP3 / (riskDistance || 1)).toFixed(2)}:1) remains below ${minRR}:1 minimum requirement even at maximum structural/ATR expansion.`;
   }
 
   logger.info(`[R:R REJECTION DIAGNOSTIC] Symbol: ${symbol} (${direction})
   1. Entry Price: ${entryPrice}
   2. Final SL: ${stopLoss}
   3. Risk Distance: ${riskDistance.toFixed(6)}
-  4. Required ${effectiveMinRR}R Target: ${requiredMinRTarget.toFixed(6)}
+  4. Required ${minRR}R Target: ${requiredMinRTarget.toFixed(6)}
   5. Targets: TP1=${tp1}, TP2=${tp2}, TP3=${tp3}
   6. Target Distances: TP1=${distTP1.toFixed(6)}, TP2=${distTP2.toFixed(6)}, TP3=${distTP3.toFixed(6)}
   7. Structural Levels Used: 15m=${structural15m}, 1h=${structural1h}
-  8. ${effectiveMinRR}R Target Beyond Nearest Anchor: ${isMinRBeyondNearestAnchor} (anchor=${nearestAnchor})
+  8. ${minRR}R Target Beyond Nearest Anchor: ${isMinRBeyondNearestAnchor} (anchor=${nearestAnchor})
   9. Farther Target Exists Within Max TP3 Guardrail (${maxTp3Pct}%): ${fartherTargetExists}
  10. Farther Target Rejection Reason: ${fartherTargetRejectionReason}`);
 }
@@ -164,8 +163,7 @@ export class RiskRewardCalculator {
       tp3RR = Number((Math.abs(entryPrice - tp3) / riskDistance).toFixed(2));
     }
 
-    const tp2RewardDistance = Math.abs(tp2 - entryPrice);
-    const tp3RewardDistance = Math.abs(tp3 - entryPrice);
+    const grossRR = tp2RR;
 
     // Validate logical positioning and strict target ordering relative to direction
     const isOrdered = direction === 'BUY'
@@ -175,13 +173,13 @@ export class RiskRewardCalculator {
     if (!isOrdered) {
       return {
         riskDistance: Number(riskDistance.toFixed(4)),
-        rewardDistance: Number(tp2RewardDistance.toFixed(4)),
-        grossRR: tp2RR,
-        effectiveGrossRR: tp2RR,
+        rewardDistance: Number(Math.abs(tp2 - entryPrice).toFixed(4)),
+        grossRR,
+        effectiveGrossRR: grossRR,
         tp1RR,
         tp2RR,
         tp3RR,
-        primaryRR: tp2RR,
+        primaryRR: grossRR,
         isValid: false,
         passedViaTp3: false,
         reason: `Invalid SL/TP placement or ordering relative to entry for direction ${direction}: SL=${stopLoss}, TP1=${tp1}, TP2=${tp2}, TP3=${tp3}`,
@@ -189,32 +187,30 @@ export class RiskRewardCalculator {
     }
 
     // Multi-target R:R gate evaluation
-    // Condition 1: TP2 R:R >= configMinRR
-    // Condition 2: TP3 R:R >= configMinRR AND TP3 is structurally valid / ordered
+    // Condition 1: TP2 R:R >= minRR
+    // Condition 2: TP3 R:R >= minRR AND TP3 is structurally valid / ordered
     let passedViaTp3 = false;
     let effectiveGrossRR = tp2RR;
-    let evaluatedRewardDistance = tp2RewardDistance;
+    let evaluatedRewardDistance = Math.abs(tp2 - entryPrice);
 
     if (tp2RR >= configMinRR) {
       effectiveGrossRR = tp2RR;
       passedViaTp3 = false;
-      evaluatedRewardDistance = tp2RewardDistance;
+      evaluatedRewardDistance = Math.abs(tp2 - entryPrice);
     } else if (tp3RR >= configMinRR) {
       effectiveGrossRR = tp3RR;
       passedViaTp3 = true;
-      evaluatedRewardDistance = tp3RewardDistance;
+      evaluatedRewardDistance = Math.abs(tp3 - entryPrice);
     } else {
-      // Neither TP2 nor TP3 satisfies configMinRR.
-      // effectiveGrossRR represents the actual value evaluated against minimumRR (the best achievable between TP2 and TP3)
-      effectiveGrossRR = tp3RR > tp2RR ? tp3RR : tp2RR;
+      effectiveGrossRR = tp2RR;
       passedViaTp3 = false;
-      evaluatedRewardDistance = tp3RR > tp2RR ? tp3RewardDistance : tp2RewardDistance;
+      evaluatedRewardDistance = Math.abs(tp2 - entryPrice);
     }
 
     return {
       riskDistance: Number(riskDistance.toFixed(4)),
       rewardDistance: Number(evaluatedRewardDistance.toFixed(4)),
-      grossRR: tp2RR,
+      grossRR,
       effectiveGrossRR,
       tp1RR,
       tp2RR,

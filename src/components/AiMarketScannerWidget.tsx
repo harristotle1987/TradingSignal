@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { api } from '../api/client.js';
 import { TradingSignal } from '../types/index.js';
-import { RejectedThresholdPanel } from './RejectedThresholdPanel.js';
+import { Rejected72PlusPanel } from './Rejected72PlusPanel.js';
 import {
   Sparkles,
   X,
@@ -357,12 +357,12 @@ export function AiMarketScannerWidget({
                             )}
                           </div>
                           {scanResult.candidateRejectionDetails.map((cand: any, i: number) => {
-                            const isThresholdPlus = cand.isQualifiedRejected || (cand.score >= 70 || cand.finalScore >= 70) && cand.finalDecision === 'REJECTED';
+                            const is72Plus = cand.isQualifiedRejected || (cand.score >= 70 || cand.finalScore >= 70) && cand.finalDecision === 'REJECTED';
                             return (
                               <div
                                 key={i}
                                 className={`p-2 rounded border space-y-1 ${
-                                  isThresholdPlus
+                                  is72Plus
                                     ? 'bg-rose-950/20 border-rose-900/60 text-slate-200'
                                     : 'bg-slate-900/60 border-slate-800/80 text-slate-300'
                                 }`}
@@ -376,12 +376,12 @@ export function AiMarketScannerWidget({
                                       </span>
                                     )}
                                   </div>
-                                  <span className={`px-1.5 py-0.2 rounded text-[8.5px] font-bold ${isThresholdPlus ? 'bg-amber-950 text-amber-300 border border-amber-800/80' : 'bg-slate-800 text-slate-400'}`}>
+                                  <span className={`px-1.5 py-0.2 rounded text-[8.5px] font-bold ${is72Plus ? 'bg-amber-950 text-amber-300 border border-amber-800/80' : 'bg-slate-800 text-slate-400'}`}>
                                     Score: {cand.score || cand.finalScore}/100
                                   </span>
                                 </div>
 
-                                {isThresholdPlus && (
+                                {is72Plus && (
                                   <div className="inline-block px-1.5 py-0.2 bg-rose-900/50 text-rose-300 text-[8px] font-bold rounded border border-rose-700/60 tracking-wide uppercase">
                                     STATUS: {cand.statusText || 'REJECTED — NOT TRADEABLE'}
                                   </div>
@@ -436,9 +436,9 @@ export function AiMarketScannerWidget({
                   )}
                 </div>
 
-                {/* Dedicated HIGH-SCORE REJECTED SETUPS Panel */}
+                {/* Dedicated 72+ HIGH-SCORE REJECTED SETUPS Panel */}
                 {scanResult.candidateRejectionDetails && scanResult.candidateRejectionDetails.length > 0 && (
-                  <RejectedThresholdPanel candidates={scanResult.candidateRejectionDetails} compact={true} />
+                  <Rejected72PlusPanel candidates={scanResult.candidateRejectionDetails} compact={true} />
                 )}
               </div>
             )}

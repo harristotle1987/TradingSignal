@@ -703,7 +703,6 @@ export class SignalValidator {
     const atrGen = AtrTpGenerator.generate({
       direction,
       entryPrice,
-      stopLoss,
       atr,
       precision,
       assetClass,

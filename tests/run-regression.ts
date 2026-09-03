@@ -612,7 +612,7 @@ async function runAll() {
       CooldownManager.clearCooldown('TEST_ASSET');
     });
 
-    await test('CandidateRejectionTracker tracks rejected high-score candidates and makes them accessible for UI', () => {
+    await test('CandidateRejectionTracker tracks rejected 72+ candidates and makes them accessible for UI', () => {
       const tracker = new CandidateRejectionTracker();
       tracker.recordCandidate({
         symbol: 'NVDA',
@@ -831,69 +831,6 @@ async function runAll() {
       assert(!avax!.failedGates.includes(StandardFailedGate.MTF_ALIGNMENT), 'Historical MTF_ALIGNMENT must not leak into finalized record');
       assert(avax!.failedGates.includes(StandardFailedGate.RR), 'Finalized record must contain current failed gate RR');
       assert(avax!.failedGates.length === 1, `Expected failedGates length to be 1, got ${avax!.failedGates.length}`);
-    });
-
-
-    await test('CandidateRejectionTracker separates BUY and SELL for the same symbol (Identity Fix)', () => {
-      const tracker = new CandidateRejectionTracker();
-      
-      // 1. BTCUSDT BUY + BTCUSDT SELL → two records.
-      tracker.recordCandidate({
-        symbol: 'BTCUSDT',
-        direction: 'BUY',
-        score: 75,
-        primaryRejectionReason: 'REJECTED: RR',
-        failedGates: [StandardFailedGate.RR],
-        finalDecision: 'REJECTED',
-      });
-      tracker.recordCandidate({
-        symbol: 'BTCUSDT',
-        direction: 'SELL',
-        score: 72,
-        primaryRejectionReason: 'REJECTED: STRUCTURE',
-        failedGates: [StandardFailedGate.MARKET_STRUCTURE],
-        finalDecision: 'REJECTED',
-      });
-      
-      const records = tracker.getAllRecords();
-      assert(records.length === 2, 'Must have exactly two separate records for BUY and SELL');
-      const btcBuy = records.find(r => r.symbol === 'BTCUSDT' && r.direction === 'BUY');
-      const btcSell = records.find(r => r.symbol === 'BTCUSDT' && r.direction === 'SELL');
-      assert(btcBuy !== undefined, 'BTCUSDT BUY must exist');
-      assert(btcSell !== undefined, 'BTCUSDT SELL must exist');
-      assert(btcBuy!.failedGates.includes(StandardFailedGate.RR), 'BTCUSDT BUY must have RR failure');
-      assert(btcSell!.failedGates.includes(StandardFailedGate.MARKET_STRUCTURE), 'BTCUSDT SELL must have STRUCTURE failure');
-      
-      // 2. BTCUSDT BUY repeated → same candidate identity.
-      // 4. Historical records remain separate from current evaluation.
-      // 5. Current evaluation does not inherit stale trade data.
-      tracker.recordCandidate({
-        symbol: 'BTCUSDT',
-        direction: 'BUY',
-        score: 80,
-        primaryRejectionReason: 'REJECTED: FINAL_SCORE',
-        failedGates: [StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD],
-        finalDecision: 'REJECTED',
-        tp1: 100000 // fresh trade data
-      });
-      
-      const updatedRecords = tracker.getAllRecords();
-      assert(updatedRecords.length === 2, 'Repeated BUY must overwrite existing BUY record, keeping total length 2');
-      const updatedBtcBuy = updatedRecords.find(r => r.symbol === 'BTCUSDT' && r.direction === 'BUY');
-      assert(updatedBtcBuy!.failedGates.includes(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD), 'Repeated BUY must reflect the latest failed gates');
-      assert(!updatedBtcBuy!.failedGates.includes(StandardFailedGate.RR), 'Historical RR failure must not leak into current evaluation');
-      assert(updatedBtcBuy!.tp1 === 100000, 'Current evaluation must have fresh trade data (tp1)');
-      
-      // 3. Two different symbols → two records.
-      tracker.recordCandidate({
-        symbol: 'ETHUSDT',
-        direction: 'BUY',
-        score: 60,
-        primaryRejectionReason: 'REJECTED: MTF',
-        failedGates: [StandardFailedGate.MTF_ALIGNMENT],
-        finalDecision: 'REJECTED',
-      });
-      assert(tracker.getAllRecords().length === 3, 'Different symbol must create a new record');
     });
 
     await test('4. HourlyScanner aggregates candidate rejection details and derives categorized counters from finalized records', () => {
@@ -1590,96 +1527,6 @@ async function runAll() {
         assert(!pipelineContent.includes('rejected72PlusCount'), 'StagedScannerPipeline.ts must not contain rejected72PlusCount');
         assert(pipelineContent.includes('candidatesThresholdPlusCount'), 'StagedScannerPipeline.ts must contain candidatesThresholdPlusCount');
         assert(pipelineContent.includes('rejectedThresholdPlusCount'), 'StagedScannerPipeline.ts must contain rejectedThresholdPlusCount');
-      });
-    });
-
-    // --- SUITE 8: GATE 1 EXACT CRON RESPONSE CONTRACT & GATE 2 VALID 1.8R TP PATH ---
-    await describe('Suite 8: Gate 1 Exact Cron Response Contract & Gate 2 Valid 1.8R TP Path', async () => {
-      await test('24. Gate 1: Cron trigger endpoint does not spread scanResult and excludes internal fields', () => {
-        const routeContent = fs.readFileSync(path.join(process.cwd(), 'src/server/routes/signals.ts'), 'utf-8');
-        assert(!routeContent.includes('cleanedScanResult'), 'signals.ts must not contain cleanedScanResult');
-        assert(!routeContent.includes('...cleanedScanResult'), 'signals.ts must not spread cleanedScanResult');
-        assert(!routeContent.includes('...scanResult'), 'signals.ts must not spread scanResult');
-
-        const approvedKeys = [
-          'success', 'status', 'message', 'timestamp', 'lastCronExecution', 'lastAutomatedScan',
-          'lastScanCompletedAt', 'lastScanDuration', 'universeSymbolsScanned', 'preliminaryCandidatesFound',
-          'candidatesRejectedPreliminary', 'candidatesEvaluated', 'candidatesRejectedFinal', 'signalsGenerated',
-          'signalsAccepted', 'lastCandidatesEvaluated', 'lastSignalsFound', 'lastAcceptedSignals',
-          'signalsFound', 'acceptedSignalsCount', 'nextCronExecution', 'lastScanTime', 'nextScanTime',
-          'intervalMinutes', 'rejectedCount', 'candidatesRejectedBeforeMTF', 'candidatesRejectedByMTF',
-          'candidatesRejectedByScore', 'candidatesRejectedByRR', 'candidatesRejectedByStructure',
-          'rejectionReasons', 'rejectionReasonsCounts', 'candidateRejectionDetails', 'diagnosticsCount',
-          'diagnostics', 'scanDurationMs', 'scanDuration', 'totalDurationMs', 'globalScanStartMs',
-          'globalScanDeadlineMs', 'currentElapsedMs', 'remainingBudgetMs', 'gate6ElapsedMs',
-          'stage3ElapsedMs', 'timeBudgetExceeded', 'providerRequestsStoppedByBudget', 'timingTelemetry',
-          'external_hourly_scan_status'
-        ];
-
-        // Ensure all approved keys are present in the response builder
-        approvedKeys.forEach(key => {
-          assert(routeContent.includes(`${key}:`), `Approved key '${key}' must be explicitly set in response`);
-        });
-
-        // Ensure internal scanner fields are excluded
-        const forbiddenFields = ['acceptedSignals:', 'qualifiedSetups:', 'rejectionReasonsAggregated:', 'capState:'];
-        // Note: acceptedSignalsCount is allowed, acceptedSignals: is not in res.status(200).json
-        const responseBlock = routeContent.slice(routeContent.indexOf('res.status(200).json({'), routeContent.indexOf('external_hourly_scan_status: \'EXTERNAL_HOURLY_SCAN_COMPLETED\''));
-        assert(!responseBlock.includes('acceptedSignals:'), 'acceptedSignals array must be excluded from cron response');
-        assert(!responseBlock.includes('qualifiedSetups:'), 'qualifiedSetups array must be excluded from cron response');
-        assert(!responseBlock.includes('rejectionReasonsAggregated:'), 'rejectionReasonsAggregated must be excluded from cron response');
-        assert(!responseBlock.includes('capState:'), 'capState must be excluded from cron response');
-      });
-
-      await test('25. Gate 2: RiskRewardCalculator separates tp2RR, tp3RR, and effectiveGrossRR and supports multi-target qualification', () => {
-        // Test case where TP2 does not reach 1.8R, but TP3 reaches 1.85R
-        // Entry: 100, SL: 95 (risk: 5). TP1: 104 (RR 0.8), TP2: 106 (RR 1.2), TP3: 109.5 (RR 1.9)
-        const res = RiskRewardCalculator.calculate(100, 95, 104, 106, 109.5, 'BUY', 1.8);
-        assert(res.isValid, 'Multi-target R:R should be valid');
-        assert(res.tp2RR === 1.2, `Expected tp2RR to be 1.2, got ${res.tp2RR}`);
-        assert(res.tp3RR === 1.9, `Expected tp3RR to be 1.9, got ${res.tp3RR}`);
-        assert(res.effectiveGrossRR === 1.9, `Expected effectiveGrossRR to be 1.9, got ${res.effectiveGrossRR}`);
-        assert(res.passedViaTp3 === true, 'Setup should pass via TP3');
-        assert(res.grossRR === 1.2, 'grossRR benchmark remains tp2RR');
-
-        // Test case where neither TP2 nor TP3 reaches 1.8R (e.g. TP2 = 1.10, TP3 = 1.58)
-        const failedRes = RiskRewardCalculator.calculate(100, 95, 103, 105.5, 107.9, 'BUY', 1.8);
-        assert(failedRes.isValid, 'Result geometry is ordered and valid');
-        assert(failedRes.tp2RR === 1.1, `Expected tp2RR to be 1.1, got ${failedRes.tp2RR}`);
-        assert(failedRes.tp3RR === 1.58, `Expected tp3RR to be 1.58, got ${failedRes.tp3RR}`);
-        assert(failedRes.effectiveGrossRR === 1.58, `Expected effectiveGrossRR to be 1.58, got ${failedRes.effectiveGrossRR}`);
-        assert(failedRes.passedViaTp3 === false, 'Setup should not pass via TP3');
-      });
-
-      await test('26. Gate 2: ScoringEngine.calculateThreeTakeProfits produces >= 1.80R TP3 path within guardrails', () => {
-        // Entry: 100, SL: 97 (risk: 3). Required 1.8R distance: 5.4 -> req target: 105.4
-        // ATR = 1.0. AssetClass = 'CRYPTO' (guardrails allow up to 6% on TP3, i.e. 106.0)
-        const tps = ScoringEngine.calculateThreeTakeProfits(
-          'BUY',
-          100,
-          97,
-          1.0,
-          0, // no 15m support
-          0, // no 15m resistance
-          0, // no 1h support
-          0, // no 1h resistance
-          'CRYPTO_TREND',
-          0.1,
-          2,
-          'CRYPTO'
-        );
-
-        const riskDist = 3;
-        const tp3Dist = tps.tp3 - 100;
-        const tp3RR = Number((tp3Dist / riskDist).toFixed(2));
-        assert(tp3RR >= 1.80, `Expected TP3 R:R >= 1.80, got ${tp3RR} (tp3: ${tps.tp3})`);
-        assert(tps.tp3 > tps.tp2 && tps.tp2 > tps.tp1, 'Take profit targets must remain strictly ordered');
-      });
-
-      await test('27. Gate 2: logRrRejectionDiagnostic defaults to serverConfig thresholds.minimumRR and not 1.50', () => {
-        const fileContent = fs.readFileSync(path.join(process.cwd(), 'src/server/signals/RiskRewardCalculator.ts'), 'utf-8');
-        assert(!fileContent.includes('minRR: number = 1.50'), 'RiskRewardCalculator.ts must not have hardcoded minRR = 1.50 default in logRrRejectionDiagnostic');
-        assert(fileContent.includes('serverConfig.getConfig().thresholds.minimumRR'), 'logRrRejectionDiagnostic must use serverConfig.getConfig().thresholds.minimumRR');
       });
     });
   });

@@ -78,7 +78,6 @@ export interface CandidateRejectionAudit {
   tp2?: number;
   tp3?: number;
   grossRR?: number;
-  effectiveGrossRR?: number;
   primaryRR?: number;
   tp1RR?: number;
   tp2RR?: number;
@@ -168,21 +167,19 @@ export class CandidateRejectionTracker {
     if (cleanAudit.tp2 === 0) delete cleanAudit.tp2;
     if (cleanAudit.tp3 === 0) delete cleanAudit.tp3;
     if (cleanAudit.grossRR === 0) delete cleanAudit.grossRR;
-    if (cleanAudit.effectiveGrossRR === 0) delete cleanAudit.effectiveGrossRR;
     if (cleanAudit.primaryRR === 0) delete cleanAudit.primaryRR;
     if (cleanAudit.tp1RR === 0) delete cleanAudit.tp1RR;
     if (cleanAudit.tp2RR === 0) delete cleanAudit.tp2RR;
     if (cleanAudit.tp3RR === 0) delete cleanAudit.tp3RR;
 
-    const candidateKey = `${cleanAudit.symbol}_${cleanAudit.direction}`;
-    const existing = this.records.get(candidateKey);
+    const existing = this.records.get(cleanAudit.symbol);
     if (existing) {
       // Telemetry strictly reflects the CURRENT evaluation's failed gates,
       // never a union of historical failed gates.
       const everReachedThreshold = (existing.score >= minThreshold) || (existing.scoreBeforeGate6 ?? 0) >= minThreshold || (existing.everReachedThreshold === true) || isThresholdPlusRejected;
       const isStillThresholdPlusRejected = (everReachedThreshold || effectiveScore >= minThreshold) && cleanAudit.finalDecision === 'REJECTED';
 
-      this.records.set(candidateKey, {
+      this.records.set(cleanAudit.symbol, {
         ...cleanAudit,
         score: effectiveScore,
         finalScore: cleanAudit.finalScore ?? effectiveScore,
@@ -194,7 +191,7 @@ export class CandidateRejectionTracker {
         timestamp,
       });
     } else {
-      this.records.set(candidateKey, {
+      this.records.set(cleanAudit.symbol, {
         ...cleanAudit,
         score: effectiveScore,
         finalScore: cleanAudit.finalScore ?? effectiveScore,
@@ -208,7 +205,7 @@ export class CandidateRejectionTracker {
     }
 
     // Output structured console log for candidate rejection audit
-    this.logCandidateAudit(this.records.get(candidateKey)!);
+    this.logCandidateAudit(this.records.get(cleanAudit.symbol)!);
   }
 
   /**
