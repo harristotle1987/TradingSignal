@@ -212,97 +212,99 @@ const handleScannerTrigger = async (req: Request, res: Response) => {
   logger.info(`[Scanner Diagnostic] EXTERNAL_HOURLY_SCAN_TRIGGERED | Date.now(): ${now} | ISO UTC: ${new Date(now).toISOString()} | Runtime TZ: ${configuredTz}`);
 
   try {
-    // Directly invoke Market Scan Engine as the single automated scan trigger
-    logger.info(`[Scanner Trigger] MARKET_SCAN_ENGINE_START | triggerTime: ${Date.now()}`);
-    const scanEngineStartTime = Date.now();
-    const result = await hourlyScanner.triggerAutomatedScan(true, requestStartTime);
-    const scanEngineDurationMs = Date.now() - scanEngineStartTime;
-    logger.info(`[Scanner Trigger] MARKET_SCAN_ENGINE_END | duration: ${scanEngineDurationMs}ms | status: ${result.status} | candidates: ${result.candidatesEvaluated} | accepted: ${result.acceptedSignalsCount}`);
-
-    let statusLog = '';
-    if (result.status === 'COMPLETED') {
-      logger.info('EXTERNAL_HOURLY_SCAN_COMPLETED');
-      statusLog = 'EXTERNAL_HOURLY_SCAN_COMPLETED';
-    } else if (result.status === 'SKIPPED_CAP_REACHED' || result.status === 'SCAN_ALREADY_RUNNING') {
-      logger.info('EXTERNAL_HOURLY_SCAN_SKIPPED');
-      statusLog = 'EXTERNAL_HOURLY_SCAN_SKIPPED';
-    } else {
-      logger.error('EXTERNAL_HOURLY_SCAN_FAILED');
-      statusLog = 'EXTERNAL_HOURLY_SCAN_FAILED';
+    const { serverConfig } = await import('../config.js');
+    
+    // 2. Perform existing daily-cap, lock, and duplicate-run checks exactly as now
+    if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
+      return res.status(200).json({
+        success: false,
+        status: 'PERSISTENCE_UNAVAILABLE_DEGRADED',
+        message: 'REJECTED: PRODUCTION_PERSISTENCE_UNAVAILABLE. Firebase Service Account required for automated scanner dispatch in production.',
+        timestamp: Date.now()
+      });
     }
 
+    const instanceId = Math.random().toString(36).substring(2, 9);
+    const lockResult = await ScannerPersistence.tryAcquireLock(instanceId);
+    if (!lockResult.acquired) {
+      return res.status(200).json({
+        success: false,
+        status: 'SCAN_ALREADY_RUNNING',
+        message: 'REJECTED: SCAN_ALREADY_RUNNING. Another scan cycle is currently in progress.',
+        timestamp: Date.now()
+      });
+    }
+    // Release immediately to allow background scan to acquire it
+    await ScannerPersistence.releaseLock(instanceId);
+
+    const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
+    const dailyCap = capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap;
+    
+    if (capState.dailySignalCount >= dailyCap) {
+      return res.status(200).json({
+        success: true,
+        status: 'SKIPPED_CAP_REACHED',
+        message: `REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (${capState.dailySignalCount}/${dailyCap}). Preserving risk limits.`,
+        timestamp: Date.now()
+      });
+    }
+
+    // 3. Execute hourlyScanner.triggerAutomatedScan(...) and await the full scan
+    logger.info(`[Scanner Trigger] MARKET_SCAN_ENGINE_START | triggerTime: ${Date.now()}`);
+    const scanResult = await hourlyScanner.triggerAutomatedScan(true, requestStartTime);
+
     const settings = ScannerPersistence.getSettings();
-    const capState = result.capState || await ScannerPersistence.getCapState();
     const intervalMinutes = [15, 30, 45, 60].includes(Number(settings.intervalMinutes))
       ? Number(settings.intervalMinutes)
       : 15;
-    const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || 0;
+    
+    const finalCapState = (scanResult as any).capState || capState;
+    const lastAutomatedScan = finalCapState.lastAutomatedScan || finalCapState.lastScanTime || 0;
     
     // Refresh cron status completely in the background without blocking the scanner trigger API
     CronJobOrgService.getJobStatus(false).catch((err) => {
       logger.debug('[Scanner Route] Background cron status update deferred', { error: String(err) });
     });
-
+    
     const cachedCron = CronJobOrgService.getCachedStatus();
     const nextCronExecution = cachedCron?.nextExecution?.timestamp || (lastAutomatedScan + intervalMinutes * 60 * 1000);
     const nextScanTime = nextCronExecution;
-
-    const httpCode = result.status === 'ERROR' ? 500 : 200;
-    const durationMs = result.scanDurationMs ?? (Date.now() - now);
     const totalRequestDurationMs = Date.now() - requestStartTime;
+    logger.info(`[Scanner Trigger] TOTAL_DURATION | duration: ${totalRequestDurationMs}ms | status: COMPLETED`);
 
-    logger.info(`[Scanner Trigger] TOTAL_DURATION | duration: ${totalRequestDurationMs}ms | scanEngineDuration: ${durationMs}ms`);
+    const scanDuration = typeof (scanResult as any).scanDurationMs === 'number' 
+      ? `${((scanResult as any).scanDurationMs / 1000).toFixed(2)}s` 
+      : undefined;
 
-    // Fast, lightweight HTTP response for cron scheduler with complete state metrics
-    res.status(httpCode).json({
-      success: result.success,
-      status: result.status,
-      message: result.message,
-      timestamp: result.timestamp || Date.now(),
-      lastCronExecution: now,
-      lastAutomatedScan,
-      lastScanCompletedAt: capState.lastScanCompletedAt || Date.now(),
-      lastScanDuration: durationMs,
-      universeSymbolsScanned: result.universeSymbolsScanned ?? capState.universeSymbolsScanned ?? 0,
-      preliminaryCandidatesFound: result.preliminaryCandidatesFound ?? capState.preliminaryCandidatesFound ?? 0,
-      candidatesRejectedPreliminary: result.candidatesRejectedPreliminary ?? capState.candidatesRejectedPreliminary ?? 0,
-      candidatesEvaluated: result.candidatesEvaluated ?? capState.candidatesEvaluated ?? 0,
-      candidatesRejectedFinal: result.candidatesRejectedFinal ?? capState.candidatesRejectedFinal ?? (result.rejectedCount ?? 0),
-      signalsGenerated: result.signalsGenerated ?? result.signalsFound ?? capState.signalsGenerated ?? 0,
-      signalsAccepted: result.signalsAccepted ?? result.acceptedSignalsCount ?? capState.signalsAccepted ?? 0,
-      lastCandidatesEvaluated: result.candidatesEvaluated ?? capState.lastCandidatesEvaluated ?? 0,
-      lastSignalsFound: result.signalsFound ?? result.acceptedSignalsCount ?? capState.lastSignalsFound ?? 0,
-      lastAcceptedSignals: result.acceptedSignalsCount ?? capState.lastAcceptedSignals ?? 0,
-      signalsFound: result.signalsFound ?? result.acceptedSignalsCount ?? capState.lastSignalsFound ?? 0,
-      acceptedSignalsCount: result.acceptedSignalsCount ?? capState.lastAcceptedSignals ?? 0,
-      nextCronExecution,
-      lastScanTime: lastAutomatedScan,
-      nextScanTime,
-      intervalMinutes,
-      rejectedCount: result.rejectedCount ?? 0,
-      candidatesRejectedBeforeMTF: result.candidatesRejectedBeforeMTF ?? 0,
-      candidatesRejectedByMTF: result.candidatesRejectedByMTF ?? 0,
-      candidatesRejectedByScore: result.candidatesRejectedByScore ?? 0,
-      candidatesRejectedByRR: result.candidatesRejectedByRR ?? 0,
-      candidatesRejectedByStructure: result.candidatesRejectedByStructure ?? 0,
-      rejectionReasons: result.rejectionReasons ?? [],
-      rejectionReasonsCounts: result.rejectionReasonsCounts ?? result.rejectionReasonsAggregated ?? {},
-      candidateRejectionDetails: result.candidateRejectionDetails ?? [],
-      diagnosticsCount: result.diagnosticsCount ?? 0,
-      diagnostics: result.diagnostics ?? [],
-      scanDurationMs: durationMs,
-      scanDuration: `${(durationMs / 1000).toFixed(2)}s`,
-      totalDurationMs: totalRequestDurationMs,
-      globalScanStartMs: result.globalScanStartMs ?? requestStartTime,
-      globalScanDeadlineMs: result.globalScanDeadlineMs ?? (requestStartTime + 24000),
-      currentElapsedMs: result.currentElapsedMs ?? (Date.now() - requestStartTime),
-      remainingBudgetMs: result.remainingBudgetMs ?? Math.max(0, (requestStartTime + 24000) - Date.now()),
-      gate6ElapsedMs: result.gate6ElapsedMs ?? 0,
-      stage3ElapsedMs: result.stage3ElapsedMs ?? 0,
-      timeBudgetExceeded: result.timeBudgetExceeded ?? false,
-      providerRequestsStoppedByBudget: result.providerRequestsStoppedByBudget ?? false,
-      timingTelemetry: result.timingTelemetry,
-      external_hourly_scan_status: statusLog
+    // 4. Explicitly construct the response object using ONLY the approved cron response contract
+    res.status(200).json({
+      success: true,
+      status: 'COMPLETED',
+      message: scanResult.message,
+
+      timestamp: Date.now(),
+
+      lastCronExecution: (scanResult as any).lastCronExecution ?? finalCapState.lastCronExecution ?? now,
+      lastAutomatedScan: (scanResult as any).lastAutomatedScan ?? finalCapState.lastAutomatedScan ?? scanResult.lastScanTime ?? 0,
+      lastScanCompletedAt: (scanResult as any).lastScanCompletedAt ?? finalCapState.lastScanCompletedAt ?? Date.now(),
+      lastScanDuration: (scanResult as any).lastScanDuration ?? finalCapState.lastScanDuration ?? scanResult.scanDurationMs ?? 0,
+
+      universeSymbolsScanned: scanResult.universeSymbolsScanned ?? 0,
+      preScreenCandidates: (scanResult as any).preScreenCandidates ?? scanResult.preliminaryCandidatesFound ?? 0,
+      deepAnalysisCandidates: (scanResult as any).deepAnalysisCandidates ?? scanResult.candidatesEvaluated ?? 0,
+      signalsGenerated: scanResult.signalsGenerated ?? 0,
+
+      globalScanStartMs: scanResult.globalScanStartMs ?? scanResult.timingTelemetry?.globalScanStartMs ?? 0,
+      globalScanDeadlineMs: scanResult.globalScanDeadlineMs ?? scanResult.timingTelemetry?.globalScanDeadlineMs ?? 0,
+      currentElapsedMs: scanResult.currentElapsedMs ?? scanResult.timingTelemetry?.currentElapsedMs ?? 0,
+      remainingBudgetMs: scanResult.remainingBudgetMs ?? scanResult.timingTelemetry?.remainingBudgetMs ?? 0,
+      gate6ElapsedMs: scanResult.gate6ElapsedMs ?? scanResult.timingTelemetry?.gate6ElapsedMs ?? 0,
+      stage3ElapsedMs: scanResult.stage3ElapsedMs ?? scanResult.timingTelemetry?.stage3ElapsedMs ?? 0,
+
+      timeBudgetExceeded: scanResult.timeBudgetExceeded ?? scanResult.timingTelemetry?.timeBudgetExceeded ?? false,
+      providerRequestsStoppedByBudget: scanResult.providerRequestsStoppedByBudget ?? scanResult.timingTelemetry?.providerRequestsStoppedByBudget ?? false,
+
+      external_hourly_scan_status: 'EXTERNAL_HOURLY_SCAN_COMPLETED'
     });
   } catch (err: unknown) {
     logger.error('EXTERNAL_HOURLY_SCAN_FAILED');

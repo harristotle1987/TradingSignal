@@ -39,6 +39,9 @@ export interface ScanPerformanceProfile {
   preliminaryCandidates: number;
   deepCandidates: number;
   MTFCandidates: number;
+  thresholdPlusCandidates: number;
+  rejectedThresholdPlusCandidates: number;
+  // Legacy aliases
   '72PlusCandidates': number;
   rejected72PlusCandidates: number;
   signalsGenerated: number;
@@ -94,6 +97,9 @@ export class ScanPerformanceProfiler {
   private preliminaryCandidates: number = 0;
   private deepCandidates: number = 0;
   private MTFCandidates: number = 0;
+  private thresholdPlusCandidates: number = 0;
+  private rejectedThresholdPlusCandidates: number = 0;
+  // Legacy internal aliases
   private candidates72Plus: number = 0;
   private rejected72PlusCandidates: number = 0;
   private signalsGenerated: number = 0;
@@ -222,6 +228,9 @@ export class ScanPerformanceProfiler {
     preliminaryCandidates: number;
     deepCandidates: number;
     MTFCandidates: number;
+    thresholdPlusCandidates: number;
+    rejectedThresholdPlusCandidates: number;
+    // Legacy aliases
     '72PlusCandidates': number;
     candidates72Plus: number;
     rejected72PlusCandidates: number;
@@ -231,6 +240,9 @@ export class ScanPerformanceProfiler {
     if (metrics.preliminaryCandidates !== undefined) this.preliminaryCandidates = metrics.preliminaryCandidates;
     if (metrics.deepCandidates !== undefined) this.deepCandidates = metrics.deepCandidates;
     if (metrics.MTFCandidates !== undefined) this.MTFCandidates = metrics.MTFCandidates;
+    if (metrics.thresholdPlusCandidates !== undefined) this.thresholdPlusCandidates = metrics.thresholdPlusCandidates;
+    if (metrics.rejectedThresholdPlusCandidates !== undefined) this.rejectedThresholdPlusCandidates = metrics.rejectedThresholdPlusCandidates;
+    // Legacy support
     if (metrics['72PlusCandidates'] !== undefined) this.candidates72Plus = metrics['72PlusCandidates'];
     if (metrics.candidates72Plus !== undefined) this.candidates72Plus = metrics.candidates72Plus;
     if (metrics.rejected72PlusCandidates !== undefined) this.rejected72PlusCandidates = metrics.rejected72PlusCandidates;
@@ -324,8 +336,11 @@ export class ScanPerformanceProfiler {
       preliminaryCandidates: this.preliminaryCandidates,
       deepCandidates: this.deepCandidates,
       MTFCandidates: this.MTFCandidates,
-      '72PlusCandidates': this.candidates72Plus,
-      rejected72PlusCandidates: this.rejected72PlusCandidates,
+      thresholdPlusCandidates: this.thresholdPlusCandidates || this.candidates72Plus,
+      rejectedThresholdPlusCandidates: this.rejectedThresholdPlusCandidates || this.rejected72PlusCandidates,
+      // Legacy API aliases
+      '72PlusCandidates': this.candidates72Plus || this.thresholdPlusCandidates,
+      rejected72PlusCandidates: this.rejected72PlusCandidates || this.rejectedThresholdPlusCandidates,
       signalsGenerated: this.signalsGenerated,
       signalsAccepted: this.signalsAccepted,
       rejectionReasons: { ...this.rejectionReasons },
@@ -357,7 +372,7 @@ export class ScanPerformanceProfiler {
     logger.info(`TOTAL_SCAN_DURATION_MS: ${p.totalDurationMs}ms`);
     logger.info(`TOTAL_PROVIDER_LATENCY: ${p.providerLatency}ms across ${p.providerRequests} provider requests`);
     logger.info(`TOTAL_CACHE_STATS: Hits=${p.cacheHits}, Misses=${p.cacheMisses} (HitRate: ${(p.cacheHitRate * 100).toFixed(1)}%)`);
-    logger.info(`FUNNEL_METRICS: Prelim=${p.preliminaryCandidates}, Deep=${p.deepCandidates}, MTF=${p.MTFCandidates}, 72+=${p['72PlusCandidates']}, Rejected72+=${p.rejected72PlusCandidates}, SignalsGen=${p.signalsGenerated}, SignalsAcc=${p.signalsAccepted}`);
+    logger.info(`FUNNEL_METRICS: Prelim=${p.preliminaryCandidates}, Deep=${p.deepCandidates}, MTF=${p.MTFCandidates}, Threshold+=${p.thresholdPlusCandidates || p['72PlusCandidates']}, RejectedThreshold+=${p.rejectedThresholdPlusCandidates || p.rejected72PlusCandidates}, SignalsGen=${p.signalsGenerated}, SignalsAcc=${p.signalsAccepted}`);
     logger.info(`----------------------------------------------------------------`);
     for (const s of p.stageList || []) {
       logger.info(`Stage: [${s.stageName.padEnd(25)}] | Duration: ${String(s.durationMs).padStart(5)}ms | Req: ${String(s.providerRequests).padStart(3)} | Latency: ${String(s.providerLatencyMs).padStart(5)}ms | Cache Hits: ${String(s.cacheHits).padStart(3)} | Misses: ${String(s.cacheMisses).padStart(3)} | In: ${String(s.candidatesIn).padStart(3)} -> Out: ${String(s.candidatesOut).padStart(3)}`);

@@ -1370,8 +1370,10 @@ export async function runStagedPipeline(
       preliminaryCandidates: stage1OutputCount,
       deepCandidates: gate5OutputCount,
       MTFCandidates: deepMtfOutputCount,
-      candidates72Plus: candidatesThresholdPlusCount,
-      rejected72PlusCandidates: rejectedThresholdPlusCount,
+      thresholdPlusCandidates: candidatesThresholdPlusCount,
+      rejectedThresholdPlusCandidates: rejectedThresholdPlusCount,
+      candidates72Plus: candidatesThresholdPlusCount, // Legacy alias
+      rejected72PlusCandidates: rejectedThresholdPlusCount, // Legacy alias
       signalsGenerated: finalSignals.length,
       signalsAccepted: finalSignals.length,
     });

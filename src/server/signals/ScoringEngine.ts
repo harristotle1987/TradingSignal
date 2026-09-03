@@ -680,6 +680,7 @@ export class ScoringEngine {
     const isBuyDirection = direction === 'BUY';
 
     const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, thresholds.minimumRR);
+    takeProfit = rrResult.passedViaTp3 ? tp3 : tp2;
     if (!rrResult.isValid) {
       logRrRejectionDiagnostic({
         symbol: cleanSymbol,
@@ -1075,7 +1076,16 @@ export class ScoringEngine {
     const isBuy = direction === 'BUY';
 
     const riskDist = Math.abs(entryPrice - stopLoss);
-    const req1_8RTarget = isBuy ? entryPrice + (riskDist * 1.8) : entryPrice - (riskDist * 1.8);
+    const required1_8R = riskDist * 1.8;
+    const req1_8RTarget = isBuy ? entryPrice + required1_8R : entryPrice - required1_8R;
+
+    const normalizedAsset = assetClass === 'STOCK' ? 'STOCKS' : assetClass.toUpperCase();
+    const baseGuardrails = ASSET_CLASS_GUARDRAILS[normalizedAsset] || ASSET_CLASS_GUARDRAILS.DEFAULT;
+
+    const maxTp2Dist = entryPrice * (baseGuardrails.tp2.maxPct / 100);
+    const maxTp3Dist = entryPrice * (baseGuardrails.tp3.maxPct / 100);
+    const is1_8RWithinTp2Guardrail = required1_8R <= maxTp2Dist;
+    const is1_8RWithinTp3Guardrail = required1_8R <= maxTp3Dist;
 
     if (isBuy) {
       // TP1: conservative
@@ -1087,21 +1097,43 @@ export class ScoringEngine {
 
       // TP2: primary
       let baseTp2 = entryPrice + (cleanAtr * tp2Mult);
-      if (majorResistance1h > entryPrice) {
+      const hasMajor1hResistance = majorResistance1h > entryPrice;
+
+      if (hasMajor1hResistance) {
         if (majorResistance1h >= req1_8RTarget) {
-          baseTp2 = 0.3 * baseTp2 + 0.7 * (majorResistance1h - cleanAtr * 0.15);
+          // Major resistance is at or above 1.8R.
+          // Check if TP2 can legitimately target 1.8R while keeping safety buffer below resistance:
+          const bufferBeforeResistance = majorResistance1h - cleanAtr * 0.15;
+          if (is1_8RWithinTp2Guardrail && bufferBeforeResistance >= req1_8RTarget) {
+            baseTp2 = Math.max(baseTp2, req1_8RTarget);
+          } else {
+            baseTp2 = 0.3 * baseTp2 + 0.7 * bufferBeforeResistance;
+          }
         } else {
           // Nearest 1h structural anchor is closer than 1.8R.
-          // Do not force baseTp2 down to near anchor if pure ATR target is higher.
-          baseTp2 = Math.max(baseTp2, majorResistance1h - cleanAtr * 0.15);
+          // Respect hard structural resistance: TP2 must stay below major resistance
+          baseTp2 = Math.min(baseTp2, majorResistance1h - cleanAtr * 0.15);
+        }
+      } else {
+        // No 1h structural ceiling blocking TP2
+        if (is1_8RWithinTp2Guardrail && (primaryStrategyName.includes('Breakout') || primaryStrategyName.includes('Trend'))) {
+          baseTp2 = Math.max(baseTp2, req1_8RTarget);
         }
       }
       tp2 = Math.max(baseTp2, tp1 + minStep);
 
       // TP3: extended
       let baseTp3 = entryPrice + (cleanAtr * tp3Mult);
-      if (majorResistance1h > entryPrice) {
+      if (hasMajor1hResistance) {
         baseTp3 = Math.max(baseTp3, majorResistance1h + cleanAtr * tp3Mult * 0.4);
+      }
+
+      // Legitimate path for TP3 to satisfy 1.8R:
+      // If 1.8R is within TP3 percentage guardrail and not blocked by a hard structural ceiling:
+      if (is1_8RWithinTp3Guardrail) {
+        if (baseTp3 < req1_8RTarget) {
+          baseTp3 = req1_8RTarget;
+        }
       }
       tp3 = Math.max(baseTp3, tp2 + minStep);
     } else {
@@ -1114,27 +1146,48 @@ export class ScoringEngine {
 
       // TP2: primary
       let baseTp2 = entryPrice - (cleanAtr * tp2Mult);
-      if (majorSupport1h < entryPrice) {
+      const hasMajor1hSupport = majorSupport1h < entryPrice && majorSupport1h > 0;
+
+      if (hasMajor1hSupport) {
         if (majorSupport1h <= req1_8RTarget) {
-          baseTp2 = 0.3 * baseTp2 + 0.7 * (majorSupport1h + cleanAtr * 0.15);
+          // Major support is at or below 1.8R target.
+          // Check if TP2 can legitimately target 1.8R while keeping safety buffer above support:
+          const bufferAboveSupport = majorSupport1h + cleanAtr * 0.15;
+          if (is1_8RWithinTp2Guardrail && bufferAboveSupport <= req1_8RTarget) {
+            baseTp2 = Math.min(baseTp2, req1_8RTarget);
+          } else {
+            baseTp2 = 0.3 * baseTp2 + 0.7 * bufferAboveSupport;
+          }
         } else {
-          baseTp2 = Math.min(baseTp2, majorSupport1h + cleanAtr * 0.15);
+          // Hard structural support is closer than 1.8R.
+          // Respect hard structural support: TP2 must stay above major support
+          baseTp2 = Math.max(baseTp2, majorSupport1h + cleanAtr * 0.15);
+        }
+      } else {
+        // No 1h structural floor blocking TP2
+        if (is1_8RWithinTp2Guardrail && (primaryStrategyName.includes('Breakout') || primaryStrategyName.includes('Trend'))) {
+          baseTp2 = Math.min(baseTp2, req1_8RTarget);
         }
       }
       tp2 = Math.min(baseTp2, tp1 - minStep);
 
       // TP3: extended
       let baseTp3 = entryPrice - (cleanAtr * tp3Mult);
-      if (majorSupport1h < entryPrice) {
+      if (hasMajor1hSupport) {
         baseTp3 = Math.min(baseTp3, majorSupport1h - cleanAtr * tp3Mult * 0.4);
+      }
+
+      // Legitimate path for TP3 to satisfy 1.8R:
+      // If 1.8R is within TP3 percentage guardrail and not blocked by a hard structural floor:
+      if (is1_8RWithinTp3Guardrail && req1_8RTarget > 0) {
+        if (baseTp3 > req1_8RTarget) {
+          baseTp3 = req1_8RTarget;
+        }
       }
       tp3 = Math.min(baseTp3, tp2 - minStep);
     }
 
     // NEW — percentage guardrail clamp
-    const normalizedAsset = assetClass === 'STOCK' ? 'STOCKS' : assetClass.toUpperCase();
-    const baseGuardrails = ASSET_CLASS_GUARDRAILS[normalizedAsset] || ASSET_CLASS_GUARDRAILS.DEFAULT;
-
     let tp1Clamped = AtrTpGenerator.applyGuardrail(tp1, baseGuardrails.tp1, entryPrice, isBuy);
     let tp2Clamped = AtrTpGenerator.applyGuardrail(tp2, baseGuardrails.tp2, entryPrice, isBuy);
     let tp3Clamped = AtrTpGenerator.applyGuardrail(tp3, baseGuardrails.tp3, entryPrice, isBuy);
@@ -1154,6 +1207,13 @@ export class ScoringEngine {
       if (tp3 < tp2 + minStep) {
         tp3 = tp2 + minStep;
       }
+      // Ensure floating-point precision doesn't truncate tp3RR below 1.80 when 1.8R is valid
+      if (is1_8RWithinTp3Guardrail && tp3 >= req1_8RTarget) {
+        const roundedTp3 = Number(tp3.toFixed(precision));
+        if (riskDist > 0 && Number(((roundedTp3 - entryPrice) / riskDist).toFixed(2)) < 1.80) {
+          tp3 = roundedTp3 + minStep;
+        }
+      }
     } else {
       if (tp1 > entryPrice - minPrecisionStep) {
         tp1 = entryPrice - minPrecisionStep;
@@ -1163,6 +1223,13 @@ export class ScoringEngine {
       }
       if (tp3 > tp2 - minStep) {
         tp3 = tp2 - minStep;
+      }
+      // Ensure floating-point precision doesn't truncate tp3RR below 1.80 when 1.8R is valid
+      if (is1_8RWithinTp3Guardrail && tp3 <= req1_8RTarget && req1_8RTarget > 0) {
+        const roundedTp3 = Number(tp3.toFixed(precision));
+        if (riskDist > 0 && Number(((entryPrice - roundedTp3) / riskDist).toFixed(2)) < 1.80) {
+          tp3 = roundedTp3 - minStep;
+        }
       }
     }
 

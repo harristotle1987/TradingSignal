@@ -86,7 +86,7 @@ function CopySignalButton({ signal, precision }: { signal: any, precision: numbe
 
 interface SignalHistoryPanelProps {
   history: SignalHistoryItem[];
-  rejected72PlusCandidates?: any[];
+  rejectedThresholdPlusCandidates?: any[];
   onClearHistory: () => void;
   onDeleteHistoryItem?: (id: string, symbol: string) => void;
   onDeleteMultipleHistoryItems?: (ids: string[]) => Promise<void>;
@@ -99,7 +99,7 @@ interface SignalHistoryPanelProps {
 
 export function SignalHistoryPanel({
   history,
-  rejected72PlusCandidates = [],
+  rejectedThresholdPlusCandidates = [],
   onClearHistory,
   onDeleteHistoryItem,
   onDeleteMultipleHistoryItems,
@@ -109,7 +109,7 @@ export function SignalHistoryPanel({
   onTimeZoneChange,
   onSignalRefreshed,
 }: SignalHistoryPanelProps) {
-  const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'TOP_TRADE' | 'SUGGESTION' | '72PLUS_REJECTED'>('ALL');
+  const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'TOP_TRADE' | 'SUGGESTION' | 'THRESHOLD_REJECTED'>('ALL');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'list' | 'chart'>('list');
 
@@ -324,14 +324,14 @@ export function SignalHistoryPanel({
             </button>
             <button
               type="button"
-              onClick={() => setFilter('72PLUS_REJECTED')}
+              onClick={() => setFilter('THRESHOLD_REJECTED')}
               className={`px-2 py-0.5 rounded transition cursor-pointer ${
-                filter === '72PLUS_REJECTED'
+                filter === 'THRESHOLD_REJECTED'
                   ? 'bg-rose-950 text-rose-300 font-semibold border border-rose-800'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              70+ Rejected ({rejected72PlusCandidates.length})
+              High-Score Rejected ({rejectedThresholdPlusCandidates.length})
             </button>
           </div>
 
@@ -379,10 +379,10 @@ export function SignalHistoryPanel({
 
       {activeTab === 'chart' ? (
         <SignalPerformanceChart refreshTrigger={history.length} />
-      ) : filter === '72PLUS_REJECTED' ? (
-        rejected72PlusCandidates.length > 0 ? (
+      ) : filter === 'THRESHOLD_REJECTED' ? (
+        rejectedThresholdPlusCandidates.length > 0 ? (
           <div className="space-y-3 font-mono">
-            {rejected72PlusCandidates.map((cand: any, idx: number) => (
+            {rejectedThresholdPlusCandidates.map((cand: any, idx: number) => (
               <div
                 key={idx}
                 className="bg-slate-950/90 border border-rose-900/60 hover:border-rose-800 rounded-xl p-4 transition shadow-md space-y-2.5"

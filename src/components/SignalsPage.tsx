@@ -62,7 +62,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
   );
   const [soundAlerts, setSoundAlerts] = useState<boolean>(true);
   const [deletingIds, setDeletingIds] = useState<string[]>([]);
-  const [rejected72PlusCandidates, setRejected72PlusCandidates] = useState<any[]>([]);
+  const [rejectedThresholdPlusCandidates, setRejectedThresholdPlusCandidates] = useState<any[]>([]);
   const isInitialLoad = useRef<boolean>(true);
 
   // Local State-Based Signal History (Last 30 generated signals/outcomes)
@@ -459,7 +459,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
           (c: any) => c.isQualifiedRejected || (c.score >= 70 || c.finalScore >= 70)
         );
         if (list72.length > 0) {
-          setRejected72PlusCandidates((prev) => {
+          setRejectedThresholdPlusCandidates((prev) => {
             const map = new Map();
             for (const item of [...list72, ...prev]) {
               if (!map.has(item.symbol)) map.set(item.symbol, item);
@@ -696,7 +696,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
       {/* Consolidated Signal History & Alert Log (30-item Audit Hub) */}
       <SignalHistoryPanel
         history={signalHistory}
-        rejected72PlusCandidates={rejected72PlusCandidates}
+        rejectedThresholdPlusCandidates={rejectedThresholdPlusCandidates}
         onClearHistory={handleClearHistory}
         onDeleteHistoryItem={handleDeleteHistoryItem}
         onDeleteMultipleHistoryItems={handleDeleteMultipleHistoryItems}

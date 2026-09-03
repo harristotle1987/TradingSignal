@@ -1,116 +1,195 @@
 const fs = require('fs');
-let code = fs.readFileSync('src/server/signals/TradeRankingEngine.ts', 'utf8');
+let code = fs.readFileSync('src/server/routes/signals.ts', 'utf8');
 
-const replacement = `
-  /**
-   * Evaluates, ranks, and filters validated candidates based on the centralized scoring policy.
-   */
-  static rankOpportunities(candidates: ValidatedCandidate[]): RankingResult {
-    const rejectedCandidates: Array<{ symbol: string; reason: string }> = [];
-    const thresholds = serverConfig.getConfig().thresholds;
+const target = `  try {
+    // Directly invoke Market Scan Engine as the single automated scan trigger
+    logger.info(\`[Scanner Trigger] MARKET_SCAN_ENGINE_START | triggerTime: \${Date.now()}\`);
+    const scanEngineStartTime = Date.now();
+    const result = await hourlyScanner.triggerAutomatedScan(true, requestStartTime);
+    const scanEngineDurationMs = Date.now() - scanEngineStartTime;
+    logger.info(\`[Scanner Trigger] MARKET_SCAN_ENGINE_END | duration: \${scanEngineDurationMs}ms | status: \${result.status} | candidates: \${result.candidatesEvaluated} | accepted: \${result.acceptedSignalsCount}\`);
 
-    // 1. Calculate Core and Ranking Score
-    const scoredCandidates = candidates.map((cand) => {
-      const coreScore = cand.scoring.score;
-      return {
-        ...cand,
-        coreScore,
-        rankingScore: this.computeRankingScore(cand, coreScore),
-      };
-    });
-
-    // 2. Classify and Filter based purely on core tradeability (GATE 80)
-    const validCandidates: Array<ValidatedCandidate & { coreScore: number; rankingScore: number; rankTier: RankTier }> = [];
-        
-    for (const cand of scoredCandidates) {
-      // Resolve centralized final tradeability evaluation using strictly the CORE SCORE
-      const tradeability = this.calculateFinalRequiredScore({
-        symbol: cand.signal.symbol,
-        actualScore: cand.coreScore,
-        regime: cand.signal.marketRegime || cand.scoring.marketRegime,
-        strategy: cand.signal.strategy,
-        assetClass: cand.signal.assetClass,
-        signalThreshold: thresholds.signalThreshold,
-      });
-
-      if (!tradeability.isExecutable || !tradeability.passed) {
-        rejectedCandidates.push({
-          symbol: cand.signal.symbol,
-          reason: tradeability.rejectionReason || \`REJECTED: SCORE_BELOW_FINAL_THRESHOLD. Core Score \${cand.coreScore} < \${tradeability.finalRequiredScore}.\`,
-        });
-        continue;
-      }
-      
-      validCandidates.push({ ...cand, rankTier: 'SUGGESTION' });
+    let statusLog = '';
+    if (result.status === 'COMPLETED') {
+      logger.info('EXTERNAL_HOURLY_SCAN_COMPLETED');
+      statusLog = 'EXTERNAL_HOURLY_SCAN_COMPLETED';
+    } else if (result.status === 'SKIPPED_CAP_REACHED' || result.status === 'SCAN_ALREADY_RUNNING') {
+      logger.info('EXTERNAL_HOURLY_SCAN_SKIPPED');
+      statusLog = 'EXTERNAL_HOURLY_SCAN_SKIPPED';
+    } else {
+      logger.error('EXTERNAL_HOURLY_SCAN_FAILED');
+      statusLog = 'EXTERNAL_HOURLY_SCAN_FAILED';
     }
 
-    // Sort by rankingScore descending (highest first)
-    validCandidates.sort((a, b) => b.rankingScore - a.rankingScore);
-        
-    // Assign rank tiers based on rank order (Rank 1: BEST_TRADE, Rank 2: SECOND_BEST, Rank 3+: SUGGESTION)
-    validCandidates.forEach((cand, idx) => {
-      if (idx === 0) {
-        cand.rankTier = 'BEST_TRADE';
-        cand.signal.rankTier = 'BEST_TRADE';
-        cand.signal.isBestTrade = true;
-        cand.signal.isSecondBest = false;
-        cand.signal.isTopTrade = true;
-      } else if (idx === 1) {
-        cand.rankTier = 'SECOND_BEST';
-        cand.signal.rankTier = 'SECOND_BEST';
-        cand.signal.isBestTrade = false;
-        cand.signal.isSecondBest = true;
-        cand.signal.isTopTrade = true;
-      } else {
-        cand.rankTier = 'SUGGESTION';
-        cand.signal.rankTier = 'SUGGESTION';
-        cand.signal.isBestTrade = false;
-        cand.signal.isSecondBest = false;
-        cand.signal.isTopTrade = false;
-      }
+    const settings = ScannerPersistence.getSettings();
+    const capState = result.capState || await ScannerPersistence.getCapState();
+    const intervalMinutes = [15, 30, 45, 60].includes(Number(settings.intervalMinutes))
+      ? Number(settings.intervalMinutes)
+      : 15;
+    const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || 0;
+    
+    // Refresh cron status completely in the background without blocking the scanner trigger API
+    CronJobOrgService.getJobStatus(false).catch((err) => {
+      logger.debug('[Scanner Route] Background cron status update deferred', { error: String(err) });
     });
 
-    // 3. Organization Logic (assigning top trades/suggestions)
-    return this.organizeRankedCandidates(validCandidates, rejectedCandidates);
-  }
+    const cachedCron = CronJobOrgService.getCachedStatus();
+    const nextCronExecution = cachedCron?.nextExecution?.timestamp || (lastAutomatedScan + intervalMinutes * 60 * 1000);
+    const nextScanTime = nextCronExecution;
 
-  private static organizeRankedCandidates(
-    validCandidates: Array<ValidatedCandidate & { coreScore: number; rankingScore: number; rankTier: RankTier }>,
-    rejectedCandidates: Array<{ symbol: string; reason: string }>
-  ): RankingResult {
-    const topTrades = validCandidates.slice(0, 2).map((c) => c.signal);
-    const suggestions = validCandidates.slice(2, 5).map((c) => c.signal);
-        
-    return {
-      bestTrade: topTrades[0],
-      secondBest: topTrades[1],
-      suggestions,
-      topTrades,
-      allRanked: [...topTrades, ...suggestions],
-      rejectedCandidates,
-    };
-  }
+    const httpCode = result.status === 'ERROR' ? 500 : 200;
+    const durationMs = result.scanDurationMs ?? (Date.now() - now);
+    const totalRequestDurationMs = Date.now() - requestStartTime;
+    logger.info(\`[Scanner Trigger] TOTAL_DURATION | duration: \${totalRequestDurationMs}ms | scanEngineDuration: \${durationMs}ms\`);
 
-  private static computeRankingScore(candidate: ValidatedCandidate, coreScore: number): number {
-    const { aiConfidence, signal } = candidate;
-    const aiAdjustment = (typeof aiConfidence === 'number' && !isNaN(aiConfidence))
-      ? ((aiConfidence - 70) / 30) * 3
-      : 0;
+    // Fast, lightweight HTTP response for cron scheduler with complete state metrics
+    res.status(httpCode).json({
+      success: result.success,
+      status: result.status,
+      message: result.message,
+      timestamp: result.timestamp || Date.now(),
+      lastCronExecution: now,
+      lastAutomatedScan,
+      lastScanCompletedAt: capState.lastScanCompletedAt || Date.now(),
+      lastScanDuration: durationMs,
+      universeSymbolsScanned: result.universeSymbolsScanned ?? capState.universeSymbolsScanned ?? 0,
+      preliminaryCandidatesFound: result.preliminaryCandidatesFound ?? capState.preliminaryCandidatesFound ?? 0,
+      candidatesRejectedPreliminary: result.candidatesRejectedPreliminary ?? capState.candidatesRejectedPreliminary ?? 0,
+      candidatesEvaluated: result.candidatesEvaluated ?? capState.candidatesEvaluated ?? 0,
+      candidatesRejectedFinal: result.candidatesRejectedFinal ?? capState.candidatesRejectedFinal ?? (result.rejectedCount ?? 0),
+      signalsGenerated: result.signalsGenerated ?? result.signalsFound ?? capState.signalsGenerated ?? 0,
+      signalsAccepted: result.signalsAccepted ?? result.acceptedSignalsCount ?? capState.signalsAccepted ?? 0,
+      lastCandidatesEvaluated: result.candidatesEvaluated ?? capState.lastCandidatesEvaluated ?? 0,
+      lastSignalsFound: result.signalsFound ?? result.acceptedSignalsCount ?? capState.lastSignalsFound ?? 0,
+      lastAcceptedSignals: result.acceptedSignalsCount ?? capState.lastAcceptedSignals ?? 0,
+      signalsFound: result.signalsFound ?? result.acceptedSignalsCount ?? capState.lastSignalsFound ?? 0,
+      acceptedSignalsCount: result.acceptedSignalsCount ?? capState.lastAcceptedSignals ?? 0,
+      nextCronExecution,
+      lastScanTime: lastAutomatedScan,
+      nextScanTime,
+      intervalMinutes,
+      rejectedCount: result.rejectedCount ?? 0,
+      candidatesRejectedBeforeMTF: result.candidatesRejectedBeforeMTF ?? 0,
+      candidatesRejectedByMTF: result.candidatesRejectedByMTF ?? 0,
+      candidatesRejectedByScore: result.candidatesRejectedByScore ?? 0,
+      candidatesRejectedByRR: result.candidatesRejectedByRR ?? 0,
+      candidatesRejectedByStructure: result.candidatesRejectedByStructure ?? 0,
+      rejectionReasons: result.rejectionReasons ?? [],
+      rejectionReasonsCounts: result.rejectionReasonsCounts ?? result.rejectionReasonsAggregated ?? {},
+      candidateRejectionDetails: result.candidateRejectionDetails ?? [],
+      diagnosticsCount: result.diagnosticsCount ?? 0,
+      diagnostics: result.diagnostics ?? [],
+      scanDurationMs: durationMs,
+      scanDuration: \`\${(durationMs / 1000).toFixed(2)}s\`,
+      totalDurationMs: totalRequestDurationMs,
+      globalScanStartMs: result.globalScanStartMs ?? requestStartTime,
+      globalScanDeadlineMs: result.globalScanDeadlineMs ?? (requestStartTime + 24000),
+      currentElapsedMs: result.currentElapsedMs ?? (Date.now() - requestStartTime),
+      remainingBudgetMs: result.remainingBudgetMs ?? Math.max(0, (requestStartTime + 24000) - Date.now()),
+      gate6ElapsedMs: result.gate6ElapsedMs ?? 0,
+      stage3ElapsedMs: result.stage3ElapsedMs ?? 0,
+      timeBudgetExceeded: result.timeBudgetExceeded ?? false,
+      providerRequestsStoppedByBudget: result.providerRequestsStoppedByBudget ?? false,
+      timingTelemetry: result.timingTelemetry,
+      external_hourly_scan_status: statusLog
+    });`;
+
+const replacement = `  try {
+    const { serverConfig } = await import('../config.js');
     
-    const rsScore = signal.relativeStrengthScore ?? 50;
-    const rsAdjustment = ((rsScore - 50) / 50) * 2; // Subtle ±2 confidence modifier based on universe leadership
-    const corrPenalty = signal.correlationPenalty ?? 0;
+    // 2. Perform existing daily-cap, lock, and duplicate-run checks exactly as now
+    if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
+      return res.status(200).json({
+        success: false,
+        status: 'PERSISTENCE_UNAVAILABLE_DEGRADED',
+        message: 'REJECTED: PRODUCTION_PERSISTENCE_UNAVAILABLE. Firebase Service Account required for automated scanner dispatch in production.',
+        timestamp: Date.now()
+      });
+    }
+
+    const instanceId = Math.random().toString(36).substring(2, 9);
+    const lockResult = await ScannerPersistence.tryAcquireLock(instanceId);
+    if (!lockResult.acquired) {
+      return res.status(200).json({
+        success: false,
+        status: 'SCAN_ALREADY_RUNNING',
+        message: 'REJECTED: SCAN_ALREADY_RUNNING. Another scan cycle is currently in progress.',
+        timestamp: Date.now()
+      });
+    }
+    // Release immediately to allow background scan to acquire it
+    await ScannerPersistence.releaseLock(instanceId);
+
+    const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
+    const dailyCap = capState.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap;
     
-    return Math.min(100, Math.max(0, coreScore + aiAdjustment + rsAdjustment - corrPenalty));
-  }
-`;
+    if (capState.dailySignalCount >= dailyCap) {
+      return res.status(200).json({
+        success: true,
+        status: 'SKIPPED_CAP_REACHED',
+        message: \`REJECTED: DAILY_CAP_REACHED. Daily automated signal cap reached (\${capState.dailySignalCount}/\${dailyCap}). Preserving risk limits.\`,
+        timestamp: Date.now()
+      });
+    }
 
-const regex = /\/\*\*\n   \* Evaluates, ranks, and filters validated candidates based on the centralized scoring policy\.\n   \*\/(.|\n)*private static computeCompositeScore.*?return Math\.min\(100, Math\.max\(0, baseScore \+ aiAdjustment \+ rsAdjustment - corrPenalty\)\);\n  }/gm;
+    // 3. Dispatch hourlyScanner.triggerAutomatedScan(...) without awaiting the full scan
+    logger.info(\`[Scanner Trigger] MARKET_SCAN_ENGINE_START | triggerTime: \${Date.now()}\`);
+    hourlyScanner.triggerAutomatedScan(true, requestStartTime).catch(err => {
+      logger.error('[Scanner Route] Background scan error:', { error: String(err) });
+    });
 
-if (regex.test(code)) {
-    code = code.replace(regex, replacement.trim());
-    fs.writeFileSync('src/server/signals/TradeRankingEngine.ts', code);
-    console.log("Success");
+    const settings = ScannerPersistence.getSettings();
+    const intervalMinutes = [15, 30, 45, 60].includes(Number(settings.intervalMinutes))
+      ? Number(settings.intervalMinutes)
+      : 15;
+    const lastAutomatedScan = capState.lastAutomatedScan || capState.lastScanTime || 0;
+    
+    // Refresh cron status completely in the background without blocking the scanner trigger API
+    CronJobOrgService.getJobStatus(false).catch((err) => {
+      logger.debug('[Scanner Route] Background cron status update deferred', { error: String(err) });
+    });
+
+    const cachedCron = CronJobOrgService.getCachedStatus();
+    const nextCronExecution = cachedCron?.nextExecution?.timestamp || (lastAutomatedScan + intervalMinutes * 60 * 1000);
+    const nextScanTime = nextCronExecution;
+
+    const totalRequestDurationMs = Date.now() - requestStartTime;
+    logger.info(\`[Scanner Trigger] TOTAL_DURATION | duration: \${totalRequestDurationMs}ms | status: DISPATCHED\`);
+
+    // 4. Immediately return the existing "DISPATCHED" response/status
+    res.status(202).json({
+      success: true,
+      status: 'DISPATCHED',
+      message: 'Scan dispatched in background',
+      timestamp: Date.now(),
+      lastCronExecution: now,
+      lastAutomatedScan,
+      lastScanCompletedAt: capState.lastScanCompletedAt || Date.now(),
+      lastScanDuration: capState.lastScanDuration || 0,
+      universeSymbolsScanned: capState.universeSymbolsScanned ?? 0,
+      preliminaryCandidatesFound: capState.preliminaryCandidatesFound ?? 0,
+      candidatesRejectedPreliminary: capState.candidatesRejectedPreliminary ?? 0,
+      candidatesEvaluated: capState.candidatesEvaluated ?? 0,
+      candidatesRejectedFinal: capState.candidatesRejectedFinal ?? 0,
+      signalsGenerated: capState.signalsGenerated ?? 0,
+      signalsAccepted: capState.signalsAccepted ?? 0,
+      lastCandidatesEvaluated: capState.lastCandidatesEvaluated ?? 0,
+      lastSignalsFound: capState.lastSignalsFound ?? 0,
+      lastAcceptedSignals: capState.lastAcceptedSignals ?? 0,
+      signalsFound: capState.lastSignalsFound ?? 0,
+      acceptedSignalsCount: capState.lastAcceptedSignals ?? 0,
+      nextCronExecution,
+      lastScanTime: lastAutomatedScan,
+      nextScanTime,
+      intervalMinutes,
+      totalDurationMs: totalRequestDurationMs,
+      external_hourly_scan_status: 'EXTERNAL_HOURLY_SCAN_DISPATCHED'
+    });`;
+
+if (code.includes(target)) {
+    code = code.replace(target, replacement);
+    fs.writeFileSync('src/server/routes/signals.ts', code);
+    console.log("Replaced successfully!");
 } else {
-    console.log("Regex mismatch");
+    console.log("Target not found!");
 }
