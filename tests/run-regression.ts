@@ -23,7 +23,8 @@ import { RiskRewardCalculator } from '../src/server/signals/RiskRewardCalculator
 import { Gate7FinalTradeValidation } from '../src/server/signals/Gate7FinalTradeValidation.js';
 import { Gate8TradeabilityThreshold } from '../src/server/signals/Gate8TradeabilityThreshold.js';
 import { Gate35SignalFunnelAnalytics, FunnelStage } from '../src/server/signals/Gate35SignalFunnelAnalytics.js';
-import { HourlyScannerService } from '../src/server/signals/HourlyScanner.js';
+import { HourlyScannerService, SCANNER_SOFT_DEADLINE_MS, SCANNER_HARD_DEADLINE_MS } from '../src/server/signals/HourlyScanner.js';
+import { Gate6ProgressiveMTF } from '../src/server/signals/Gate6ProgressiveMTF.js';
 import { ScoringEngine } from '../src/server/signals/ScoringEngine.js';
 import { logger } from '../src/server/logger.js';
 
@@ -1528,6 +1529,218 @@ async function runAll() {
         assert(pipelineContent.includes('candidatesThresholdPlusCount'), 'StagedScannerPipeline.ts must contain candidatesThresholdPlusCount');
         assert(pipelineContent.includes('rejectedThresholdPlusCount'), 'StagedScannerPipeline.ts must contain rejectedThresholdPlusCount');
       });
+    });
+  });
+
+  // --- SUITE 8: GATE 2 — TWO-LEVEL SCANNER DEADLINE & 18s OPERATIONAL CEILING (TESTS A-G) ---
+  await describe('Suite 8: Gate 2 — Two-Level Scanner Deadline & 18s Operational Ceiling', async () => {
+    await test('Test A: Soft deadline is 16,000ms and hard deadline is 17,500ms (< 18,000ms operational ceiling)', () => {
+      assert(SCANNER_SOFT_DEADLINE_MS === 16000, `Expected SCANNER_SOFT_DEADLINE_MS to be 16000, got ${SCANNER_SOFT_DEADLINE_MS}`);
+      assert(SCANNER_HARD_DEADLINE_MS === 17500, `Expected SCANNER_HARD_DEADLINE_MS to be 17500, got ${SCANNER_HARD_DEADLINE_MS}`);
+      assert(SCANNER_HARD_DEADLINE_MS < 18000, `Operational hard ceiling must be strictly below 18,000ms, got ${SCANNER_HARD_DEADLINE_MS}`);
+      assert(SCANNER_HARD_DEADLINE_MS - SCANNER_SOFT_DEADLINE_MS === 1500, 'Difference between soft and hard deadline should be exactly 1,500ms buffer');
+    });
+
+    await test('Test B: Gate 6 Layer 1 halts initiating new candidate evaluations when soft deadline is reached', async () => {
+      const now = Date.now();
+      // Simulate expired soft deadline: deadlineMs is only 500ms away (< 1500ms buffer)
+      const tightDeadline = now + 500;
+      const candidates = [
+        { asset: 'BTCUSDT', direction: 'BUY' as const, preliminaryScore: 80, htf1h: [] },
+        { asset: 'ETHUSDT', direction: 'BUY' as const, preliminaryScore: 78, htf1h: [] },
+      ];
+
+      const result = await Gate6ProgressiveMTF.analyzeCandidates(candidates, 5, now, tightDeadline);
+      assert(result.providerRequestsStoppedByBudget === true, 'Gate 6 Layer 1 should flag providerRequestsStoppedByBudget = true');
+      assert(result.timeBudgetExceeded === false, 'timeBudgetExceeded should only be true when past hard deadline');
+      assert(Array.isArray(result.survivedCandidates), 'survivedCandidates must be an array');
+      assert(Array.isArray(result.rejectedCandidates), 'rejectedCandidates must be an array');
+    });
+
+    await test('Test C: Gate 6 Layer 2 halts further candle fetches when soft deadline is passed and preserves survivors', async () => {
+      const now = Date.now();
+      const pastDeadline = now - 100;
+      const candidates = [
+        { asset: 'SOLUSDT', direction: 'BUY' as const, preliminaryScore: 82, htf1h: [] },
+      ];
+
+      const result = await Gate6ProgressiveMTF.analyzeCandidates(candidates, 5, now - 18000, pastDeadline);
+      assert(result.timeBudgetExceeded === true, 'timeBudgetExceeded should be true when past deadline');
+      assert(result.providerRequestsStoppedByBudget === true, 'providerRequestsStoppedByBudget should be true when past deadline');
+    });
+
+    await test('Test D: MarketDataManager providerQueue enforces hard deadline and aborts early', async () => {
+      const expiredDeadline = Date.now() - 50;
+      let caught = false;
+      try {
+        await marketDataManager.getPrice('BTCUSDT', undefined, true, 'AUTOMATED_SCANNER', expiredDeadline);
+      } catch (err: any) {
+        caught = true;
+        assert(err.message.includes('TIMEOUT: Global scanner deadline reached'), `Expected queue timeout error, got: ${err.message}`);
+      }
+      assert(caught, 'MarketDataManager must reject queries when hard deadline has passed');
+    });
+
+    await test('Test E: ScanPerformanceProfiler tracks budget stops and formats telemetry with executionId', () => {
+      const profiler = new ScanPerformanceProfiler('test-exec-123');
+      profiler.startScan(Date.now() - 5000);
+      profiler.setGlobalDeadline(Date.now() + 12500);
+      
+      assert(profiler.getStoppedByBudgetCount() === 0, 'Initial stopped by budget count should be 0');
+      profiler.recordStoppedByBudget();
+      profiler.recordStoppedByBudget();
+      assert(profiler.getStoppedByBudgetCount() === 2, 'Should increment stoppedByBudgetCount to 2');
+      
+      profiler.setStoppedByBudget(true);
+      const report = profiler.toDetailedTelemetry();
+      assert(Boolean(report.providerRequestsStoppedByBudget) === true, 'Telemetry must reflect stoppedByBudget');
+      assert(report.executionId === 'test-exec-123', 'Telemetry must retain executionId');
+      assert(report.scanId === 'test-exec-123', 'Telemetry must retain scanId alias');
+    });
+
+    await test('Test F: Scanner pipeline preserves completed work and does not fabricate missing candidates', async () => {
+      const mockEngine = {
+        resolveTargetUniverse: () => ({ assetCategory: 'CRYPTO' as const, universe: ['BTCUSDT'] }),
+        activeSignals: new Map(),
+        fetchGeneralNews: async () => [],
+        evaluateNewsSentiment: () => ({ sentiment: 'NEUTRAL' }),
+        verifyCrossSourcePrice: async () => ({ verified: true, agreementPercent: 0 }),
+      };
+
+      // Run pipeline with past deadline to trigger immediate deadline stop
+      const result = await runStagedPipeline(
+        mockEngine,
+        'BTCUSDT',
+        'CRYPTO',
+        false,
+        { scanStartedAt: Date.now() - 17500, globalScanBudgetMs: 17500 }
+      );
+
+      assert(result !== null && typeof result === 'object', 'Pipeline must return valid object');
+      assert(result.telemetry.providerRequestsStoppedByBudget === true, 'Telemetry should note provider requests stopped by budget');
+      assert(result.telemetry.candidatesEvaluated === 0, 'No un-evaluated candidates should be falsely counted as completed');
+      assert(result.telemetry.signalsGenerated === 0, 'No signals should be fabricated when budget is exhausted');
+    });
+
+    await test('Test G: Timing telemetry contains complete two-level deadline fields and execution identifiers', async () => {
+      const mockEngine = {
+        resolveTargetUniverse: () => ({ assetCategory: 'FOREX' as const, universe: ['EURUSD'] }),
+        activeSignals: new Map(),
+        fetchGeneralNews: async () => [],
+        evaluateNewsSentiment: () => ({ sentiment: 'NEUTRAL' }),
+        verifyCrossSourcePrice: async () => ({ verified: true, agreementPercent: 0 }),
+      };
+
+      const start = Date.now();
+      const result = await runStagedPipeline(
+        mockEngine,
+        'EURUSD',
+        'FOREX',
+        false,
+        { scanStartedAt: start, globalScanBudgetMs: 17500, executionId: 'scan-telemetry-test' }
+      );
+
+      const tel = result.telemetry;
+      assert(typeof tel.globalScanStartMs === 'number', 'Must include globalScanStartMs');
+      assert(typeof tel.globalScanDeadlineMs === 'number', 'Must include globalScanDeadlineMs');
+      assert(typeof tel.globalScanSoftDeadlineMs === 'number', 'Must include globalScanSoftDeadlineMs');
+      assert(typeof tel.currentElapsedMs === 'number', 'Must include currentElapsedMs');
+      assert(typeof tel.remainingBudgetMs === 'number', 'Must include remainingBudgetMs');
+      assert(typeof tel.timeBudgetExceeded === 'boolean', 'Must include timeBudgetExceeded');
+      assert(typeof tel.providerRequestsStoppedByBudget === 'boolean', 'Must include providerRequestsStoppedByBudget');
+      assert(tel.executionId === 'scan-telemetry-test', 'Must include executionId');
+      assert(tel.scanId === 'scan-telemetry-test', 'Must include scanId');
+    });
+  });
+
+  // --- SUITE: GATE 3 — TP/R:R CALCULATION AND QUALIFICATION ---
+  await describe('Gate 3 — Canonical TP/R:R Calculation and Multi-Target Qualification', async () => {
+    await test('TEST 1: TP2 meets threshold (1.90 >= 1.80) -> qualifies via TP2', () => {
+      // Entry 100, SL 90 (risk 10), TP1 110 (1.0R), TP2 119 (1.9R), TP3 122 (2.2R)
+      const res = RiskRewardCalculator.calculate(100, 90, 110, 119, 122, 'BUY', 1.80);
+      assert(res.isValid, 'Must be valid');
+      assert(res.passesRR, 'Must pass R:R gate');
+      assert(res.selectedTarget === 'TP2', `Expected selectedTarget TP2, got ${res.selectedTarget}`);
+      assert(res.tp2GrossRR === 1.90, `Expected tp2GrossRR 1.90, got ${res.tp2GrossRR}`);
+      assert(res.grossRR === 1.90, `Expected grossRR 1.90, got ${res.grossRR}`);
+      assert(res.primaryRR === 1.90, `Expected primaryRR 1.90, got ${res.primaryRR}`);
+      assert(res.effectiveGrossRR === 1.90, `Expected effectiveGrossRR 1.90, got ${res.effectiveGrossRR}`);
+      assert(!res.passedViaTp3, 'passedViaTp3 must be false when TP2 qualified');
+    });
+
+    await test('TEST 2: TP2 fails (0.97 < 1.80), TP3 meets threshold (1.90 >= 1.80) -> qualifies via TP3', () => {
+      // Entry 100, SL 90 (risk 10), TP1 105 (0.5R), TP2 109.7 (0.97R), TP3 119 (1.90R)
+      const res = RiskRewardCalculator.calculate(100, 90, 105, 109.7, 119, 'BUY', 1.80);
+      assert(res.isValid, 'Must be valid');
+      assert(res.passesRR, 'Must pass R:R gate');
+      assert(res.selectedTarget === 'TP3', `Expected selectedTarget TP3, got ${res.selectedTarget}`);
+      assert(res.tp2GrossRR === 0.97, `Expected tp2GrossRR 0.97, got ${res.tp2GrossRR}`);
+      assert(res.tp3GrossRR === 1.90, `Expected tp3GrossRR 1.90, got ${res.tp3GrossRR}`);
+      assert(res.grossRR === 1.90, `Expected grossRR 1.90, got ${res.grossRR}`);
+      assert(res.primaryRR === 1.90, `Expected primaryRR 1.90, got ${res.primaryRR}`);
+      assert(res.effectiveGrossRR === 1.90, `Expected effectiveGrossRR 1.90, got ${res.effectiveGrossRR}`);
+      assert(res.passedViaTp3 === true, 'passedViaTp3 must be true');
+    });
+
+    await test('TEST 3: TP2 fails (0.97 < 1.80), TP3 fails (1.58 < 1.80) -> REJECT (grossRR = 0)', () => {
+      // Entry 100, SL 90 (risk 10), TP1 105 (0.5R), TP2 109.7 (0.97R), TP3 115.8 (1.58R)
+      const res = RiskRewardCalculator.calculate(100, 90, 105, 109.7, 115.8, 'BUY', 1.80);
+      assert(res.isValid, 'Must be structurally valid');
+      assert(!res.passesRR, 'Must fail R:R gate');
+      assert(res.selectedTarget === null, `Expected selectedTarget null, got ${res.selectedTarget}`);
+      assert(res.tp2GrossRR === 0.97, `Expected tp2GrossRR 0.97, got ${res.tp2GrossRR}`);
+      assert(res.tp3GrossRR === 1.58, `Expected tp3GrossRR 1.58, got ${res.tp3GrossRR}`);
+      assert(res.grossRR === 0, `Expected grossRR 0, got ${res.grossRR}`);
+      assert(res.primaryRR === 0, `Expected primaryRR 0, got ${res.primaryRR}`);
+      assert(res.effectiveGrossRR === 0, `Expected effectiveGrossRR 0, got ${res.effectiveGrossRR}`);
+      assert(!res.passedViaTp3, 'passedViaTp3 must be false');
+    });
+
+    await test('TEST 4: Score gate vs R:R gate independence — high score (84) with failing R:R (1.60/1.70) is rejected', () => {
+      // Risk 10, TP2 116 (1.60R), TP3 117 (1.70R)
+      const rrResult = RiskRewardCalculator.calculate(100, 90, 110, 116, 117, 'BUY', 1.80);
+      assert(!rrResult.passesRR, 'Must fail R:R gate even if score is 84+');
+      assert(rrResult.grossRR === 0, 'grossRR must be 0 for failing candidate');
+    });
+
+    await test('TEST 5: Configured threshold dynamic enforcement — threshold 2.0 rejects TP2=1.85, TP3=1.95', () => {
+      // Risk 10, TP2 118.5 (1.85R), TP3 119.5 (1.95R)
+      const res = RiskRewardCalculator.calculate(100, 90, 110, 118.5, 119.5, 'BUY', 2.00);
+      assert(!res.passesRR, 'Must be rejected when threshold is dynamically raised to 2.0');
+      assert(res.selectedTarget === null, 'selectedTarget must be null');
+      assert(res.grossRR === 0, 'grossRR must be 0');
+    });
+
+    await test('TEST 6: Real-world numerical benchmark — Entry=2481.60, SL=2464.75, TP2=2508.38, TP3=2519.09 BUY', () => {
+      const entry = 2481.60;
+      const sl = 2464.75;
+      const tp1 = 2495.00;
+      const tp2 = 2508.38;
+      const tp3 = 2519.09;
+      const res = RiskRewardCalculator.calculate(entry, sl, tp1, tp2, tp3, 'BUY', 1.80);
+
+      assert(res.isValid, 'Result must be valid');
+      assert(res.riskDistance === 16.85, `Expected riskDistance 16.85, got ${res.riskDistance}`);
+      assert(res.tp2GrossRR === 1.59, `Expected TP2 gross R:R 1.59, got ${res.tp2GrossRR}`);
+      assert(res.tp3GrossRR === 2.22, `Expected TP3 gross R:R 2.22, got ${res.tp3GrossRR}`);
+      assert(res.passesRR === true, 'Candidate must qualify because TP3 R:R (2.22) >= 1.80');
+      assert(res.selectedTarget === 'TP3', `Selected target must be TP3, got ${res.selectedTarget}`);
+      assert(res.grossRR === 2.22, `Published gross R:R must be 2.22 (NOT ~0.89), got ${res.grossRR}`);
+      assert(res.primaryRR === 2.22, `primaryRR must equal 2.22, got ${res.primaryRR}`);
+      assert(res.rewardDistance === 37.49, `rewardDistance must equal 37.49, got ${res.rewardDistance}`);
+      assert(res.passedViaTp3 === true, 'passedViaTp3 must be true');
+    });
+
+    await test('TEST 7: SELL direction canonical calculation and multi-target qualification', () => {
+      // Entry 100, SL 110 (risk 10), TP1 95 (0.5R), TP2 90.3 (0.97R), TP3 81.0 (1.90R)
+      const res = RiskRewardCalculator.calculate(100, 110, 95, 90.3, 81.0, 'SELL', 1.80);
+      assert(res.isValid, 'Result must be valid for SELL');
+      assert(res.passesRR, 'SELL must pass via TP3');
+      assert(res.selectedTarget === 'TP3', `Selected target must be TP3, got ${res.selectedTarget}`);
+      assert(res.tp2GrossRR === 0.97, `Expected TP2 gross R:R 0.97, got ${res.tp2GrossRR}`);
+      assert(res.tp3GrossRR === 1.90, `Expected TP3 gross R:R 1.90, got ${res.tp3GrossRR}`);
+      assert(res.grossRR === 1.90, `grossRR must be 1.90, got ${res.grossRR}`);
+      assert(res.passedViaTp3 === true, 'passedViaTp3 must be true');
     });
   });
 

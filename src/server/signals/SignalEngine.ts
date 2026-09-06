@@ -152,7 +152,7 @@ export class SignalEngine {
     symbol = 'EURUSD',
     category?: string,
     persistAndActivate: boolean = true,
-    options?: { scanStartedAt?: number; globalScanBudgetMs?: number }
+    options?: { scanStartedAt?: number; globalScanBudgetMs?: number; executionId?: string }
   ): Promise<SignalGenerationResponse> {
     const { runStagedPipeline } = await import('./StagedScannerPipeline.js');
     return runStagedPipeline(this, symbol, category, persistAndActivate, options);
@@ -382,9 +382,14 @@ export class SignalEngine {
 
   private async verifyCrossSourcePrice(
     symbol: string,
-    primaryPrice: number
+    primaryPrice: number,
+    globalScanDeadlineMs?: number
   ): Promise<{ isValid: boolean; agreementPct: number; secondaryPrice?: number; source2?: string }> {
     const cleanSymbol = symbol.trim().toUpperCase();
+
+    if (globalScanDeadlineMs && globalScanDeadlineMs - Date.now() <= 1000) {
+      return { isValid: true, agreementPct: 100 };
+    }
 
     // 1. Crypto Verification: Bitget with Finnhub
     if (cleanSymbol.includes('BTC') || cleanSymbol.includes('ETH') || cleanSymbol.includes('SOL')) {
@@ -392,7 +397,7 @@ export class SignalEngine {
       if (!apiKey) return { isValid: true, agreementPct: 100 };
 
       try {
-        const finnhubPrice = await marketDataManager.getPrice(cleanSymbol, 'finnhub');
+        const finnhubPrice = await marketDataManager.getPrice(cleanSymbol, 'finnhub', false, 'AUTOMATED_SCANNER', globalScanDeadlineMs);
         if (finnhubPrice && finnhubPrice.price > 0) {
           const diff = Math.abs(primaryPrice - finnhubPrice.price);
           const pct = (diff / primaryPrice) * 100;
@@ -422,7 +427,7 @@ export class SignalEngine {
     // 3. Stocks Verification: Finnhub with Twelve Data
     if (['AAPL', 'NVDA', 'MSFT'].includes(cleanSymbol)) {
       try {
-        const tdPrice = await marketDataManager.getPrice(cleanSymbol, 'twelvedata');
+        const tdPrice = await marketDataManager.getPrice(cleanSymbol, 'twelvedata', false, 'AUTOMATED_SCANNER', globalScanDeadlineMs);
         if (tdPrice && tdPrice.price > 0) {
           const diff = Math.abs(primaryPrice - tdPrice.price);
           const pct = (diff / primaryPrice) * 100;

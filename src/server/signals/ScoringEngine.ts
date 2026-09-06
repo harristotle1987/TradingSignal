@@ -675,11 +675,12 @@ export class ScoringEngine {
     tp1 = tpSetup.tp1;
     tp2 = tpSetup.tp2;
     tp3 = tpSetup.tp3;
-    takeProfit = tp2;
 
     const isBuyDirection = direction === 'BUY';
 
     const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, thresholds.minimumRR);
+    takeProfit = rrResult.selectedTarget === 'TP3' ? tp3 : tp2;
+
     if (!rrResult.isValid) {
       logRrRejectionDiagnostic({
         symbol: cleanSymbol,
@@ -693,7 +694,7 @@ export class ScoringEngine {
         structural1h: isBuyDirection ? majorResistance1h : majorSupport1h,
         assetClass: profile.assetClass,
         rejectionReason: rrResult.reason,
-      });
+      }, thresholds.minimumRR);
       return this.createRejection(
         `REJECTED: INVALID_RR_GEOMETRY. ${rrResult.reason || 'Invalid Risk/Reward geometry'}`,
         marketRegime,
@@ -720,7 +721,7 @@ export class ScoringEngine {
     const calculatedReward = rrResult.rewardDistance;
 
     // GATE 45 Step 1 & 2: Calculate Gross R:R & Reject if gross R:R < minimum acceptable GROSS R:R
-    if (rawRR < thresholds.minimumRR) {
+    if (!rrResult.passesRR || rawRR < thresholds.minimumRR) {
       logRrRejectionDiagnostic({
         symbol: cleanSymbol,
         direction,
@@ -733,7 +734,7 @@ export class ScoringEngine {
         structural1h: isBuyDirection ? majorResistance1h : majorSupport1h,
         assetClass: profile.assetClass,
         rejectionReason: `GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${thresholds.minimumRR}:1)`,
-      });
+      }, thresholds.minimumRR);
       return this.createRejection(
         `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${thresholds.minimumRR}:1)`,
         marketRegime,
@@ -767,7 +768,7 @@ export class ScoringEngine {
     const isGoodBreakoutPath = isBreakout && hasValidStructure && hasGoodRR;
 
     const isReversal = (marketRegime as string) === 'RANGE_REVERSAL' || (marketRegime as string) === 'RANGE' || primaryStrategyName.toUpperCase().includes('REVERSAL') || primaryStrategyName.toUpperCase().includes('DIVERGENCE') || primaryStrategyName.toUpperCase().includes('SWEEP');
-    const hasAcceptableRisk = rawRR >= 1.5;
+    const hasAcceptableRisk = rawRR >= thresholds.minimumRR;
     const isGoodReversalPath = isReversal && hasValidStructure && hasAcceptableRisk;
 
     const hasGoodMomentum = momentumScore >= 9;
@@ -1075,7 +1076,8 @@ export class ScoringEngine {
     const isBuy = direction === 'BUY';
 
     const riskDist = Math.abs(entryPrice - stopLoss);
-    const req1_8RTarget = isBuy ? entryPrice + (riskDist * 1.8) : entryPrice - (riskDist * 1.8);
+    const minRR = thresholds?.minimumRR ?? serverConfig.getConfig().thresholds.minimumRR;
+    const reqMinRTarget = isBuy ? entryPrice + (riskDist * minRR) : entryPrice - (riskDist * minRR);
 
     if (isBuy) {
       // TP1: conservative
@@ -1088,10 +1090,10 @@ export class ScoringEngine {
       // TP2: primary
       let baseTp2 = entryPrice + (cleanAtr * tp2Mult);
       if (majorResistance1h > entryPrice) {
-        if (majorResistance1h >= req1_8RTarget) {
+        if (majorResistance1h >= reqMinRTarget) {
           baseTp2 = 0.3 * baseTp2 + 0.7 * (majorResistance1h - cleanAtr * 0.15);
         } else {
-          // Nearest 1h structural anchor is closer than 1.8R.
+          // Nearest 1h structural anchor is closer than minRR.
           // Do not force baseTp2 down to near anchor if pure ATR target is higher.
           baseTp2 = Math.max(baseTp2, majorResistance1h - cleanAtr * 0.15);
         }
@@ -1115,7 +1117,7 @@ export class ScoringEngine {
       // TP2: primary
       let baseTp2 = entryPrice - (cleanAtr * tp2Mult);
       if (majorSupport1h < entryPrice) {
-        if (majorSupport1h <= req1_8RTarget) {
+        if (majorSupport1h <= reqMinRTarget) {
           baseTp2 = 0.3 * baseTp2 + 0.7 * (majorSupport1h + cleanAtr * 0.15);
         } else {
           baseTp2 = Math.min(baseTp2, majorSupport1h + cleanAtr * 0.15);

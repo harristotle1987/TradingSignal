@@ -78,7 +78,8 @@ export class NvidiaAIService {
    * - NEVER invents prices or overrides technical indicators / hard safety gates.
    */
   static async evaluateAndRankBatch(
-    candidates: CandidateAnalysisPayload[]
+    candidates: CandidateAnalysisPayload[],
+    globalScanDeadlineMs?: number
   ): Promise<NvidiaBatchEvaluationResult> {
     if (!candidates || candidates.length === 0) {
       return {
@@ -90,6 +91,16 @@ export class NvidiaAIService {
       };
     }
 
+    if (globalScanDeadlineMs) {
+      const remainingMs = globalScanDeadlineMs - Date.now();
+      if (remainingMs <= 1500) {
+        return this.fallbackDeterministicRanking(
+          candidates,
+          'NVIDIA AI skipped due to scanner time budget ceiling (≤1500ms remaining). Algorithmic engine ranked setups deterministically.'
+        );
+      }
+    }
+
     const apiKey = serverConfig.getNvidiaApiKey();
     if (!apiKey || apiKey.trim().length === 0) {
       return this.fallbackDeterministicRanking(
@@ -99,8 +110,10 @@ export class NvidiaAIService {
     }
 
     try {
+      const remainingMs = globalScanDeadlineMs ? globalScanDeadlineMs - Date.now() : 8000;
+      const timeoutMs = Math.min(8000, Math.max(1000, remainingMs - 300));
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
       const candidatesFormatted = candidates.slice(0, 5).map((c) => ({
         symbol: c.symbol,

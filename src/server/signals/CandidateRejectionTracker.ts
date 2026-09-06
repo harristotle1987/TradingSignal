@@ -166,11 +166,12 @@ export class CandidateRejectionTracker {
     if (cleanAudit.tp1 === 0) delete cleanAudit.tp1;
     if (cleanAudit.tp2 === 0) delete cleanAudit.tp2;
     if (cleanAudit.tp3 === 0) delete cleanAudit.tp3;
-    if (cleanAudit.grossRR === 0) delete cleanAudit.grossRR;
-    if (cleanAudit.primaryRR === 0) delete cleanAudit.primaryRR;
-    if (cleanAudit.tp1RR === 0) delete cleanAudit.tp1RR;
-    if (cleanAudit.tp2RR === 0) delete cleanAudit.tp2RR;
-    if (cleanAudit.tp3RR === 0) delete cleanAudit.tp3RR;
+    const isRrFailure = cleanAudit.failedGates?.includes(StandardFailedGate.RR) || cleanAudit.primaryRejectionReason?.includes('RR');
+    if (cleanAudit.grossRR === 0 && !isRrFailure) delete cleanAudit.grossRR;
+    if (cleanAudit.primaryRR === 0 && !isRrFailure) delete cleanAudit.primaryRR;
+    if (cleanAudit.tp1RR === 0 && !isRrFailure) delete cleanAudit.tp1RR;
+    if (cleanAudit.tp2RR === 0 && !isRrFailure) delete cleanAudit.tp2RR;
+    if (cleanAudit.tp3RR === 0 && !isRrFailure) delete cleanAudit.tp3RR;
 
     const existing = this.records.get(cleanAudit.symbol);
     if (existing) {

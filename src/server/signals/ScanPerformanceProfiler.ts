@@ -242,6 +242,14 @@ export class ScanPerformanceProfiler {
     this.providerRequestsStoppedByBudget = typeof stopped === 'boolean' ? (stopped ? 1 : 0) : stopped;
   }
 
+  public recordStoppedByBudget(): void {
+    this.providerRequestsStoppedByBudget++;
+  }
+
+  public getStoppedByBudgetCount(): number {
+    return this.providerRequestsStoppedByBudget;
+  }
+
   public setProviderHealth(provider: string, status: ProviderHealthStatus): void {
     this.providerHealthMap[provider.toLowerCase()] = status;
   }
@@ -347,6 +355,14 @@ export class ScanPerformanceProfiler {
       totalCacheMisses: this.totalCacheMisses,
       stages: stagesObj,
       stageList: [...this.stageList],
+    };
+  }
+
+  public toDetailedTelemetry(): ScanPerformanceProfile & { executionId: string } {
+    const profile = this.getProfile();
+    return {
+      ...profile,
+      executionId: this.scanId,
     };
   }
 
