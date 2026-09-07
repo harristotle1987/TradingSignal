@@ -99,14 +99,14 @@ export class Gate34ExecutionFrictionStressTest {
 
     const direction = stopLoss < entryPrice ? 'BUY' : 'SELL';
     const cfg = serverConfig.getConfig().thresholds;
-    const minGrossRR = thresholdOverrides?.minimumRR ?? cfg.minimumRR ?? 1.50;
+    const minGrossRR = thresholdOverrides?.minimumRR ?? cfg.minimumRR ?? 1.80;
 
     const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, minGrossRR);
     const rawRisk = rrResult.riskDistance;
     const rawReward = rrResult.rewardDistance;
     
-    // 1. Calculate GROSS_RR via RiskRewardCalculator (effectiveGrossRR considers multi-target evaluation)
-    const grossRR = rrResult.effectiveGrossRR;
+    // 1. Calculate GROSS_RR via RiskRewardCalculator (grossRR represents selected target's gross R:R)
+    const grossRR = rrResult.grossRR;
 
     // Build normal and adverse friction breakdowns based on asset-specific profile
     const normalFriction = this.calculateNormalFriction(cleanSymbol, assetClass, entryPrice, rawReward, rawRisk);
@@ -116,7 +116,7 @@ export class Gate34ExecutionFrictionStressTest {
     const adverseNetRR = adverseFriction.netRR; // ADVERSE_NET_RR
 
     // Resolve remaining safety thresholds
-    const minNetRR = thresholdOverrides?.minimumNetRR ?? cfg.minimumNetRR ?? 1.50;
+    const minNetRR = thresholdOverrides?.minimumNetRR ?? cfg.minimumNetRR ?? 1.20;
     const minAdverseNetRR = thresholdOverrides?.minimumAdverseNetRR ?? cfg.minimumAdverseNetRR ?? 1.00;
     const enforceAdverseHardGate = thresholdOverrides?.enforceAdverseNetRRHardGate ?? cfg.enforceAdverseNetRRHardGate ?? false;
     const maxFrictionRatio = thresholdOverrides?.maxFrictionRatio ?? 0.25;
@@ -127,7 +127,7 @@ export class Gate34ExecutionFrictionStressTest {
     let rejectionReason: string | undefined = undefined;
 
     // 1. GROSS R:R Check (Do NOT compare NET R:R against minimumRR, only GROSS R:R)
-    if (grossRR < minGrossRR) {
+    if (!rrResult.isValid || grossRR < minGrossRR) {
       isPassed = false;
       rejectionReason = 'GROSS_RR_BELOW_THRESHOLD';
       reasons.push(

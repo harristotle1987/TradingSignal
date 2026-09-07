@@ -685,6 +685,93 @@ async function runAll() {
       assert(res.primaryRR === res.tp2RR, 'primaryRR must equal TP2 RR');
     });
 
+    // --- GATE 3 CANONICAL TEST CASES ---
+    await test('TEST 1 — TP2 passes (TP2 R:R = 1.90, TP3 R:R = 2.20, minimumRR = 1.80)', () => {
+      // Entry 100, SL 90 (risk 10), TP1 105, TP2 119 (reward 19, RR 1.90), TP3 122 (reward 22, RR 2.20)
+      const res = RiskRewardCalculator.calculate(100, 90, 105, 119, 122, 'BUY', 1.80);
+      assert(res.isValid === true, 'Candidate must pass R:R gate');
+      assert(res.selectedTarget === 'TP2', `Expected selectedTarget TP2, got ${res.selectedTarget}`);
+      assert(res.grossRR === 1.90, `Expected grossRR 1.90, got ${res.grossRR}`);
+      assert(res.primaryRR === 1.90, `Expected primaryRR 1.90, got ${res.primaryRR}`);
+      assert(res.passedViaTp3 === false, 'passedViaTp3 must be false when TP2 qualifies');
+    });
+
+    await test('TEST 2 — Only TP3 passes (TP2 R:R = 0.97, TP3 R:R = 1.90, minimumRR = 1.80)', () => {
+      // Entry 100, SL 90 (risk 10), TP1 105, TP2 109.7 (reward 9.7, RR 0.97), TP3 119 (reward 19, RR 1.90)
+      const res = RiskRewardCalculator.calculate(100, 90, 105, 109.7, 119, 'BUY', 1.80);
+      assert(res.isValid === true, 'Candidate must pass R:R gate via TP3');
+      assert(res.selectedTarget === 'TP3', `Expected selectedTarget TP3, got ${res.selectedTarget}`);
+      assert(res.grossRR === 1.90, `Expected grossRR 1.90, got ${res.grossRR}`);
+      assert(res.primaryRR === 1.90, `Expected primaryRR 1.90, got ${res.primaryRR}`);
+      assert(res.passedViaTp3 === true, 'passedViaTp3 must be true when only TP3 qualifies');
+    });
+
+    await test('TEST 3 — Neither passes (TP2 R:R = 0.97, TP3 R:R = 1.58, minimumRR = 1.80)', () => {
+      // Entry 100, SL 90 (risk 10), TP1 105, TP2 109.7 (reward 9.7, RR 0.97), TP3 115.8 (reward 15.8, RR 1.58)
+      const res = RiskRewardCalculator.calculate(100, 90, 105, 109.7, 115.8, 'BUY', 1.80);
+      assert(res.isValid === false, 'Candidate must be REJECTED when neither TP2 nor TP3 reaches minimumRR');
+      assert(res.selectedTarget === null, `Expected selectedTarget null, got ${res.selectedTarget}`);
+      assert(res.grossRR === 0.97, `Expected grossRR 0.97, got ${res.grossRR}`);
+    });
+
+    await test('TEST 4 — High score cannot bypass R:R (score = 81, R:R = 1.58, minimumRR = 1.80)', () => {
+      const res = RiskRewardCalculator.calculate(100, 90, 105, 109.7, 115.8, 'BUY', 1.80);
+      const score = 81;
+      const minScore = 70;
+      const minRR = 1.80;
+      
+      const passesScore = score >= minScore;
+      const passesRR = res.isValid && res.grossRR >= minRR;
+      const finalQualified = passesScore && passesRR;
+
+      assert(passesScore === true, 'Score passes threshold');
+      assert(passesRR === false, 'R:R fails threshold');
+      assert(finalQualified === false, 'High score must not override the R:R gate');
+    });
+
+    await test('TEST 5 — Good R:R cannot bypass score (score = 69, R:R = 2.00, minimumScore = 70)', () => {
+      const res = RiskRewardCalculator.calculate(100, 95, 102, 110, 115, 'BUY', 1.80);
+      const score = 69;
+      const minScore = 70;
+      const minRR = 1.80;
+
+      const passesScore = score >= minScore;
+      const passesRR = res.isValid && res.grossRR >= minRR;
+      const finalQualified = passesScore && passesRR;
+
+      assert(passesScore === false, 'Score fails threshold');
+      assert(passesRR === true, 'R:R passes threshold');
+      assert(finalQualified === false, 'Good R:R must not override the score gate');
+    });
+
+    await test('TEST 6 — Visible numbers must equal published R:R (Entry=2481.60, SL=2464.75, TP2=2508.38, TP3=2519.09)', () => {
+      const entryPrice = 2481.60;
+      const stopLoss = 2464.75;
+      const tp1 = 2490.00;
+      const tp2 = 2508.38;
+      const tp3 = 2519.09;
+      const direction = 'BUY';
+      const minimumRR = 1.80;
+
+      const riskDistance = Math.abs(entryPrice - stopLoss); // 16.85
+      const tp2RewardDistance = Math.abs(tp2 - entryPrice); // 26.78
+      const tp3RewardDistance = Math.abs(tp3 - entryPrice); // 37.49
+
+      assert(Math.abs(riskDistance - 16.85) < 0.001, `Risk distance expected 16.85, got ${riskDistance}`);
+      assert(Math.abs(tp2RewardDistance - 26.78) < 0.001, `TP2 reward distance expected 26.78, got ${tp2RewardDistance}`);
+      assert(Math.abs(tp3RewardDistance - 37.49) < 0.001, `TP3 reward distance expected 37.49, got ${tp3RewardDistance}`);
+
+      const res = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, minimumRR);
+      
+      assert(res.tp2GrossRR === 1.59, `TP2 gross R:R expected 1.59, got ${res.tp2GrossRR}`);
+      assert(res.tp3GrossRR === 2.22, `TP3 gross R:R expected 2.22, got ${res.tp3GrossRR}`);
+      assert(res.isValid === true, 'Candidate must pass via TP3');
+      assert(res.selectedTarget === 'TP3', `Expected selectedTarget TP3, got ${res.selectedTarget}`);
+      assert(res.grossRR === 2.22, `Published grossRR must be 2.22, got ${res.grossRR}`);
+      assert(res.primaryRR === 2.22, `Published primaryRR must be 2.22, got ${res.primaryRR}`);
+      assert(res.grossRR !== 0.89, 'Published gross R:R must NOT be 0.89');
+    });
+
     await test('Invalid entry, SL, TP or missing direction cannot produce a fabricated R:R', () => {
       const invalidRes1 = RiskRewardCalculator.calculate(0, 95, 102, 110, 115, 'BUY');
       assert(!invalidRes1.isValid, 'Zero entry must be invalid');

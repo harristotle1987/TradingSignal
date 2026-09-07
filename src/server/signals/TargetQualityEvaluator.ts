@@ -37,8 +37,10 @@ export function calculateTargetRr(
   targetPrice: number
 ): number {
   if (!entryPrice || !stopLoss || !targetPrice) return 0;
-  const result = RiskRewardCalculator.calculate(entryPrice, stopLoss, targetPrice, targetPrice, targetPrice, direction);
-  return result.grossRR;
+  const riskDist = Math.abs(entryPrice - stopLoss);
+  if (riskDist <= 0) return 0;
+  const rewardDist = Math.abs(targetPrice - entryPrice);
+  return Number((rewardDist / riskDist).toFixed(2));
 }
 
 export class TargetQualityEvaluator {

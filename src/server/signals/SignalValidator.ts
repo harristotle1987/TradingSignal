@@ -544,7 +544,7 @@ export class SignalValidator {
     // 5. Gross Risk / Reward Ratio Check: Minimum acceptable GROSS R:R from config using RiskRewardCalculator canonical module
     const thresholds = serverConfig.getConfig().thresholds;
     const rrResult = RiskRewardCalculator.calculate(livePrice, adjustedSL, adjustedTp1 ?? adjustedTP, adjustedTp2 ?? adjustedTP, adjustedTp3 ?? adjustedTP, direction, thresholds.minimumRR);
-    const rawRR = rrResult.effectiveGrossRR;
+    const rawRR = rrResult.grossRR;
     if (rawRR < thresholds.minimumRR || !rrResult.isValid) {
       logRrRejectionDiagnostic({
         symbol,
@@ -564,7 +564,7 @@ export class SignalValidator {
         adjustedTp1: adjustedTp1 ?? adjustedTP,
         adjustedTp2: adjustedTp2 ?? adjustedTP,
         adjustedTp3: adjustedTp3 ?? adjustedTP,
-        adjustedGrossRR: rrResult.effectiveGrossRR,
+        adjustedGrossRR: rrResult.grossRR,
         adjustedPrimaryRR: rrResult.primaryRR,
         adjustedTp1RR: rrResult.tp1RR,
         adjustedTp2RR: rrResult.tp2RR,
@@ -572,15 +572,17 @@ export class SignalValidator {
       };
     }
 
+    const finalAdjustedTP = rrResult.selectedTarget === 'TP3' ? (adjustedTp3 ?? adjustedTP) : (adjustedTp2 ?? adjustedTP);
+
     return {
       isValid: true,
       message: 'OK',
       adjustedStopLoss: adjustedSL,
-      adjustedTakeProfit: adjustedTP,
+      adjustedTakeProfit: finalAdjustedTP,
       adjustedTp1: adjustedTp1 ?? adjustedTP,
       adjustedTp2: adjustedTp2 ?? adjustedTP,
       adjustedTp3: adjustedTp3 ?? adjustedTP,
-      adjustedGrossRR: rrResult.effectiveGrossRR,
+      adjustedGrossRR: rrResult.grossRR,
       adjustedPrimaryRR: rrResult.primaryRR,
       adjustedTp1RR: rrResult.tp1RR,
       adjustedTp2RR: rrResult.tp2RR,

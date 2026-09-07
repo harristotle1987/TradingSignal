@@ -369,9 +369,9 @@ export class Gate7FinalTradeValidation {
 
     
     const canonicalRR = RiskRewardCalculator.calculate(ctx.entryPrice, ctx.stopLoss, tp1, tp2, tp3, ctx.direction, minRR);
-    const effectiveRR = canonicalRR.effectiveGrossRR;
+    const effectiveRR = canonicalRR.grossRR;
 
-    if (isNaN(effectiveRR) || !isFinite(effectiveRR) || effectiveRR < minRR) {
+    if (!canonicalRR.isValid || isNaN(effectiveRR) || !isFinite(effectiveRR) || effectiveRR < minRR) {
       g9Passed = false;
       g9Reason = `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${effectiveRR.toFixed(2)}:1) is below ${minRR}:1 minimum acceptable GROSS R:R`;
       logRrRejectionDiagnostic({

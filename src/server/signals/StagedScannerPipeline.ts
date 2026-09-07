@@ -1008,9 +1008,9 @@ export async function runStagedPipeline(
       const safeTp1 = tpEnforced.tp1;
       const safeTp2 = tpEnforced.tp2;
       const safeTp3 = tpEnforced.tp3;
-      const safeTakeProfit = tpEnforced.takeProfit;
 
       const rrResult = RiskRewardCalculator.calculate(finalEntry, finalSL, safeTp1, safeTp2, safeTp3, scoring.direction);
+      const safeTakeProfit = rrResult.selectedTarget === 'TP3' ? safeTp3 : safeTp2;
       const tp1Rr = rrResult.tp1RR;
       const tp2Rr = rrResult.tp2RR;
       const tp3Rr = rrResult.tp3RR;

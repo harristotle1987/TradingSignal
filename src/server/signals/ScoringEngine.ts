@@ -695,7 +695,7 @@ export class ScoringEngine {
         rejectionReason: rrResult.reason,
       });
       return this.createRejection(
-        `REJECTED: INVALID_RR_GEOMETRY. ${rrResult.reason || 'Invalid Risk/Reward geometry'}`,
+        `REJECTED: ${rrResult.reason?.includes('GROSS_RR') ? 'GROSS_RR_BELOW_THRESHOLD' : 'INVALID_RR_GEOMETRY'}. ${rrResult.reason || 'Invalid Risk/Reward geometry'}`,
         marketRegime,
         regimeDetails,
         totalScore,
@@ -705,7 +705,7 @@ export class ScoringEngine {
         tp1,
         tp2,
         tp3,
-        rrResult.effectiveGrossRR,
+        rrResult.grossRR,
         entryPrice,
         rrResult.primaryRR,
         rrResult.tp1RR,
@@ -715,7 +715,8 @@ export class ScoringEngine {
         tpSetup.diagnostics
       );
     }
-    const rawRR = rrResult.effectiveGrossRR;
+    const rawRR = rrResult.grossRR;
+    takeProfit = rrResult.selectedTarget === 'TP3' ? tp3 : tp2;
     const calculatedRisk = rrResult.riskDistance;
     const calculatedReward = rrResult.rewardDistance;
 
@@ -767,7 +768,7 @@ export class ScoringEngine {
     const isGoodBreakoutPath = isBreakout && hasValidStructure && hasGoodRR;
 
     const isReversal = (marketRegime as string) === 'RANGE_REVERSAL' || (marketRegime as string) === 'RANGE' || primaryStrategyName.toUpperCase().includes('REVERSAL') || primaryStrategyName.toUpperCase().includes('DIVERGENCE') || primaryStrategyName.toUpperCase().includes('SWEEP');
-    const hasAcceptableRisk = rawRR >= 1.5;
+    const hasAcceptableRisk = rawRR >= thresholds.minimumRR;
     const isGoodReversalPath = isReversal && hasValidStructure && hasAcceptableRisk;
 
     const hasGoodMomentum = momentumScore >= 9;
@@ -1074,8 +1075,10 @@ export class ScoringEngine {
 
     const isBuy = direction === 'BUY';
 
-    const riskDist = Math.abs(entryPrice - stopLoss);
-    const req1_8RTarget = isBuy ? entryPrice + (riskDist * 1.8) : entryPrice - (riskDist * 1.8);
+    const minimumRR = serverConfig.getConfig().thresholds.minimumRR;
+    const riskDistance = Math.abs(entryPrice - stopLoss);
+    const requiredRRDistance = riskDistance * minimumRR;
+    const requiredRRTarget = isBuy ? entryPrice + requiredRRDistance : entryPrice - requiredRRDistance;
 
     if (isBuy) {
       // TP1: conservative
@@ -1088,10 +1091,10 @@ export class ScoringEngine {
       // TP2: primary
       let baseTp2 = entryPrice + (cleanAtr * tp2Mult);
       if (majorResistance1h > entryPrice) {
-        if (majorResistance1h >= req1_8RTarget) {
+        if (majorResistance1h >= requiredRRTarget) {
           baseTp2 = 0.3 * baseTp2 + 0.7 * (majorResistance1h - cleanAtr * 0.15);
         } else {
-          // Nearest 1h structural anchor is closer than 1.8R.
+          // Nearest 1h structural anchor is closer than required minimum R:R.
           // Do not force baseTp2 down to near anchor if pure ATR target is higher.
           baseTp2 = Math.max(baseTp2, majorResistance1h - cleanAtr * 0.15);
         }
@@ -1115,7 +1118,7 @@ export class ScoringEngine {
       // TP2: primary
       let baseTp2 = entryPrice - (cleanAtr * tp2Mult);
       if (majorSupport1h < entryPrice) {
-        if (majorSupport1h <= req1_8RTarget) {
+        if (majorSupport1h <= requiredRRTarget) {
           baseTp2 = 0.3 * baseTp2 + 0.7 * (majorSupport1h + cleanAtr * 0.15);
         } else {
           baseTp2 = Math.min(baseTp2, majorSupport1h + cleanAtr * 0.15);
