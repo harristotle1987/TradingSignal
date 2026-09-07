@@ -148,7 +148,7 @@ export class Gate8TradeabilityThreshold {
 
     // Factor 8: R:R Quality (Weight: 5)
     // Net Risk-Reward evaluation
-    const effRr = input.netRiskRewardRatio ?? input.riskRewardRatio ?? 1.5;
+    const effRr = input.netRiskRewardRatio ?? input.riskRewardRatio ?? 0;
     let rrScore = 3.5;
     if (effRr >= 3.0) rrScore = 5.0;
     else if (effRr >= 2.5) rrScore = 4.5;

@@ -149,6 +149,7 @@ export interface TradingSignal {
   tp1Rr?: number;
   tp2Rr?: number;
   tp3Rr?: number;
+  selectedTarget?: 'TP2' | 'TP3' | null;
   riskRewardRatio: number;
   grossRiskRewardRatio?: number;
   netRiskRewardRatio?: number;

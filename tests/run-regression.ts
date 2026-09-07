@@ -22,6 +22,7 @@ import { OpportunityFunnelStore } from '../src/server/signals/Gate26OpportunityF
 import { RiskRewardCalculator } from '../src/server/signals/RiskRewardCalculator.js';
 import { Gate7FinalTradeValidation } from '../src/server/signals/Gate7FinalTradeValidation.js';
 import { Gate8TradeabilityThreshold } from '../src/server/signals/Gate8TradeabilityThreshold.js';
+import { Gate9RiskManagement } from '../src/server/signals/Gate9RiskManagement.js';
 import { Gate35SignalFunnelAnalytics, FunnelStage } from '../src/server/signals/Gate35SignalFunnelAnalytics.js';
 import { HourlyScannerService } from '../src/server/signals/HourlyScanner.js';
 import { ScoringEngine } from '../src/server/signals/ScoringEngine.js';
@@ -711,7 +712,10 @@ async function runAll() {
       const res = RiskRewardCalculator.calculate(100, 90, 105, 109.7, 115.8, 'BUY', 1.80);
       assert(res.isValid === false, 'Candidate must be REJECTED when neither TP2 nor TP3 reaches minimumRR');
       assert(res.selectedTarget === null, `Expected selectedTarget null, got ${res.selectedTarget}`);
-      assert(res.grossRR === 0.97, `Expected grossRR 0.97, got ${res.grossRR}`);
+      assert(res.grossRR === 0, `Expected grossRR 0, got ${res.grossRR}`);
+      assert(res.primaryRR === 0, `Expected primaryRR 0, got ${res.primaryRR}`);
+      assert(res.tp2GrossRR === 0.97, `Expected tp2GrossRR 0.97, got ${res.tp2GrossRR}`);
+      assert(res.tp3GrossRR === 1.58, `Expected tp3GrossRR 1.58, got ${res.tp3GrossRR}`);
     });
 
     await test('TEST 4 — High score cannot bypass R:R (score = 81, R:R = 1.58, minimumRR = 1.80)', () => {
@@ -776,12 +780,51 @@ async function runAll() {
       const invalidRes1 = RiskRewardCalculator.calculate(0, 95, 102, 110, 115, 'BUY');
       assert(!invalidRes1.isValid, 'Zero entry must be invalid');
       assert(invalidRes1.grossRR === 0, 'Gross RR must be 0');
+      assert(invalidRes1.rejectionReason === 'INVALID_PRICE', 'Must return INVALID_PRICE');
+
+      const invalidNan = RiskRewardCalculator.calculate(NaN, 95, 102, 110, 115, 'BUY');
+      assert(!invalidNan.isValid && invalidNan.passesRR === false, 'NaN entry must be invalid');
+      assert(invalidNan.selectedTarget === null, 'selectedTarget must be null');
+      assert(invalidNan.grossRR === 0, 'grossRR must be 0');
+      assert(invalidNan.primaryRR === 0, 'primaryRR must be 0');
+      assert(invalidNan.rejectionReason === 'INVALID_PRICE', 'Must return INVALID_PRICE for NaN');
+
+      const invalidRiskDist = RiskRewardCalculator.calculate(100, 100, 105, 110, 120, 'BUY');
+      assert(!invalidRiskDist.isValid && invalidRiskDist.passesRR === false, 'SL === Entry must be invalid');
+      assert(invalidRiskDist.selectedTarget === null, 'selectedTarget must be null');
+      assert(invalidRiskDist.grossRR === 0, 'grossRR must be 0');
+      assert(invalidRiskDist.primaryRR === 0, 'primaryRR must be 0');
+      assert(invalidRiskDist.rejectionReason === 'INVALID_RISK_DISTANCE', 'Must return INVALID_RISK_DISTANCE');
+
+      const invalidGeometry1 = RiskRewardCalculator.calculate(100, 90, 110, 105, 120, 'BUY'); // TP2 <= TP1
+      assert(!invalidGeometry1.isValid && invalidGeometry1.passesRR === false, 'BUY with TP2 <= TP1 must be invalid');
+      assert(invalidGeometry1.selectedTarget === null, 'selectedTarget must be null');
+      assert(invalidGeometry1.grossRR === 0, 'grossRR must be 0');
+      assert(invalidGeometry1.primaryRR === 0, 'primaryRR must be 0');
+      assert(invalidGeometry1.rejectionReason === 'INVALID_TP_GEOMETRY', 'Must return INVALID_TP_GEOMETRY');
 
       const invalidRes2 = RiskRewardCalculator.calculate(100, 105, 102, 110, 115, 'BUY'); // SL above entry for BUY
       assert(!invalidRes2.isValid, 'BUY with SL above entry must be invalid');
+      assert(invalidRes2.rejectionReason === 'INVALID_TP_GEOMETRY', 'Must return INVALID_TP_GEOMETRY');
 
       const invalidRes3 = RiskRewardCalculator.calculate(100, 95, 102, 110, 115, 'INVALID' as any);
       assert(!invalidRes3.isValid, 'Invalid direction cannot silently fall through to SELL');
+    });
+
+    await test('Gate 9 consumes canonical R:R and dynamic serverConfig minimumRR without re-calculation', () => {
+      const minRR = serverConfig.getConfig().thresholds.minimumRR;
+      const targetTp2 = 100 + 10 * (minRR + 0.1);
+      const targetTp3 = 100 + 10 * (minRR + 0.5);
+      const expectedTp2RR = Number((minRR + 0.1).toFixed(2));
+
+      const g9Pass = Gate9RiskManagement.calculate(100, 'BUY', 90, 105, targetTp2, targetTp3, expectedTp2RR);
+      assert(g9Pass.isValid === true, 'Gate 9 must pass when TP2 >= minimumRR');
+      assert(g9Pass.rrRatio === expectedTp2RR, `Gate 9 rrRatio must be ${expectedTp2RR}, got ${g9Pass.rrRatio}`);
+      assert(g9Pass.takeProfit === targetTp2, `Gate 9 takeProfit must be ${targetTp2}, got ${g9Pass.takeProfit}`);
+
+      const g9Fail = Gate9RiskManagement.calculate(100, 'BUY', 90, 105, 100 + 10 * (minRR - 0.5), 100 + 10 * (minRR - 0.2), 0);
+      assert(g9Fail.isValid === false, 'Gate 9 must reject when R:R is below threshold');
+      assert(g9Fail.rrRatio === 0, `Gate 9 rrRatio must be 0 for rejected candidate, got ${g9Fail.rrRatio}`);
     });
 
     await test('Candidate rejected by GROSS_RR_BELOW_THRESHOLD preserves canonical SL, TP2, grossRR, and primaryRR', () => {
@@ -812,8 +855,9 @@ async function runAll() {
       assert(rec !== undefined, 'Record should exist');
       assert(rec!.stopLoss !== 0, 'stopLoss must not be 0');
       assert(rec!.tp2 !== 0, 'tp2 must not be 0');
-      assert(rec!.grossRR === canonical.grossRR, 'grossRR must match canonical');
-      assert(rec!.primaryRR === canonical.primaryRR, 'primaryRR must match canonical');
+      assert((rec!.grossRR ?? 0) === canonical.grossRR, 'grossRR must match canonical');
+      assert((rec!.primaryRR ?? 0) === canonical.primaryRR, 'primaryRR must match canonical');
+      assert(rec!.tp2RR === canonical.tp2RR, 'tp2RR must match canonical');
     });
 
     await test('Candidates rejected earlier for confluence/MTF legitimately have SL/TP unset without fabrications', () => {

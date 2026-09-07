@@ -1,5 +1,6 @@
 import { SignalDirection } from '../../types/index.js';
-import { RiskRewardCalculator } from './RiskRewardCalculator.js';
+import { RiskRewardCalculator, RiskRewardResult } from './RiskRewardCalculator.js';
+import { serverConfig } from '../config.js';
 
 export interface Gate9Result {
   entryPrice: number;
@@ -15,6 +16,7 @@ export interface Gate9Result {
   expectedValue: number;
   riskScore: number;
   reasons: string[];
+  isValid?: boolean;
 }
 
 export class Gate9RiskManagement {
@@ -25,46 +27,70 @@ export class Gate9RiskManagement {
     tp1: number,
     tp2: number,
     tp3: number,
-    riskRewardRatio: number
+    riskRewardRatio?: number,
+    providedRrResult?: RiskRewardResult
   ): Gate9Result {
     const reasons: string[] = [];
+    const minimumRR = serverConfig.getConfig().thresholds.minimumRR;
 
-    const rrResult = RiskRewardCalculator.calculate(currentPrice, stopLoss, tp1, tp2, tp3, direction);
+    const rrResult = providedRrResult ?? RiskRewardCalculator.calculate(
+      currentPrice,
+      stopLoss,
+      tp1,
+      tp2,
+      tp3,
+      direction,
+      minimumRR
+    );
+
+    const canonicalGrossRR = rrResult.grossRR;
+    const rrPass =
+      rrResult.selectedTarget !== null &&
+      Number.isFinite(canonicalGrossRR) &&
+      canonicalGrossRR >= minimumRR &&
+      rrResult.isValid &&
+      rrResult.riskDistance > 0;
+
     const risk = rrResult.riskDistance;
     const reward = rrResult.rewardDistance;
+    const authoritativeTP = rrResult.selectedTarget === 'TP3' ? tp3 : tp2;
 
-    if (!rrResult.isValid || risk <= 0) {
-      reasons.push(rrResult.reason || 'INVALID: stop-loss is on the wrong side of entry price');
+    if (!rrPass) {
+      reasons.push(
+        rrResult.reason ||
+        `REJECTED: Canonical R:R ${canonicalGrossRR.toFixed(2)} is below minimum threshold ${minimumRR.toFixed(2)}:1 or target selection failed.`
+      );
       return {
         entryPrice: currentPrice,
         sl: stopLoss,
         tp1,
         tp2,
         tp3,
-        takeProfit: tp1,
-        risk: Math.abs(currentPrice - stopLoss),
+        takeProfit: authoritativeTP,
+        risk: risk > 0 ? risk : Math.abs(currentPrice - stopLoss),
         reward: 0,
-        rrRatio: riskRewardRatio,
+        rrRatio: canonicalGrossRR,
         estimatedWinProbability: 0,
         expectedValue: 0,
         riskScore: 0,
-        reasons
+        isValid: false,
+        reasons,
       };
     }
 
-    // Base estimated win probability on the passed-in riskRewardRatio to avoid re-derivation drift
+    // Base estimated win probability on the canonical gross R:R to avoid drift
     let winProb = 0.45; // Base probability
-    if (riskRewardRatio > 2) winProb -= 0.05;
-    if (riskRewardRatio < 1.5) winProb += 0.05;
+    if (canonicalGrossRR > 2.5) winProb -= 0.05;
+    else if (canonicalGrossRR <= minimumRR) winProb += 0.05;
 
     // Expected Value Calculation
     const expectedValue = (winProb * reward) - ((1 - winProb) * risk);
 
-    // Risk Score based on authoritative passed-in riskRewardRatio
+    // Risk Score based on authoritative canonical gross R:R
     let riskScore = 100;
-    if (riskRewardRatio < 1.2) {
+    if (canonicalGrossRR < minimumRR) {
       riskScore -= 40;
-      reasons.push(`Low Reward-to-Risk ratio: ${riskRewardRatio.toFixed(2)}`);
+      reasons.push(`Low Reward-to-Risk ratio: ${canonicalGrossRR.toFixed(2)} below minimum ${minimumRR.toFixed(2)}:1`);
     }
     if (expectedValue < 0) {
       riskScore -= 50;
@@ -77,14 +103,15 @@ export class Gate9RiskManagement {
       tp1,
       tp2,
       tp3,
-      takeProfit: tp1,
+      takeProfit: authoritativeTP,
       risk,
       reward,
-      rrRatio: riskRewardRatio,
+      rrRatio: canonicalGrossRR,
       estimatedWinProbability: winProb,
       expectedValue,
       riskScore,
-      reasons
+      isValid: true,
+      reasons,
     };
   }
 }

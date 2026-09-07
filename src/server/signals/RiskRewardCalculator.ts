@@ -5,20 +5,22 @@ import { serverConfig } from '../config.js';
 export interface RiskRewardResult {
   riskDistance: number;
   rewardDistance: number;
-  grossRR: number;          // Authoritative gross R:R for the selected target (or 0 if rejected)
-  effectiveGrossRR: number; // Backward-compatible alias for grossRR
-  tp1RR: number;
-  tp2RR: number;
-  tp3RR: number;
   tp1GrossRR: number;
   tp2GrossRR: number;
   tp3GrossRR: number;
   selectedTarget: 'TP2' | 'TP3' | null;
-  primaryRR: number;        // Primary published R:R (equals grossRR)
-  netRR?: number;
-  isValid: boolean;
-  passedViaTp3: boolean;    // True when selectedTarget === 'TP3'
+  grossRR: number;
+  netRR: number;
+  primaryRR: number;
+  passesRR: boolean;
+  isValid: boolean;          // Alias for passesRR
+  passedViaTp3: boolean;     // True when selectedTarget === 'TP3'
+  effectiveGrossRR: number;  // Compatibility alias for grossRR
+  tp1RR: number;             // Legacy alias for tp1GrossRR
+  tp2RR: number;             // Legacy alias for tp2GrossRR
+  tp3RR: number;             // Legacy alias for tp3GrossRR
   reason?: string;
+  rejectionReason?: string;
 }
 
 export interface RrDiagnosticInput {
@@ -35,9 +37,14 @@ export interface RrDiagnosticInput {
   rejectionReason?: string;
 }
 
+const isValidPrice = (price: unknown): price is number =>
+  typeof price === 'number' &&
+  Number.isFinite(price) &&
+  price > 0;
+
 /**
-  * Logs the 10-point diagnostic for every candidate rejected by R:R.
-  */
+ * Logs the 10-point diagnostic for every candidate rejected by R:R.
+ */
 export function logRrRejectionDiagnostic(input: RrDiagnosticInput, minRR?: number): void {
   const actualMinRR = minRR ?? serverConfig.getConfig().thresholds.minimumRR;
   const {
@@ -113,52 +120,86 @@ export class RiskRewardCalculator {
     minRR?: number
   ): RiskRewardResult {
     const configMinRR = minRR ?? serverConfig.getConfig().thresholds.minimumRR;
-    
-    const invalidResult: RiskRewardResult = {
-      riskDistance: 0,
-      rewardDistance: 0,
-      grossRR: 0,
-      effectiveGrossRR: 0,
-      tp1RR: 0,
-      tp2RR: 0,
-      tp3RR: 0,
-      tp1GrossRR: 0,
-      tp2GrossRR: 0,
-      tp3GrossRR: 0,
-      selectedTarget: null,
-      primaryRR: 0,
-      isValid: false,
-      passedViaTp3: false,
-    };
+
+    // 1. Explicit Price Validation
+    if (
+      !isValidPrice(entryPrice) ||
+      !isValidPrice(stopLoss) ||
+      !isValidPrice(tp1) ||
+      !isValidPrice(tp2) ||
+      !isValidPrice(tp3)
+    ) {
+      return {
+        riskDistance: 0,
+        rewardDistance: 0,
+        tp1GrossRR: 0,
+        tp2GrossRR: 0,
+        tp3GrossRR: 0,
+        selectedTarget: null,
+        grossRR: 0,
+        netRR: 0,
+        primaryRR: 0,
+        passesRR: false,
+        isValid: false,
+        passedViaTp3: false,
+        effectiveGrossRR: 0,
+        tp1RR: 0,
+        tp2RR: 0,
+        tp3RR: 0,
+        rejectionReason: 'INVALID_PRICE',
+        reason: 'INVALID_PRICE: One or more price values (Entry, SL, TP1, TP2, TP3) are non-numeric, non-finite, or <= 0',
+      };
+    }
+
+    // 2. Risk Distance Validation
+    const riskDistance = Math.abs(entryPrice - stopLoss);
+    if (!Number.isFinite(riskDistance) || riskDistance <= 0) {
+      return {
+        riskDistance: 0,
+        rewardDistance: 0,
+        tp1GrossRR: 0,
+        tp2GrossRR: 0,
+        tp3GrossRR: 0,
+        selectedTarget: null,
+        grossRR: 0,
+        netRR: 0,
+        primaryRR: 0,
+        passesRR: false,
+        isValid: false,
+        passedViaTp3: false,
+        effectiveGrossRR: 0,
+        tp1RR: 0,
+        tp2RR: 0,
+        tp3RR: 0,
+        rejectionReason: 'INVALID_RISK_DISTANCE',
+        reason: 'INVALID_RISK_DISTANCE: Risk distance Math.abs(entryPrice - stopLoss) is zero, negative, or non-finite',
+      };
+    }
 
     if (direction !== 'BUY' && direction !== 'SELL') {
       return {
-        ...invalidResult,
+        riskDistance: Number(riskDistance.toFixed(4)),
+        rewardDistance: 0,
+        tp1GrossRR: 0,
+        tp2GrossRR: 0,
+        tp3GrossRR: 0,
+        selectedTarget: null,
+        grossRR: 0,
+        netRR: 0,
+        primaryRR: 0,
+        passesRR: false,
+        isValid: false,
+        passedViaTp3: false,
+        effectiveGrossRR: 0,
+        tp1RR: 0,
+        tp2RR: 0,
+        tp3RR: 0,
+        rejectionReason: 'INVALID_DIRECTION',
         reason: `Invalid or missing direction: ${direction} (must be exactly BUY or SELL)`,
       };
     }
 
-    if (
-      typeof entryPrice !== 'number' || !Number.isFinite(entryPrice) || entryPrice <= 0 ||
-      typeof stopLoss !== 'number' || !Number.isFinite(stopLoss) || stopLoss <= 0 ||
-      typeof tp1 !== 'number' || !Number.isFinite(tp1) || tp1 <= 0 ||
-      typeof tp2 !== 'number' || !Number.isFinite(tp2) || tp2 <= 0 ||
-      typeof tp3 !== 'number' || !Number.isFinite(tp3) || tp3 <= 0
-    ) {
-      return {
-        ...invalidResult,
-        reason: 'Invalid or missing Entry, SL, or TP values',
-      };
-    }
-
-    const riskDistance = Math.abs(entryPrice - stopLoss);
-    if (riskDistance <= 0 || !Number.isFinite(riskDistance)) {
-      return {
-        ...invalidResult,
-        reason: 'Risk distance is zero or negative',
-      };
-    }
-
+    // 3. Target Distances & Gross R:R Ratios
     const tp1RewardDistance = Math.abs(tp1 - entryPrice);
     const tp2RewardDistance = Math.abs(tp2 - entryPrice);
     const tp3RewardDistance = Math.abs(tp3 - entryPrice);
@@ -171,7 +212,9 @@ export class RiskRewardCalculator {
     const tp2RR = tp2GrossRR;
     const tp3RR = tp3GrossRR;
 
-    // Validate logical positioning and strict target ordering relative to direction
+    // 4. TP Geometry Validation
+    // For BUY: SL < Entry < TP1 < TP2 < TP3
+    // For SELL: SL > Entry > TP1 > TP2 > TP3
     const isOrdered = direction === 'BUY'
       ? (stopLoss < entryPrice && entryPrice < tp1 && tp1 < tp2 && tp2 < tp3)
       : (stopLoss > entryPrice && entryPrice > tp1 && tp1 > tp2 && tp2 > tp3);
@@ -179,30 +222,36 @@ export class RiskRewardCalculator {
     if (!isOrdered) {
       return {
         riskDistance: Number(riskDistance.toFixed(4)),
-        rewardDistance: Number(tp2RewardDistance.toFixed(4)),
-        grossRR: 0,
-        effectiveGrossRR: 0,
-        tp1RR,
-        tp2RR,
-        tp3RR,
+        rewardDistance: 0,
         tp1GrossRR,
         tp2GrossRR,
         tp3GrossRR,
         selectedTarget: null,
+        grossRR: 0,
+        netRR: 0,
         primaryRR: 0,
+        passesRR: false,
         isValid: false,
         passedViaTp3: false,
-        reason: `Invalid SL/TP placement or ordering relative to entry for direction ${direction}: SL=${stopLoss}, Entry=${entryPrice}, TP1=${tp1}, TP2=${tp2}, TP3=${tp3}`,
+        effectiveGrossRR: 0,
+        tp1RR,
+        tp2RR,
+        tp3RR,
+        rejectionReason: 'INVALID_TP_GEOMETRY',
+        reason: `INVALID_TP_GEOMETRY: Invalid SL/TP placement or ordering relative to entry for direction ${direction}: SL=${stopLoss}, Entry=${entryPrice}, TP1=${tp1}, TP2=${tp2}, TP3=${tp3}`,
       };
     }
 
-    // Target Selection & Qualification Gate
-    let selectedTarget: 'TP2' | 'TP3' | null = null;
-    if (tp2GrossRR >= configMinRR) {
-      selectedTarget = 'TP2';
-    } else if (tp3GrossRR >= configMinRR) {
-      selectedTarget = 'TP3';
-    }
+    // 5. Target Selection & Qualification Gate
+    const passesTp2 = tp2GrossRR >= configMinRR;
+    const passesTp3 = tp3GrossRR >= configMinRR;
+
+    const selectedTarget: 'TP2' | 'TP3' | null =
+      passesTp2
+        ? 'TP2'
+        : passesTp3
+          ? 'TP3'
+          : null;
 
     const passesRR = selectedTarget !== null;
     const passedViaTp3 = selectedTarget === 'TP3';
@@ -219,27 +268,31 @@ export class RiskRewardCalculator {
         ? tp2RewardDistance
         : selectedTarget === 'TP3'
           ? tp3RewardDistance
-          : tp2RewardDistance;
+          : 0;
 
     const primaryRR = grossRR;
     const effectiveGrossRR = grossRR;
+    const netRR = grossRR;
 
     if (!passesRR) {
       return {
         riskDistance: Number(riskDistance.toFixed(4)),
         rewardDistance: Number(evaluatedRewardDistance.toFixed(4)),
-        grossRR: tp2GrossRR,
-        effectiveGrossRR: tp2GrossRR,
-        tp1RR,
-        tp2RR,
-        tp3RR,
         tp1GrossRR,
         tp2GrossRR,
         tp3GrossRR,
         selectedTarget: null,
-        primaryRR: tp2GrossRR,
+        grossRR: 0,
+        netRR: 0,
+        primaryRR: 0,
+        passesRR: false,
         isValid: false,
         passedViaTp3: false,
+        effectiveGrossRR: 0,
+        tp1RR,
+        tp2RR,
+        tp3RR,
+        rejectionReason: 'GROSS_RR_BELOW_THRESHOLD',
         reason: `GROSS_RR_BELOW_THRESHOLD. Neither TP2 (${tp2GrossRR.toFixed(2)}:1) nor TP3 (${tp3GrossRR.toFixed(2)}:1) reaches the minimum configured R:R threshold of ${configMinRR.toFixed(2)}:1`,
       };
     }
@@ -247,18 +300,20 @@ export class RiskRewardCalculator {
     return {
       riskDistance: Number(riskDistance.toFixed(4)),
       rewardDistance: Number(evaluatedRewardDistance.toFixed(4)),
-      grossRR,
-      effectiveGrossRR,
-      tp1RR,
-      tp2RR,
-      tp3RR,
       tp1GrossRR,
       tp2GrossRR,
       tp3GrossRR,
       selectedTarget,
+      grossRR,
+      netRR,
       primaryRR,
+      passesRR: true,
       isValid: true,
       passedViaTp3,
+      effectiveGrossRR,
+      tp1RR,
+      tp2RR,
+      tp3RR,
     };
   }
 }
