@@ -47,7 +47,6 @@ class ProviderRequestQueue {
     if (globalScanDeadlineMs) {
       const remaining = globalScanDeadlineMs - Date.now();
       if (remaining <= safetyMargin) {
-        getActiveProfiler()?.recordStoppedByBudget();
         throw new Error(`TIMEOUT: Global scanner deadline reached during queue wait for ${providerId}`);
       }
     }
@@ -59,7 +58,6 @@ class ProviderRequestQueue {
         if (globalScanDeadlineMs) {
           const remaining = globalScanDeadlineMs - Date.now();
           if (remaining <= safetyMargin) {
-            getActiveProfiler()?.recordStoppedByBudget();
             throw new Error(`TIMEOUT: Global scanner deadline reached during queue wait for ${providerId}`);
           }
         }
@@ -68,7 +66,6 @@ class ProviderRequestQueue {
         if (elapsed < spacing) {
           const sleepTime = spacing - elapsed;
           if (globalScanDeadlineMs && (Date.now() + sleepTime > globalScanDeadlineMs - safetyMargin)) {
-            getActiveProfiler()?.recordStoppedByBudget();
             throw new Error(`TIMEOUT: Global scanner deadline would be reached during pacing delay for ${providerId}`);
           }
           await new Promise((res) => setTimeout(res, sleepTime));
@@ -697,12 +694,6 @@ export class MarketDataManager {
     return marketCache.getOrFetchCandles(primaryProviderId, cleanSymbol, timeframe, ttlMs, async () => {
       let candles: NormalizedCandle[] = [];
 
-      if (globalScanDeadlineMs && (globalScanDeadlineMs - Date.now() <= 150 || Date.now() >= globalScanDeadlineMs)) {
-        getActiveProfiler()?.recordStoppedByBudget();
-        logger.info(`[MarketDataManager] Candle fetch stopped before network call: global scan deadline reached for ${cleanSymbol} (${timeframe})`);
-        return [];
-      }
-
       const adapter = this.getProvider(primaryProviderId);
       if (adapter && adapter.fetchCandles) {
         if (quotaManager.canMakeRequest(primaryProviderId, critical)) {
@@ -740,10 +731,6 @@ export class MarketDataManager {
 
       // If primary provider failed or is rate-limited, attempt legitimate fallback providers
       for (const fallbackId of routing.fallbackProviders) {
-        if (globalScanDeadlineMs && (globalScanDeadlineMs - Date.now() <= 150 || Date.now() >= globalScanDeadlineMs)) {
-          getActiveProfiler()?.recordStoppedByBudget();
-          break;
-        }
         const fallbackAdapter = this.getProvider(fallbackId);
         if (fallbackAdapter && fallbackAdapter.fetchCandles) {
           if (quotaManager.canMakeRequest(fallbackId, critical)) {

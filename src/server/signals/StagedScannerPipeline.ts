@@ -58,23 +58,7 @@ function decimals(price: number, symbol?: string): number {
   return getDynamicPrecision(price, symbol);
 }
 
-function getEmptyTelemetry(
-  universeLen: number,
-  s0: number,
-  s1: number,
-  timingInfo?: {
-    globalScanStartMs?: number;
-    globalScanDeadlineMs?: number;
-    globalScanSoftDeadlineMs?: number;
-    currentElapsedMs?: number;
-    remainingBudgetMs?: number;
-    gate6ElapsedMs?: number;
-    stage3ElapsedMs?: number;
-    timeBudgetExceeded?: boolean;
-    providerRequestsStoppedByBudget?: boolean;
-    executionId?: string;
-  }
-) {
+function getEmptyTelemetry(universeLen: number, s0: number, s1: number) {
   return {
     universeSymbolsScanned: universeLen,
     preliminaryCandidatesFound: s1,
@@ -90,17 +74,6 @@ function getEmptyTelemetry(
     deepMtfInput: 0, deepMtfOutput: 0,
     finalValidationInput: 0, finalValidationOutput: 0,
     finalScoreGateInput: 0, finalScoreGateOutput: 0,
-    globalScanStartMs: timingInfo?.globalScanStartMs ?? 0,
-    globalScanDeadlineMs: timingInfo?.globalScanDeadlineMs ?? 0,
-    globalScanSoftDeadlineMs: timingInfo?.globalScanSoftDeadlineMs ?? 0,
-    currentElapsedMs: timingInfo?.currentElapsedMs ?? 0,
-    remainingBudgetMs: timingInfo?.remainingBudgetMs ?? 0,
-    gate6ElapsedMs: timingInfo?.gate6ElapsedMs ?? 0,
-    stage3ElapsedMs: timingInfo?.stage3ElapsedMs ?? 0,
-    timeBudgetExceeded: timingInfo?.timeBudgetExceeded ?? false,
-    providerRequestsStoppedByBudget: timingInfo?.providerRequestsStoppedByBudget ?? false,
-    executionId: timingInfo?.executionId ?? '',
-    scanId: timingInfo?.executionId ?? '',
   };
 }
 
@@ -109,15 +82,13 @@ export async function runStagedPipeline(
   symbol: string,
   category?: string,
   persistAndActivate: boolean = true,
-  options?: { scanStartedAt?: number; globalScanBudgetMs?: number; executionId?: string }
+  options?: { scanStartedAt?: number; globalScanBudgetMs?: number }
 ): Promise<SignalGenerationResponse> {
   const cleanSymbol = symbol.trim().toUpperCase();
   const now = Date.now();
   const globalScanStartMs = options?.scanStartedAt ?? Date.now();
-  const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 17500;
+  const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 24000;
   const globalScanDeadlineMs = globalScanStartMs + GLOBAL_SCAN_BUDGET_MS;
-  const globalScanSoftDeadlineMs = globalScanStartMs + Math.min(16000, Math.max(0, GLOBAL_SCAN_BUDGET_MS - 1500));
-  const executionId = options?.executionId ?? `scan-${globalScanStartMs}-${Math.random().toString(36).substring(2, 9)}`;
   const scanStartTime = globalScanStartMs;
   let timeBudgetExceeded = false;
   let providerRequestsStoppedByBudget = false;
@@ -130,23 +101,10 @@ export async function runStagedPipeline(
   const allCandidateScores: Gate10CandidateScoreRecord[] = [];
   const { assetCategory, universe } = engine.resolveTargetUniverse(cleanSymbol, category);
 
-  const profiler = new ScanPerformanceProfiler(executionId);
+  const profiler = new ScanPerformanceProfiler();
   profiler.startScan(globalScanStartMs);
   profiler.setGlobalDeadline(globalScanDeadlineMs);
   setActiveProfiler(profiler);
-
-  const getTimingSnapshot = (extraStoppedByBudget = false) => ({
-    globalScanStartMs,
-    globalScanDeadlineMs,
-    globalScanSoftDeadlineMs,
-    currentElapsedMs: Date.now() - globalScanStartMs,
-    remainingBudgetMs: Math.max(0, globalScanDeadlineMs - Date.now()),
-    gate6ElapsedMs,
-    stage3ElapsedMs,
-    timeBudgetExceeded: timeBudgetExceeded || (Date.now() >= globalScanDeadlineMs),
-    providerRequestsStoppedByBudget: providerRequestsStoppedByBudget || extraStoppedByBudget || (profiler.getStoppedByBudgetCount() > 0),
-    executionId,
-  });
 
   // 1. Check duplicate / active signal cooldown
   const existingSignal = engine.activeSignals.get(cleanSymbol);
@@ -212,7 +170,7 @@ export async function runStagedPipeline(
         symbol: cleanSymbol,
         reason: `All instruments in the ${assetCategory} universe are currently outside official exchange trading hours.`,
         timestamp: now,
-        telemetry: getEmptyTelemetry(universe.length, 0, 0, getTimingSnapshot()),
+        telemetry: getEmptyTelemetry(universe.length, 0, 0),
       };
     }
 
@@ -230,11 +188,10 @@ export async function runStagedPipeline(
 
     const BATCH_SIZE = 16;
     for (let i = 0; i < openAssets.length; i += BATCH_SIZE) {
-      const remainingMs = globalScanDeadlineMs - Date.now();
-      if (remainingMs <= 1500 || Date.now() >= globalScanSoftDeadlineMs) {
-        if (remainingMs <= 0) timeBudgetExceeded = true;
+      if (globalScanDeadlineMs - Date.now() <= 0) {
+        timeBudgetExceeded = true;
         providerRequestsStoppedByBudget = true;
-        logger.warn(`[Gate 3 Time Budget Exceeded] Global scan budget reached (${Date.now() - globalScanStartMs}ms elapsed, remaining: ${remainingMs}ms). Halting further preliminary screening.`);
+        logger.warn(`[Gate 3 Time Budget Exceeded] Global scan deadline reached (${Date.now() - globalScanStartMs}ms elapsed). Halting further preliminary screening.`);
         break;
       }
       const batch = openAssets.slice(i, i + BATCH_SIZE);
@@ -242,7 +199,7 @@ export async function runStagedPipeline(
         batch.map(async (asset) => {
           let htf1h: NormalizedCandle[];
           try {
-            htf1h = await marketDataManager.getCandles(asset, undefined, '1h', 50, false, globalScanDeadlineMs);
+            htf1h = await marketDataManager.getCandles(asset, undefined, '1h', 50, false);
           } catch (err) {
             logger.info(`[Gate 3 Screen] Skipped ${asset}: 1H candles unavailable (${err instanceof Error ? err.message : String(err)})`);
             return null;
@@ -299,7 +256,7 @@ export async function runStagedPipeline(
         symbol: cleanSymbol,
         reason: `No symbols passed Gate 3 preliminary screening criteria (Liquidity, Volume, Trend, Momentum, Volatility, Spread).`,
         timestamp: now,
-        telemetry: getEmptyTelemetry(universe.length, stage0OutputCount, 0, getTimingSnapshot()),
+        telemetry: getEmptyTelemetry(universe.length, stage0OutputCount, 0),
       };
     }
 
@@ -323,7 +280,7 @@ export async function runStagedPipeline(
         symbol: cleanSymbol,
         reason: `Dynamic provider request budget is exhausted. Deeper MTF analysis gracefully skipped to protect API quotas.`,
         timestamp: now,
-        telemetry: getEmptyTelemetry(universe.length, stage0OutputCount, stage1OutputCount, getTimingSnapshot(true)),
+        telemetry: getEmptyTelemetry(universe.length, stage0OutputCount, stage1OutputCount),
       };
     }
 
@@ -362,7 +319,7 @@ export async function runStagedPipeline(
         symbol: cleanSymbol,
         reason: `No candidates qualified during Gate 5 deep candidate selection.`,
         timestamp: now,
-        telemetry: getEmptyTelemetry(universe.length, stage0OutputCount, stage1OutputCount, getTimingSnapshot()),
+        telemetry: getEmptyTelemetry(universe.length, stage0OutputCount, stage1OutputCount),
       };
     }
 
@@ -472,11 +429,10 @@ export async function runStagedPipeline(
     const deepAnalyzedCandidates: any[] = [];
     const stage3StartMs = Date.now();
     let generalNews: any[] = [];
-    const remainingBeforeNews = globalScanDeadlineMs - Date.now();
-    if (remainingBeforeNews > 1500 && Date.now() < globalScanSoftDeadlineMs) {
+    if (globalScanDeadlineMs - Date.now() > 0) {
       generalNews = await engine.fetchGeneralNews();
     } else {
-      if (remainingBeforeNews <= 0) timeBudgetExceeded = true;
+      timeBudgetExceeded = true;
       providerRequestsStoppedByBudget = true;
     }
     const thresholds = serverConfig.getConfig().thresholds;
@@ -485,10 +441,7 @@ export async function runStagedPipeline(
     const survivedPricesAndCrossChecks = await Promise.all(
       gate6Analysis.survivedCandidates.map(async (gate6Cand) => {
         const remainingMs = globalScanDeadlineMs - Date.now();
-        if (remainingMs <= 1000 || Date.now() >= globalScanSoftDeadlineMs) {
-          providerRequestsStoppedByBudget = true;
-          return null;
-        }
+        if (remainingMs <= 0) return null;
         const asset = gate6Cand.asset;
         const candlesMap = gate6Cand.candlesMap;
         const sorted1h = candlesMap['1h'] || [];
@@ -499,11 +452,11 @@ export async function runStagedPipeline(
           // Sync verified news from Twelve Data for this candidate (cache-first/non-blocking)
           await Gate31NewsRiskClassification.syncVerifiedNews(asset, Math.min(200, Math.max(0, remainingMs)));
 
-          const liveTicker = await marketDataManager.getPrice(asset, undefined, true, 'AUTOMATED_SCANNER', globalScanDeadlineMs);
+          const liveTicker = await marketDataManager.getPrice(asset, undefined, true, 'AUTOMATED_SCANNER');
           if (!liveTicker || liveTicker.price <= 0) return null;
           const baselinePrice = liveTicker.price;
           const newsSentiment = engine.evaluateNewsSentiment(asset, generalNews);
-          const crossCheck = await engine.verifyCrossSourcePrice(asset, baselinePrice, globalScanDeadlineMs);
+          const crossCheck = await engine.verifyCrossSourcePrice(asset, baselinePrice);
           return { gate6Cand, liveTicker, baselinePrice, newsSentiment, crossCheck };
         } catch {
           return null;
@@ -1127,7 +1080,7 @@ export async function runStagedPipeline(
         winRateEstimate: c.signal.estimatedWinRate,
       }));
 
-      const batchAiResult = await NvidiaAIService.evaluateAndRankBatch(candidatePayloads, globalScanDeadlineMs);
+      const batchAiResult = await NvidiaAIService.evaluateAndRankBatch(candidatePayloads);
       logger.info(`[NVIDIA AI Batch Analysis] ${batchAiResult.aiAssessment}`, {
         recommendedCount: batchAiResult.recommendedSymbols.length,
       });
@@ -1422,8 +1375,7 @@ export async function runStagedPipeline(
       signalsGenerated: finalSignals.length,
       signalsAccepted: finalSignals.length,
     });
-    const totalBudgetStopped = providerRequestsStoppedByBudget || (profiler.getStoppedByBudgetCount() > 0);
-    profiler.setStoppedByBudget(totalBudgetStopped);
+    profiler.setStoppedByBudget(providerRequestsStoppedByBudget);
     profiler.setRejectionReasons(aggregatedReasons);
 
     profiler.endScan();
@@ -1440,15 +1392,12 @@ export async function runStagedPipeline(
       finalScoreGateInput: finalValidationOutputCount, finalScoreGateOutput: finalSignalsOutputCount,
       globalScanStartMs,
       globalScanDeadlineMs,
-      globalScanSoftDeadlineMs,
       currentElapsedMs,
       remainingBudgetMs,
       gate6ElapsedMs,
       stage3ElapsedMs,
       timeBudgetExceeded,
-      providerRequestsStoppedByBudget: totalBudgetStopped,
-      executionId,
-      scanId: executionId,
+      providerRequestsStoppedByBudget,
       gate10Telemetry: gate10Data,
       rejectionReasons: aggregatedReasons,
       candidateRejectionDetails: candidateAuditRecords,
@@ -1571,7 +1520,7 @@ export async function runStagedPipeline(
       symbol: cleanSymbol,
       reason: `Multi-asset scanning interrupted: ${errMsg}`,
       timestamp: now,
-      telemetry: getEmptyTelemetry(universe.length, 0, 0, getTimingSnapshot()),
+      telemetry: getEmptyTelemetry(universe.length, 0, 0),
     };
   }
 }

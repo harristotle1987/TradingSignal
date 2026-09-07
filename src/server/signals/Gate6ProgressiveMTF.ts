@@ -680,8 +680,7 @@ export class Gate6ProgressiveMTF {
     globalScanDeadlineMs?: number
   ): Promise<Gate6ProgressiveAnalysisResult> {
     const startMs = globalScanStartMs ?? Date.now();
-    const deadlineMs = globalScanDeadlineMs ?? (startMs + 17500);
-    const softDeadlineMs = Math.min(startMs + 16000, deadlineMs - 1500);
+    const deadlineMs = globalScanDeadlineMs ?? (startMs + 24000);
     const gate6StartMs = Date.now();
 
     let timeBudgetExceeded = false;
@@ -752,16 +751,12 @@ export class Gate6ProgressiveMTF {
       const remainingMs = deadlineMs - Date.now();
       const currentElapsedMs = Date.now() - startMs;
 
-      // Two-level deadline check:
-      // Soft deadline (16000ms / remainingMs <= 1500ms): Stop starting NEW Layer 1 candidate processing
-      // Hard deadline (17500ms / remainingMs <= 0ms): Absolute cutoff
-      if (remainingMs <= 1500 || currentElapsedMs >= 16000 || Date.now() >= softDeadlineMs) {
-        if (remainingMs <= 0 || currentElapsedMs >= 17500 || Date.now() >= deadlineMs) {
-          timeBudgetExceeded = true;
-        }
+      // Rule 2: Gate 6 must stop starting expensive work when remainingMs <= 1500ms OR currentElapsedMs >= 22500ms
+      if (remainingMs <= 1500 || currentElapsedMs >= 22500) {
+        timeBudgetExceeded = true;
         providerRequestsStoppedByBudget = true;
         logger.warn(
-          `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (soft: 16000ms / hard: ${deadlineMs}ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 1 candidate processing.`
+          `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (22500ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 1 candidate processing.`
         );
         break;
       }
@@ -787,7 +782,7 @@ export class Gate6ProgressiveMTF {
           // Fetch ONLY 15m candles first (Layer 1)
           let candles15m: NormalizedCandle[] = [];
           try {
-            const fetched15m = await marketDataManager.getCandles(asset, undefined, '15m', 50, false, deadlineMs);
+            const fetched15m = await marketDataManager.getCandles(asset, undefined, '15m', 50, false);
             if (fetched15m && fetched15m.length >= 15) {
               candles15m = fetched15m.sort((a, b) => a.timestamp - b.timestamp);
             }
@@ -912,33 +907,13 @@ export class Gate6ProgressiveMTF {
         const remainingMs = deadlineMs - Date.now();
         const currentElapsedMs = Date.now() - startMs;
 
-        // Two-level deadline check: Stop starting expensive Layer 2 candle fetches if soft/hard deadline reached
-        if (remainingMs <= 1500 || currentElapsedMs >= 16000 || Date.now() >= softDeadlineMs) {
-          if (remainingMs <= 0 || currentElapsedMs >= 17500 || Date.now() >= deadlineMs) {
-            timeBudgetExceeded = true;
-          }
+        // Stop starting expensive work if deadline is near
+        if (remainingMs <= 1500 || currentElapsedMs >= 22500) {
+          timeBudgetExceeded = true;
           providerRequestsStoppedByBudget = true;
           logger.warn(
-            `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (soft: 16000ms / hard: ${deadlineMs}ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 2 candidate processing.`
+            `[Gate 6 Time Budget Exceeded] Global scan elapsed (${currentElapsedMs}ms) reached threshold (22500ms / remaining ${remainingMs}ms). Halting further Gate 6 Layer 2 candidate processing.`
           );
-          for (const survivor of survivorsToProcess) {
-            rejected.push({
-              asset: survivor.cand.asset,
-              direction: survivor.cand.direction,
-              passed: false,
-              stoppedAtLayer: 2,
-              layer1: survivor.l1Result,
-              compositeMtfScore: survivor.cand.preliminaryScore,
-              candlesMap: { '1h': survivor.sorted1h, '15m': survivor.candles15m },
-              rejectionReason: `TIME_BUDGET_EXCEEDED: Layer 2 MTF analysis halted due to scanner time budget ceiling.`,
-              auditTrail: [...survivor.auditTrail, `[Gate 6 Budget Cutoff] Layer 2 MTF halted due to scan deadline`],
-              scoreBeforeGate6: survivor.cand.preliminaryScore,
-              maximumPossibleScoreAfterRemainingAnalysis: Math.min(100, survivor.cand.preliminaryScore + 25),
-              scoreAfterGate6: survivor.cand.preliminaryScore,
-              finalScore: survivor.cand.preliminaryScore,
-              factors: Gate6ProgressiveMTF.extractFactors(survivor.cand, survivor.l1Result, null, survivor.cand.preliminaryScore),
-            });
-          }
         } else {
           const l2Evaluations = await Promise.all(
             survivorsToProcess.map(async (survivor) => {
@@ -952,8 +927,8 @@ export class Gate6ProgressiveMTF {
 
               try {
                 const [fetched5m, fetched4h] = await Promise.all([
-                  marketDataManager.getCandles(asset, undefined, '5m', 50, false, deadlineMs).catch(() => []),
-                  marketDataManager.getCandles(asset, undefined, '4h', 40, false, deadlineMs).catch(() => []),
+                  marketDataManager.getCandles(asset, undefined, '5m', 50, false).catch(() => []),
+                  marketDataManager.getCandles(asset, undefined, '4h', 40, false).catch(() => []),
                 ]);
                 if (fetched5m && fetched5m.length >= 10) candles5m = fetched5m.sort((a, b) => a.timestamp - b.timestamp);
                 if (fetched4h && fetched4h.length >= 10) candles4h = fetched4h.sort((a, b) => a.timestamp - b.timestamp);

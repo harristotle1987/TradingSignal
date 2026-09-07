@@ -99,31 +99,22 @@ export interface ManualScanResult {
   timingTelemetry?: {
     globalScanStartMs: number;
     globalScanDeadlineMs: number;
-    globalScanSoftDeadlineMs?: number;
     currentElapsedMs: number;
     remainingBudgetMs: number;
     gate6ElapsedMs: number;
     stage3ElapsedMs: number;
     timeBudgetExceeded: boolean;
     providerRequestsStoppedByBudget: boolean;
-    executionId?: string;
-    scanId?: string;
   };
   globalScanStartMs?: number;
   globalScanDeadlineMs?: number;
-  globalScanSoftDeadlineMs?: number;
   currentElapsedMs?: number;
   remainingBudgetMs?: number;
   gate6ElapsedMs?: number;
   stage3ElapsedMs?: number;
   timeBudgetExceeded?: boolean;
   providerRequestsStoppedByBudget?: boolean;
-  executionId?: string;
-  scanId?: string;
 }
-
-export const SCANNER_SOFT_DEADLINE_MS = 16000;
-export const SCANNER_HARD_DEADLINE_MS = 17500;
 
 export class HourlyScannerService {
   private isScanning = false;
@@ -276,15 +267,13 @@ export class HourlyScannerService {
    */
   private async executeIntelligentScan(
     isExternal = false,
-    options?: { scanStartedAt?: number; globalScanBudgetMs?: number; executionId?: string }
+    options?: { scanStartedAt?: number; globalScanBudgetMs?: number }
   ): Promise<ManualScanResult> {
     const scanStartTime = options?.scanStartedAt ?? Date.now();
     const globalScanStartMs = scanStartTime;
-    const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? SCANNER_HARD_DEADLINE_MS;
+    const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 24000;
     const globalScanDeadlineMs = globalScanStartMs + GLOBAL_SCAN_BUDGET_MS;
-    const globalScanSoftDeadlineMs = globalScanStartMs + Math.min(SCANNER_SOFT_DEADLINE_MS, Math.max(0, GLOBAL_SCAN_BUDGET_MS - 1500));
-    const executionId = options?.executionId ?? `scan-${globalScanStartMs}-${Math.random().toString(36).substring(2, 9)}`;
-    logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime} | deadline: ${globalScanDeadlineMs} | softDeadline: ${globalScanSoftDeadlineMs} | executionId: ${executionId}`);
+    logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime} | deadline: ${globalScanDeadlineMs}`);
 
     if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
       logger.error('[Hourly Scanner] AUTOMATED SCANNER DISPATCH DISABLED: Production persistence is unavailable (FIREBASE_SERVICE_ACCOUNT required).');
@@ -397,7 +386,6 @@ export class HourlyScannerService {
             const result = await signalEngine.generateSignal(category, category, false, {
               scanStartedAt: globalScanStartMs,
               globalScanBudgetMs: GLOBAL_SCAN_BUDGET_MS,
-              executionId,
             });
             return { category, result };
           } catch (catErr) {
@@ -1247,15 +1235,12 @@ export class HourlyScannerService {
       const timingTelemetry = {
         globalScanStartMs,
         globalScanDeadlineMs,
-        globalScanSoftDeadlineMs,
         currentElapsedMs,
         remainingBudgetMs,
         gate6ElapsedMs: maxGate6ElapsedMs,
         stage3ElapsedMs: maxStage3ElapsedMs,
         timeBudgetExceeded: aggregatedTimeBudgetExceeded,
         providerRequestsStoppedByBudget: aggregatedProviderRequestsStoppedByBudget,
-        executionId,
-        scanId: executionId,
       };
 
       return {
@@ -1295,9 +1280,6 @@ export class HourlyScannerService {
         timingTelemetry,
         globalScanStartMs,
         globalScanDeadlineMs,
-        globalScanSoftDeadlineMs,
-        executionId,
-        scanId: executionId,
         currentElapsedMs,
         remainingBudgetMs,
         gate6ElapsedMs: maxGate6ElapsedMs,

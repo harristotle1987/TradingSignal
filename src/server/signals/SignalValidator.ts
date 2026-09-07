@@ -545,7 +545,7 @@ export class SignalValidator {
     const thresholds = serverConfig.getConfig().thresholds;
     const rrResult = RiskRewardCalculator.calculate(livePrice, adjustedSL, adjustedTp1 ?? adjustedTP, adjustedTp2 ?? adjustedTP, adjustedTp3 ?? adjustedTP, direction, thresholds.minimumRR);
     const rawRR = rrResult.effectiveGrossRR;
-    if (!rrResult.isValid || !rrResult.passesRR || rawRR < thresholds.minimumRR) {
+    if (rawRR < thresholds.minimumRR || !rrResult.isValid) {
       logRrRejectionDiagnostic({
         symbol,
         direction,
@@ -555,7 +555,7 @@ export class SignalValidator {
         tp2: adjustedTp2 ?? adjustedTP,
         tp3: adjustedTp3 ?? adjustedTP,
         rejectionReason: `GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum acceptable GROSS R:R (${rrResult.reason || 'Invalid geometry'})`,
-      }, thresholds.minimumRR);
+      });
       return {
         isValid: false,
         message: `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum acceptable GROSS R:R (${rrResult.reason || 'Invalid geometry'})`,
