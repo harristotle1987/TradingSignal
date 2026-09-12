@@ -1,6 +1,8 @@
 import { useState, useMemo } from 'react';
 import { ShieldAlert, ChevronDown, ChevronUp, AlertOctagon, Filter } from 'lucide-react';
 import { RejectionBreakdown } from './SignalAnalysisDetails.js';
+import { ReportZoomControls, useReportZoom } from './ReportZoomControls.js';
+import { ZoomableReportWrapper } from './ZoomableReportWrapper.js';
 
 export interface RejectedCandidateTelemetry {
   symbol: string;
@@ -39,6 +41,7 @@ export function Rejected72PlusPanel({
   compact = false,
 }: Rejected72PlusPanelProps) {
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
+  const { zoomLevel, zoomIn, zoomOut, resetZoom, setZoom } = useReportZoom(1.0, 0.7, 1.8, 0.15);
 
   const qualifyingCandidates = useMemo(() => {
     if (!candidates || !Array.isArray(candidates)) return [];
@@ -79,14 +82,23 @@ export function Rejected72PlusPanel({
         </div>
 
         <div className="flex items-center gap-2">
+          <ReportZoomControls
+            zoomLevel={zoomLevel}
+            onZoomIn={zoomIn}
+            onZoomOut={zoomOut}
+            onResetZoom={resetZoom}
+            onSetZoom={setZoom}
+            compact={true}
+            idPrefix="rejected-report-zoom"
+          />
           <span className="px-2.5 py-1 bg-rose-950/80 text-rose-300 border border-rose-800 rounded-md text-[10px] font-bold tracking-wide">
             {qualifyingCandidates.length} REJECTED SETUP{qualifyingCandidates.length === 1 ? '' : 'S'}
           </span>
         </div>
       </div>
 
-      {/* Candidate List */}
-      <div className="space-y-3">
+      {/* Candidate List with Zoomable Wrapper */}
+      <ZoomableReportWrapper zoomLevel={zoomLevel} id="rejected-candidates-wrapper" className="space-y-3">
         {qualifyingCandidates.map((cand, idx) => {
           const scoreVal = cand.score ?? cand.finalScore ?? cand.scoreBeforeGate6 ?? 70;
           const isExpanded = expandedSymbol === cand.symbol;
@@ -223,7 +235,7 @@ export function Rejected72PlusPanel({
             </div>
           );
         })}
-      </div>
+      </ZoomableReportWrapper>
     </div>
   );
 }

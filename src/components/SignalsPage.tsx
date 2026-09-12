@@ -508,6 +508,35 @@ export function SignalsPage({ health }: SignalsPageProps) {
     }
   };
 
+  const handleSignalRefreshed = useCallback((updated: TradingSignal) => {
+    setSignalHistory((prev) =>
+      prev.map((item) => {
+        if (item.id === updated.id || item.snapshotId === updated.snapshotId) {
+          return {
+            ...item,
+            signalStatus: updated.status as any,
+            tp1Status: updated.tp1Status,
+            tp2Status: updated.tp2Status,
+            tp3Status: updated.tp3Status,
+            slStatus: updated.slStatus,
+            tp1HitAt: updated.tp1HitAt,
+            tp2HitAt: updated.tp2HitAt,
+            tp3HitAt: updated.tp3HitAt,
+            stopLossHitAt: updated.stopLossHitAt,
+            tp1HitPrice: updated.tp1HitPrice,
+            tp2HitPrice: updated.tp2HitPrice,
+            tp3HitPrice: updated.tp3HitPrice,
+            stopLossHitPrice: updated.stopLossHitPrice,
+            tp1: updated.tp1,
+            tp2: updated.tp2,
+            tp3: updated.tp3,
+          };
+        }
+        return item;
+      })
+    );
+  }, []);
+
   return (
     <div className="space-y-6">
       {/* Policy & Gate Status Header */}
@@ -575,6 +604,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
         isFetchingPrice={isFetchingPrice}
         sessionState={sessionDetails?.sessionState}
         preferredTimeZone={preferredTimeZone}
+        onSignalRefreshed={handleSignalRefreshed}
       />
 
       {errorMsg && (
@@ -707,34 +737,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
           setSelectedSymbol(sym);
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
-        onSignalRefreshed={(updated) => {
-          setSignalHistory((prev) =>
-            prev.map((item) => {
-              if (item.id === updated.id || item.snapshotId === updated.snapshotId) {
-                return {
-                  ...item,
-                  signalStatus: updated.status as any,
-                  tp1Status: updated.tp1Status,
-                  tp2Status: updated.tp2Status,
-                  tp3Status: updated.tp3Status,
-                  slStatus: updated.slStatus,
-                  tp1HitAt: updated.tp1HitAt,
-                  tp2HitAt: updated.tp2HitAt,
-                  tp3HitAt: updated.tp3HitAt,
-                  stopLossHitAt: updated.stopLossHitAt,
-                  tp1HitPrice: updated.tp1HitPrice,
-                  tp2HitPrice: updated.tp2HitPrice,
-                  tp3HitPrice: updated.tp3HitPrice,
-                  stopLossHitPrice: updated.stopLossHitPrice,
-                  tp1: updated.tp1,
-                  tp2: updated.tp2,
-                  tp3: updated.tp3,
-                };
-              }
-              return item;
-            })
-          );
-        }}
+        onSignalRefreshed={handleSignalRefreshed}
       />
 
       {/* Signal Bot Identity & Risk Management Disclaimer */}

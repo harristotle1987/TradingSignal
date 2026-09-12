@@ -13,6 +13,9 @@
 import { useState, useMemo } from 'react';
 import { TargetTracker } from './TargetTracker.js';
 import { Rejected72PlusPanel } from './Rejected72PlusPanel.js';
+import { ReportZoomControls, useReportZoom } from './ReportZoomControls.js';
+import { ZoomableReportWrapper } from './ZoomableReportWrapper.js';
+import { SignalReportModal } from './SignalReportModal.js';
 import {
   TradingSignal,
   NormalizedTicker,
@@ -47,6 +50,7 @@ import {
   LineChart,
   Copy,
   Check,
+  Maximize2,
 } from 'lucide-react';
 
 export type AssetCategory = 'CRYPTO' | 'FOREX' | 'STOCKS';
@@ -170,6 +174,7 @@ interface AssetClassScannerProps {
   isFetchingPrice: boolean;
   sessionState?: 'MARKET_OPEN' | 'MARKET_CLOSED' | 'OUTSIDE_TRADING_SESSION';
   preferredTimeZone: DisplayTimeZone;
+  onSignalRefreshed?: (signal: TradingSignal) => void;
 }
 
 export function AssetClassScanner({
@@ -183,6 +188,7 @@ export function AssetClassScanner({
   isFetchingPrice,
   sessionState = 'MARKET_OPEN',
   preferredTimeZone,
+  onSignalRefreshed,
 }: AssetClassScannerProps) {
   // Infer active category from the selected symbol
   const activeCategory: AssetCategory = useMemo(() => {
@@ -204,6 +210,10 @@ export function AssetClassScanner({
 
   const isMarketClosed = sessionState !== 'MARKET_OPEN';
   const precision = ticker ? getDynamicPrecision(ticker.price, selectedSymbol) : 2;
+
+  // Zoom controls state for AI signals report
+  const { zoomLevel, zoomIn, zoomOut, resetZoom, setZoom } = useReportZoom(1.0, 0.7, 2.0, 0.15);
+  const [inspectedSignal, setInspectedSignal] = useState<TradingSignal | null>(null);
 
   // Active scanned signal (if present from multi-asset scan)
   const scannedSignal: TradingSignal | null =
@@ -402,15 +412,32 @@ export function AssetClassScanner({
         (scanResult.signals && scanResult.signals.some(isStrictlyTradeable))
       ) ? (
         <div className="space-y-4 animate-in fade-in duration-200">
-          <div className="flex items-center justify-between px-1">
-            <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-              <Zap className="w-4 h-4 text-emerald-400" />
-              RANKED SCAN OUTCOMES ({activeCategory})
-            </h3>
-            <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950 border border-emerald-800 px-2 py-0.5 rounded">
-              GATE 9 VALIDATED
-            </span>
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1 pb-1">
+            <div className="flex items-center gap-2">
+              <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                <Zap className="w-4 h-4 text-emerald-400" />
+                AI Signals Report ({activeCategory})
+              </h3>
+              <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950 border border-emerald-800 px-2 py-0.5 rounded">
+                GATE 9 VALIDATED
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <ReportZoomControls
+                zoomLevel={zoomLevel}
+                onZoomIn={zoomIn}
+                onZoomOut={zoomOut}
+                onResetZoom={resetZoom}
+                onSetZoom={setZoom}
+                label="Zoom Report"
+                idPrefix="scanner-report-zoom"
+                showPresets={true}
+              />
+            </div>
           </div>
+
+          <ZoomableReportWrapper zoomLevel={zoomLevel} id="scanner-report-content" className="space-y-4">
 
           {/* 1. BEST TRADE */}
           {(() => {
@@ -449,7 +476,17 @@ export function AssetClassScanner({
                         <TrendingDown className="w-5 h-5" /> SELL
                       </span>
                     )}
-                  <CopySignalButton signal={best} precision={bestPrec} />
+                    <button
+                      type="button"
+                      id="btn-inspect-best-signal"
+                      onClick={() => setInspectedSignal(best)}
+                      className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-emerald-300 border border-slate-800 transition min-h-[28px] min-w-[28px] flex items-center justify-center shadow-sm cursor-pointer"
+                      title="Inspect Full AI Signals Report with Deep Zoom"
+                      aria-label="Inspect Full Report"
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                    </button>
+                    <CopySignalButton signal={best} precision={bestPrec} />
                   </div>
                 </div>
 
@@ -583,7 +620,17 @@ export function AssetClassScanner({
                         <TrendingDown className="w-5 h-5" /> SELL
                       </span>
                     )}
-                  <CopySignalButton signal={second} precision={secondPrec} />
+                    <button
+                      type="button"
+                      id="btn-inspect-second-signal"
+                      onClick={() => setInspectedSignal(second)}
+                      className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-emerald-300 border border-slate-800 transition min-h-[28px] min-w-[28px] flex items-center justify-center shadow-sm cursor-pointer"
+                      title="Inspect Full AI Signals Report with Deep Zoom"
+                      aria-label="Inspect Full Report"
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                    </button>
+                    <CopySignalButton signal={second} precision={secondPrec} />
                   </div>
                 </div>
 
@@ -692,9 +739,21 @@ export function AssetClassScanner({
                               SUGGESTION
                             </span>
                           </div>
-                          <span className={`text-xs font-bold px-2.5 py-1 rounded-md ${sug.direction === 'BUY' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'}`}>
-                            {sug.direction}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`text-xs font-bold px-2.5 py-1 rounded-md ${sug.direction === 'BUY' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'}`}>
+                              {sug.direction}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setInspectedSignal(sug)}
+                              className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-emerald-300 border border-slate-800 transition min-h-[26px] min-w-[26px] flex items-center justify-center shadow-sm cursor-pointer"
+                              title="Inspect Full AI Signals Report with Deep Zoom"
+                              aria-label="Inspect Full Report"
+                            >
+                              <Maximize2 className="w-3 h-3" />
+                            </button>
+                            <CopySignalButton signal={sug} precision={sugPrec} />
+                          </div>
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-xs">
                           <div className="bg-slate-900/80 p-2 rounded border border-slate-800/80 col-span-2 flex justify-between items-center">
@@ -773,6 +832,7 @@ export function AssetClassScanner({
               </div>
             );
           })()}
+          </ZoomableReportWrapper>
         </div>
       ) : scanResult ? (
         /* Explicit No Setup / Market Closed Outcome */
@@ -800,6 +860,14 @@ export function AssetClassScanner({
       {scanResult && scanResult.candidateRejectionDetails && scanResult.candidateRejectionDetails.length > 0 && (
         <Rejected72PlusPanel candidates={scanResult.candidateRejectionDetails} />
       )}
+
+      {/* AI Signals Report Deep-Dive Inspection Modal with Zoom */}
+      <SignalReportModal
+        signal={inspectedSignal}
+        isOpen={!!inspectedSignal}
+        onClose={() => setInspectedSignal(null)}
+        onSignalRefreshed={onSignalRefreshed}
+      />
     </div>
   );
 }

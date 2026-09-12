@@ -10,6 +10,9 @@ import { useState, useEffect } from 'react';
 import { SignalHistoryItem, TradingSignal } from '../types/index.js';
 import { TargetTracker } from './TargetTracker.js';
 import { RejectionBreakdown, AcceptanceBreakdown } from './SignalAnalysisDetails.js';
+import { ReportZoomControls, useReportZoom } from './ReportZoomControls.js';
+import { ZoomableReportWrapper } from './ZoomableReportWrapper.js';
+import { SignalReportModal } from './SignalReportModal.js';
 import { formatTimeWithZone, DisplayTimeZone } from '../utils/time.js';
 import {
   formatLabel,
@@ -41,6 +44,7 @@ import {
   BarChart3,
   Copy,
   Check,
+  Maximize2,
 } from 'lucide-react';
 import { SignalPerformanceChart } from './SignalPerformanceChart.js';
 
@@ -112,6 +116,16 @@ export function SignalHistoryPanel({
   const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'TOP_TRADE' | 'SUGGESTION' | '72PLUS_REJECTED'>('ALL');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'list' | 'chart'>('list');
+
+  // Zoom controls state for detailed signal analysis reports
+  const {
+    zoomLevel: reportZoomLevel,
+    zoomIn: reportZoomIn,
+    zoomOut: reportZoomOut,
+    resetZoom: reportResetZoom,
+    setZoom: reportSetZoom,
+  } = useReportZoom(1.0, 0.7, 2.0, 0.15);
+  const [inspectedSignal, setInspectedSignal] = useState<TradingSignal | null>(null);
 
   // State for confirmation modals and toast notifications
   const [itemToDelete, setItemToDelete] = useState<{ id: string; symbol: string } | null>(null);
@@ -700,6 +714,16 @@ export function SignalHistoryPanel({
                     >
                       {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                     </button>
+                    {/* Fullscreen AI Report Inspection Button */}
+                    <button
+                      type="button"
+                      onClick={() => setInspectedSignal(item as unknown as TradingSignal)}
+                      className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-emerald-300 border border-slate-800 transition cursor-pointer min-h-[28px] min-w-[28px] flex items-center justify-center shadow-sm"
+                      title="Inspect Full AI Signals Report with Deep Zoom"
+                      aria-label="Inspect Full Report"
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                    </button>
                     <CopySignalButton signal={item} precision={getDynamicPrecision(item.entryPrice, item.symbol)} />
 
                     {/* Delete Entry Button */}
@@ -835,6 +859,35 @@ export function SignalHistoryPanel({
                 {/* Expanded Details Drawer */}
                 {isExpanded && (
                   <div className="pt-3 border-t border-slate-800/80 space-y-3 text-xs">
+                    {/* Drawer Header with Report Zoom Controls */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800/60">
+                      <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-slate-200">
+                        <Zap className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>AI Signals Analysis Report</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <ReportZoomControls
+                          zoomLevel={reportZoomLevel}
+                          onZoomIn={reportZoomIn}
+                          onZoomOut={reportZoomOut}
+                          onResetZoom={reportResetZoom}
+                          onSetZoom={reportSetZoom}
+                          compact={true}
+                          idPrefix={`drawer-zoom-${item.id}`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setInspectedSignal(item as unknown as TradingSignal)}
+                          className="px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-emerald-300 border border-slate-800 text-[11px] font-mono flex items-center gap-1.5 transition cursor-pointer"
+                          title="Open Full Screen AI Report with Zoom"
+                        >
+                          <Maximize2 className="w-3 h-3" />
+                          <span className="hidden sm:inline">Full Report</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <ZoomableReportWrapper zoomLevel={reportZoomLevel} id={`drawer-report-wrapper-${item.id}`} className="space-y-3">
                     {/* Gate 2 Authoritative Target Hit Details Tracker */}
                     <TargetTracker
                       signal={item as unknown as TradingSignal}
@@ -916,6 +969,7 @@ export function SignalHistoryPanel({
                         </strong>
                       </span>
                     </div>
+                    </ZoomableReportWrapper>
                   </div>
                 )}
               </div>
@@ -1060,6 +1114,14 @@ export function SignalHistoryPanel({
           </button>
         </div>
       )}
+
+      {/* Full AI Signals Report Modal with Zoom */}
+      <SignalReportModal
+        signal={inspectedSignal}
+        isOpen={!!inspectedSignal}
+        onClose={() => setInspectedSignal(null)}
+        onSignalRefreshed={onSignalRefreshed}
+      />
     </div>
   );
 }

@@ -2,6 +2,9 @@ import { useState, useCallback } from 'react';
 import { api } from '../api/client.js';
 import { TradingSignal } from '../types/index.js';
 import { Rejected72PlusPanel } from './Rejected72PlusPanel.js';
+import { ReportZoomControls, useReportZoom } from './ReportZoomControls.js';
+import { ZoomableReportWrapper } from './ZoomableReportWrapper.js';
+import { SignalReportModal } from './SignalReportModal.js';
 import {
   Sparkles,
   X,
@@ -16,6 +19,7 @@ import {
   ChevronRight,
   Activity,
   Layers,
+  Maximize2,
 } from 'lucide-react';
 
 interface AiMarketScannerWidgetProps {
@@ -33,6 +37,10 @@ export function AiMarketScannerWidget({
   const [isScanning, setIsScanning] = useState(false);
   const [scanStage, setScanStage] = useState<string>('');
   const [scanResult, setScanResult] = useState<any | null>(null);
+
+  // Zoom controls state for AI Market Scanner report
+  const { zoomLevel, zoomIn, zoomOut, resetZoom, setZoom } = useReportZoom(1.0, 0.7, 1.8, 0.15);
+  const [inspectedSignal, setInspectedSignal] = useState<TradingSignal | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleScanBestTrades = useCallback(async () => {
@@ -232,11 +240,22 @@ export function AiMarketScannerWidget({
                   {/* Case 1: Valid Trade Opportunities Found */}
                   {scanResult.acceptedSignals && scanResult.acceptedSignals.length > 0 ? (
                     <div className="space-y-3">
-                      <h5 className="text-[11px] font-bold text-emerald-400 tracking-wide uppercase font-mono">
-                        Top Opportunities
-                      </h5>
+                      <div className="flex items-center justify-between gap-2">
+                        <h5 className="text-[11px] font-bold text-emerald-400 tracking-wide uppercase font-mono">
+                          Top Opportunities
+                        </h5>
+                        <ReportZoomControls
+                          zoomLevel={zoomLevel}
+                          onZoomIn={zoomIn}
+                          onZoomOut={zoomOut}
+                          onResetZoom={resetZoom}
+                          onSetZoom={setZoom}
+                          compact={true}
+                          idPrefix="widget-report-zoom"
+                        />
+                      </div>
 
-                      <div className="space-y-2.5">
+                      <ZoomableReportWrapper zoomLevel={zoomLevel} id="widget-report-wrapper" className="space-y-2.5">
                         {scanResult.acceptedSignals.map((sig: TradingSignal, idx: number) => {
                           const scoreVal = sig.score || sig.confidenceScore || 72;
                           const rrVal = (sig as any).netRiskRewardRatio ?? sig.riskRewardRatio ?? 2.0;
@@ -295,23 +314,33 @@ export function AiMarketScannerWidget({
                                 </div>
                               </div>
 
-                              {onSelectSymbol && (
+                              <div className="flex items-center gap-1.5">
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    onSelectSymbol(sig.symbol);
-                                    setIsOpen(false);
-                                  }}
-                                  className="w-full py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-mono rounded-lg border border-slate-700 transition flex items-center justify-center gap-1 cursor-pointer mt-1"
+                                  onClick={() => setInspectedSignal(sig)}
+                                  className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-emerald-300 border border-slate-800 transition min-h-[22px] min-w-[22px] flex items-center justify-center cursor-pointer"
+                                  title="Inspect Full AI Signals Report with Deep Zoom"
                                 >
-                                  <span>View {sig.symbol} Setup</span>
-                                  <ChevronRight className="w-3 h-3 text-slate-400" />
+                                  <Maximize2 className="w-3 h-3" />
                                 </button>
-                              )}
+                                {onSelectSymbol && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      onSelectSymbol(sig.symbol);
+                                      setIsOpen(false);
+                                    }}
+                                    className="flex-1 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-mono rounded-lg border border-slate-700 transition flex items-center justify-center gap-1 cursor-pointer mt-1"
+                                  >
+                                    <span>View {sig.symbol} Setup</span>
+                                    <ChevronRight className="w-3 h-3 text-slate-400" />
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           );
                         })}
-                      </div>
+                      </ZoomableReportWrapper>
 
                       <div className="text-[11px] font-mono font-bold text-emerald-400 text-center pt-1 border-t border-slate-800">
                         {scanResult.acceptedSignals.length} valid {scanResult.acceptedSignals.length === 1 ? 'opportunity' : 'opportunities'} found.
@@ -450,6 +479,13 @@ export function AiMarketScannerWidget({
           </div>
         </div>
       )}
+
+      {/* AI Signals Report Deep-Dive Inspection Modal with Zoom */}
+      <SignalReportModal
+        signal={inspectedSignal}
+        isOpen={!!inspectedSignal}
+        onClose={() => setInspectedSignal(null)}
+      />
     </>
   );
 }
