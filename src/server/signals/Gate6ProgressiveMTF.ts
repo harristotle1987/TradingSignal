@@ -430,17 +430,17 @@ export class Gate6ProgressiveMTF {
       msScore * 0.10
     );
 
-    // MACD disagreement is intentionally EXCLUDED from the hard-veto count
-    // below. It still fully affects compositeLayer1Score (15% weight) as a
-    // soft penalty, and is still recorded in `disagreements` for
-    // diagnostics/telemetry, but it can no longer by itself (or combined
-    // with just one other soft signal) force a hard reject.
-    const hardDisagreements = disagreements.filter((d) => !d.startsWith('MACD:'));
+    // Gate 4 / Gate 7: Convert non-critical confirmations from hard rejection -> scoring/penalty.
+    // Make minor lower-timeframe disagreement soft.
+    // Keep major higher-timeframe trend conflicts hard.
+    // Preserve structural invalidation as a hard rejection.
+    const isHtfTrendConflict = trendScore <= 20;
+    const isStructuralInvalidation = (msScore <= 20 && !msAligned);
 
-    const hasHardContradiction =
-      hardDisagreements.length >= 2 ||
-      trendScore <= 20 ||                  // HTF trend conflict remains a hard safety gate
-      (msScore <= 20 && !msAligned);        // Market-structure contradiction remains hard
+    // Only genuine major HTF conflicts or structural breaks trigger hard rejection.
+    // Secondary factors (RSI overextension, MACD lag, minor ROC deceleration, 15m EMA pullback)
+    // act as soft penalties on compositeLayer1Score without prematurely hard-vetoing strong setups.
+    const hasHardContradiction = isHtfTrendConflict || isStructuralInvalidation;
 
     const passed = !hasHardContradiction && compositeLayer1Score >= 50;
 
@@ -644,7 +644,10 @@ export class Gate6ProgressiveMTF {
       msConfScore * 0.30
     );
 
-    const passed = atrHealthy && srFavorable && msConfirmed && compositeLayer2Score >= 50;
+    // Gate 4 / Gate 7: Keep ATR health (dead/unexecutable) and macro structural invalidation hard.
+    // Near-support/resistance tests and minor lower-timeframe structure disagreements act as soft scoring factors.
+    const isMacroStructInvalidated = !msConfirmed && msConfScore <= 20;
+    const passed = atrHealthy && !isMacroStructInvalidated && compositeLayer2Score >= 50;
 
     const metrics: Gate6Layer2Metrics = {
       atr: { atr5m, atr15m, atr1h, atr4h, volatilityState, isHealthy: atrHealthy, score: atrScore },

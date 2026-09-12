@@ -155,7 +155,22 @@ export class CandidateRejectionTracker {
     const effectiveScore = cleanAudit.finalScore ?? cleanAudit.score ?? cleanAudit.scoreBeforeGate6 ?? 0;
     const isThresholdPlusRejected = (effectiveScore >= minThreshold || (cleanAudit.scoreBeforeGate6 ?? 0) >= minThreshold || cleanAudit.isQualifiedRejected === true) && cleanAudit.finalDecision === 'REJECTED';
     const statusText = cleanAudit.finalDecision === 'REJECTED' ? 'REJECTED — NOT TRADEABLE' : (cleanAudit.statusText || 'TRADEABLE');
-    const failedGates = Array.from(new Set(cleanAudit.failedGates || []));
+    let failedGates = Array.from(new Set(cleanAudit.failedGates || []));
+
+    // Exclusivity & Integrity Rules:
+    // 1. If candidate failed by MTF alignment, it must NOT also have FINAL_SCORE_BELOW_THRESHOLD
+    if (failedGates.includes(StandardFailedGate.MTF_ALIGNMENT) && failedGates.includes(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD)) {
+      if (cleanAudit.stage === 'GATE_6' || cleanAudit.primaryRejectionReason?.toLowerCase().includes('mtf')) {
+        failedGates = failedGates.filter(g => g !== StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
+      } else {
+        failedGates = failedGates.filter(g => g !== StandardFailedGate.MTF_ALIGNMENT);
+      }
+    }
+
+    // 2. Score >= minThreshold must NEVER have FINAL_SCORE_BELOW_THRESHOLD
+    if (effectiveScore >= minThreshold || (cleanAudit.scoreBeforeGate6 ?? 0) >= minThreshold) {
+      failedGates = failedGates.filter(g => g !== StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
+    }
     const rejectionSummary = cleanAudit.rejectionSummary || CandidateRejectionTracker.formatHumanReadableSummary(cleanAudit.primaryRejectionReason, failedGates, effectiveScore);
     const timestamp = cleanAudit.timestamp || Date.now();
 
@@ -391,7 +406,7 @@ export class CandidateRejectionTracker {
       throw new Error(`[CandidateRejectionTracker] Authoritative signalThreshold is missing or invalid in serverConfig`);
     }
     // A candidate scoring >= minThreshold MUST NOT receive FINAL_SCORE_BELOW_THRESHOLD
-    if (score < minThreshold && (score > 0 || rejectionReason.toLowerCase().includes('score'))) {
+    if (score < minThreshold && (failedGateCodes.includes('HARD_SCORE_MINIMUM') || failedGateCodes.includes('FINAL_SCORE_BELOW_THRESHOLD') || rejectionReason.toLowerCase().includes('score'))) {
       gates.add(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
     }
 
@@ -417,9 +432,9 @@ export class CandidateRejectionTracker {
       throw new Error(`[CandidateRejectionTracker] Authoritative signalThreshold is missing or invalid in serverConfig`);
     }
     // The authoritative rule:
-    // score < minThreshold → FINAL_SCORE_BELOW_THRESHOLD
+    // score < minThreshold → FINAL_SCORE_BELOW_THRESHOLD only if reason actually indicates score rejection
     // score >= minThreshold → score gate PASSED. MUST NOT receive FINAL_SCORE_BELOW_THRESHOLD.
-    if (score < minThreshold && (score > 0 || lower.includes('score') || lower.includes('final_score') || lower.includes('hurdle') || lower.includes('tradeability threshold') || lower.includes('scoring criteria'))) {
+    if (score < minThreshold && (lower.includes('score') || lower.includes('final_score') || lower.includes('hurdle') || lower.includes('tradeability threshold') || lower.includes('scoring criteria'))) {
       failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
     }
 
@@ -527,8 +542,9 @@ export class CandidateRejectionTracker {
       }
     }
 
-    const score = rej.compositeMtfScore ?? rej.layer1?.score ?? 0;
-    if (score < 70) {
+    // Gate 6 MTF failures are MTF alignment rejections, NOT score rejections.
+    if (rej.stoppedAtLayer === 'BEFORE_MTF' || reasonText.includes('final_score_unreachable')) {
+      failedGates.add(StandardFailedGate.FINAL_SCORE_UNREACHABLE);
       failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
     }
 
@@ -621,40 +637,40 @@ export class CandidateRejectionTracker {
 
     if (gate8Eval.finalScore < minThreshold) {
       failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
-    }
-
-    const factors = gate8Eval.factors || {};
-    if ((factors.higherTfTrendScore !== undefined && factors.higherTfTrendScore < 14) ||
-        (factors.trendAlignment !== undefined && factors.trendAlignment < 14)) {
-      failedGates.add(StandardFailedGate.TREND);
-    }
-    if ((factors.mtfConfluenceScore !== undefined && factors.mtfConfluenceScore < 11) ||
-        (factors.mtfConfirmation !== undefined && factors.mtfConfirmation < 11)) {
-      failedGates.add(StandardFailedGate.MTF_ALIGNMENT);
-    }
-    if ((factors.momentumScore !== undefined && factors.momentumScore < 10) ||
-        (factors.momentum !== undefined && factors.momentum < 10)) {
-      failedGates.add(StandardFailedGate.MOMENTUM);
-    }
-    if ((factors.marketStructureScore !== undefined && factors.marketStructureScore < 10) ||
-        (factors.marketStructure !== undefined && factors.marketStructure < 10)) {
-      failedGates.add(StandardFailedGate.MARKET_STRUCTURE);
-    }
-    if ((factors.volumeOrderFlowScore !== undefined && factors.volumeOrderFlowScore < 10) ||
-        (factors.volumeLiquidity !== undefined && factors.volumeLiquidity < 10)) {
-      failedGates.add(StandardFailedGate.VOLUME);
-    }
-    if ((factors.volatilityAtrScore !== undefined && factors.volatilityAtrScore < 7) ||
-        (factors.volatilityAtrQuality !== undefined && factors.volatilityAtrQuality < 7)) {
-      failedGates.add(StandardFailedGate.VOLATILITY);
-    }
-    if ((factors.entryQualityScore !== undefined && factors.entryQualityScore < 7) ||
-        (factors.entryQuality !== undefined && factors.entryQuality < 7)) {
-      failedGates.add(StandardFailedGate.INVALID_ENTRY);
-    }
-    if ((factors.riskRewardScore !== undefined && factors.riskRewardScore < 3.5) ||
-        (factors.rrQuality !== undefined && factors.rrQuality < 3.5)) {
-      failedGates.add(StandardFailedGate.RR);
+    } else {
+      const factors = gate8Eval.factors || {};
+      if ((factors.higherTfTrendScore !== undefined && factors.higherTfTrendScore < 14) ||
+          (factors.trendAlignment !== undefined && factors.trendAlignment < 14)) {
+        failedGates.add(StandardFailedGate.TREND);
+      }
+      if ((factors.mtfConfluenceScore !== undefined && factors.mtfConfluenceScore < 11) ||
+          (factors.mtfConfirmation !== undefined && factors.mtfConfirmation < 11)) {
+        failedGates.add(StandardFailedGate.MTF_ALIGNMENT);
+      }
+      if ((factors.momentumScore !== undefined && factors.momentumScore < 10) ||
+          (factors.momentum !== undefined && factors.momentum < 10)) {
+        failedGates.add(StandardFailedGate.MOMENTUM);
+      }
+      if ((factors.marketStructureScore !== undefined && factors.marketStructureScore < 10) ||
+          (factors.marketStructure !== undefined && factors.marketStructure < 10)) {
+        failedGates.add(StandardFailedGate.MARKET_STRUCTURE);
+      }
+      if ((factors.volumeOrderFlowScore !== undefined && factors.volumeOrderFlowScore < 10) ||
+          (factors.volumeLiquidity !== undefined && factors.volumeLiquidity < 10)) {
+        failedGates.add(StandardFailedGate.VOLUME);
+      }
+      if ((factors.volatilityAtrScore !== undefined && factors.volatilityAtrScore < 7) ||
+          (factors.volatilityAtrQuality !== undefined && factors.volatilityAtrQuality < 7)) {
+        failedGates.add(StandardFailedGate.VOLATILITY);
+      }
+      if ((factors.entryQualityScore !== undefined && factors.entryQualityScore < 7) ||
+          (factors.entryQuality !== undefined && factors.entryQuality < 7)) {
+        failedGates.add(StandardFailedGate.INVALID_ENTRY);
+      }
+      if ((factors.riskRewardScore !== undefined && factors.riskRewardScore < 3.5) ||
+          (factors.rrQuality !== undefined && factors.rrQuality < 3.5)) {
+        failedGates.add(StandardFailedGate.RR);
+      }
     }
 
     if (failedGates.size === 0) {

@@ -121,11 +121,20 @@ export function formatStrategy(strategy?: string | null): string {
  */
 export function formatRankTier(tier?: string | null, includeStar = false): string {
   if (!tier) return '';
-  const formatted = formatLabel(tier);
-  if (includeStar && (tier === 'BEST_TRADE' || tier === 'SECOND_BEST' || tier === 'TOP_TRADE')) {
-    return `★ ${formatted}`;
+  const upper = tier.toUpperCase();
+  if (upper === 'BEST_TRADE' || upper === 'BEST') {
+    return '🔥 BEST';
   }
-  return formatted;
+  if (upper === 'SECOND_BEST' || upper === 'HIGH_QUALITY') {
+    return '🟢 HIGH QUALITY';
+  }
+  if (upper === 'SUGGESTION' || upper === 'VALID' || upper === 'TOP_TRADE') {
+    return '🟡 VALID';
+  }
+  if (upper === 'WATCHING' || upper === 'NEAR_MISS') {
+    return '👀 WATCHING';
+  }
+  return formatLabel(tier);
 }
 
 /**

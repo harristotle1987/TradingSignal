@@ -90,20 +90,28 @@ export class Gate9FinalSignalCap {
     const publishedCandidates = sorted.slice(0, this.MAX_SIGNALS_PER_SCAN);
     const spilloverCandidates = sorted.slice(this.MAX_SIGNALS_PER_SCAN);
 
-    // Assign rank tiers and flags
+    // Assign rank tiers, quality tiers, and flags (Gate 12 & Gate 13)
     publishedCandidates.forEach((cand, idx) => {
       cand.signal.isTradeableSignal = true;
       cand.signal.signalClassification = 'TRADEABLE';
+      const scoreVal = cand.signal.score ?? cand.finalScore ?? 70;
       if (idx === 0) {
         cand.signal.isPrimary = true;
         cand.signal.isBestTrade = true;
         cand.signal.rankTier = 'BEST_TRADE';
+        cand.signal.qualityTier = 'BEST';
+        cand.signal.qualityTierLabel = '🔥 BEST';
       } else if (idx === 1) {
         cand.signal.isSecondBest = true;
         cand.signal.rankTier = 'SECOND_BEST';
+        cand.signal.qualityTier = 'HIGH_QUALITY';
+        cand.signal.qualityTierLabel = '🟢 HIGH QUALITY';
       } else {
         cand.signal.isSuggestion = true;
         cand.signal.rankTier = 'SUGGESTION';
+        const isHighQuality = scoreVal >= 80;
+        cand.signal.qualityTier = isHighQuality ? 'HIGH_QUALITY' : 'VALID';
+        cand.signal.qualityTierLabel = isHighQuality ? '🟢 HIGH QUALITY' : '🟡 VALID';
       }
     });
 

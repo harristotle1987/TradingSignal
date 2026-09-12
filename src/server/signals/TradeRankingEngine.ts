@@ -183,23 +183,36 @@ export class TradeRankingEngine {
     // Sort by rankingScore descending (highest first)
     validCandidates.sort((a, b) => b.rankingScore - a.rankingScore);
         
-    // Assign rank tiers based on rank order (Rank 1: BEST_TRADE, Rank 2: SECOND_BEST, Rank 3+: SUGGESTION)
+    // Assign rank tiers and quality tiers based on rank order and score quality (Gate 12 & Gate 13)
+    // Quality Tiers:
+    // 🔥 BEST: Top ranked candidate with high confluence
+    // 🟢 HIGH QUALITY: Score >= 80 or rank 2
+    // 🟡 VALID: Score >= signalThreshold
+    // 👀 WATCHING: Candidate in watching range (never published as tradeable)
     validCandidates.forEach((cand, idx) => {
+      const scoreVal = cand.coreScore;
       if (idx === 0) {
         cand.rankTier = 'BEST_TRADE';
         cand.signal.rankTier = 'BEST_TRADE';
+        cand.signal.qualityTier = 'BEST';
+        cand.signal.qualityTierLabel = '🔥 BEST';
         cand.signal.isBestTrade = true;
         cand.signal.isSecondBest = false;
         cand.signal.isTopTrade = true;
       } else if (idx === 1) {
         cand.rankTier = 'SECOND_BEST';
         cand.signal.rankTier = 'SECOND_BEST';
+        cand.signal.qualityTier = 'HIGH_QUALITY';
+        cand.signal.qualityTierLabel = '🟢 HIGH QUALITY';
         cand.signal.isBestTrade = false;
         cand.signal.isSecondBest = true;
         cand.signal.isTopTrade = true;
       } else {
+        const isHighQuality = scoreVal >= 80;
         cand.rankTier = 'SUGGESTION';
         cand.signal.rankTier = 'SUGGESTION';
+        cand.signal.qualityTier = isHighQuality ? 'HIGH_QUALITY' : 'VALID';
+        cand.signal.qualityTierLabel = isHighQuality ? '🟢 HIGH QUALITY' : '🟡 VALID';
         cand.signal.isBestTrade = false;
         cand.signal.isSecondBest = false;
         cand.signal.isTopTrade = false;
@@ -323,13 +336,23 @@ export class TradeRankingEngine {
       modifier -= 3;
     }
 
-    // 11. Execution Quality (friction, spread, net R:R)
-    const netRR = scoring.estimatedFriction?.netRiskRewardRatio ?? signal.netRiskRewardRatio ?? signal.riskRewardRatio;
-    if (typeof netRR === 'number') {
-      if (netRR >= 2.5) modifier += 2;
-      else if (netRR >= 2.0) modifier += 1;
-      else if (netRR < 1.5) modifier -= 1;
+    // 11. Execution Quality & Progressive R:R (Gate 9)
+    // Keep 1.8R hard minimum; progressively reward 2.0R, 2.5R, 3R+ setups
+    const effRR = scoring.estimatedFriction?.netRiskRewardRatio ?? signal.netRiskRewardRatio ?? signal.riskRewardRatio;
+    if (typeof effRR === 'number') {
+      if (effRR >= 3.0) modifier += 3.0;
+      else if (effRR >= 2.5) modifier += 2.0;
+      else if (effRR >= 2.0) modifier += 1.0;
+      else if (effRR < 1.8) modifier -= 2.0;
     }
+
+    // 12. Mathematical Expectancy Optimization (Gate 10)
+    // Make positive expectancy a quality/ranking factor; negative expectancy is rejected upstream
+    const expectancyVal = scoring.expectancy ?? signal.expectancy ?? 0;
+    if (expectancyVal >= 1.0) modifier += 2.5;
+    else if (expectancyVal >= 0.5) modifier += 1.5;
+    else if (expectancyVal > 0.1) modifier += 0.8;
+
     const spreadPoints = scoring.estimatedFriction?.spreadPipsOrPoints;
     if (typeof spreadPoints === 'number' && spreadPoints > 3.0) {
       modifier -= 1;

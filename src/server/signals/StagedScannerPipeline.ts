@@ -372,10 +372,6 @@ export async function runStagedPipeline(
         if (lowerReason.includes('structure') || lowerReason.includes('s&r') || lowerReason.includes('support')) {
           failedGates.push(StandardFailedGate.MARKET_STRUCTURE);
         }
-        const sigThreshold = serverConfig.getConfig().thresholds.signalThreshold;
-        if (rej.compositeMtfScore < sigThreshold || rej.finalScore < sigThreshold) {
-          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
-        }
       }
 
       rejectionTracker.recordCandidate({
@@ -930,16 +926,17 @@ export async function runStagedPipeline(
         const failedGates: StandardFailedGate[] = [];
         if (gate8Eval.finalScore < thresholds.signalThreshold) {
           failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
+        } else {
+          const factors: any = gate8Eval.factors || {};
+          if (factors.trendAlignment !== undefined && factors.trendAlignment < 14) failedGates.push(StandardFailedGate.TREND);
+          if (factors.momentum !== undefined && factors.momentum < 7) failedGates.push(StandardFailedGate.MOMENTUM);
+          if (factors.marketStructure !== undefined && factors.marketStructure < 10) failedGates.push(StandardFailedGate.MARKET_STRUCTURE);
+          if (factors.mtfConfirmation !== undefined && factors.mtfConfirmation < 10) failedGates.push(StandardFailedGate.MTF_ALIGNMENT);
+          if (factors.volumeLiquidity !== undefined && factors.volumeLiquidity < 6) failedGates.push(StandardFailedGate.VOLUME);
+          if (factors.volatilityAtrQuality !== undefined && factors.volatilityAtrQuality < 6) failedGates.push(StandardFailedGate.VOLATILITY);
+          if (factors.entryQuality !== undefined && factors.entryQuality < 3.5) failedGates.push(StandardFailedGate.VALID_ENTRY);
+          if (factors.rrQuality !== undefined && factors.rrQuality < 3.5) failedGates.push(StandardFailedGate.RR);
         }
-        const factors: any = gate8Eval.factors || {};
-        if (factors.trendAlignment !== undefined && factors.trendAlignment < 14) failedGates.push(StandardFailedGate.TREND);
-        if (factors.momentum !== undefined && factors.momentum < 7) failedGates.push(StandardFailedGate.MOMENTUM);
-        if (factors.marketStructure !== undefined && factors.marketStructure < 10) failedGates.push(StandardFailedGate.MARKET_STRUCTURE);
-        if (factors.mtfConfirmation !== undefined && factors.mtfConfirmation < 10) failedGates.push(StandardFailedGate.MTF_ALIGNMENT);
-        if (factors.volumeLiquidity !== undefined && factors.volumeLiquidity < 6) failedGates.push(StandardFailedGate.VOLUME);
-        if (factors.volatilityAtrQuality !== undefined && factors.volatilityAtrQuality < 6) failedGates.push(StandardFailedGate.VOLATILITY);
-        if (factors.entryQuality !== undefined && factors.entryQuality < 3.5) failedGates.push(StandardFailedGate.VALID_ENTRY);
-        if (factors.rrQuality !== undefined && factors.rrQuality < 3.5) failedGates.push(StandardFailedGate.RR);
 
         if (failedGates.length === 0) {
           if (gate8Eval.finalScore < thresholds.signalThreshold) {
@@ -1040,6 +1037,7 @@ export async function runStagedPipeline(
         netRiskRewardRatio: scoring.estimatedFriction?.netRiskRewardRatio ?? rrResult.netRR,
         adverseNetRiskRewardRatio: scoring.estimatedFriction?.adverseNetRiskRewardRatio,
         targetDistance, stopDistance, pipPointUnit: scoring.pipPointUnit, estimatedFriction: scoring.estimatedFriction,
+        expectancy: scoring.expectancy,
         suggestedRiskAmount: scoring.hypotheticalRisk.suggestedRiskAmount,
         suggestedPositionSize: scoring.hypotheticalRisk.suggestedPositionSize,
         expiresAt: now + serverConfig.getConfig().signalExpirationMs, timestamp: now,
@@ -1057,7 +1055,15 @@ export async function runStagedPipeline(
       });
     }
 
-    const filteredCandidates = [...candidates];
+    // Gate 6: Rank qualified candidates by overall trade quality and prioritize strongest 3–5 for expensive analysis
+    const filteredCandidates = [...candidates].sort((a, b) => {
+      const scoreA = a.signal.score ?? a.scoring.score ?? 0;
+      const scoreB = b.signal.score ?? b.scoring.score ?? 0;
+      if (scoreB !== scoreA) return scoreB - scoreA;
+      const rrA = a.signal.riskRewardRatio ?? a.scoring.primaryRR ?? 0;
+      const rrB = b.signal.riskRewardRatio ?? b.scoring.primaryRR ?? 0;
+      return rrB - rrA;
+    });
 
     // -----------------------------------------------------------------
     // GATE 3: NVIDIA AI BATCH CANDIDATE ANALYSIS & RANKING

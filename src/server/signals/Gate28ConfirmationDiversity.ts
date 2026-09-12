@@ -48,10 +48,13 @@ export interface ConfirmationDiversityResult {
 }
 
 export class Gate28ConfirmationDiversity {
-  private static readonly MIN_REQUIRED_CATEGORIES = 3;
+  // Informational benchmark for optimal diversity (no longer a hard disqualification gate)
+  public static readonly RECOMMENDED_CATEGORIES = 3;
 
   /**
-   * Evaluates confirmation diversity from a list of confluence reasons or technical parameters
+   * Evaluates confirmation diversity from a list of confluence reasons or technical parameters.
+   * Gate 4.1: Confirmation diversity is a soft quality metric rather than an automatic trade rejection.
+   * Real market safety failures (invalid price, invalid structure, invalid SL/TP, invalid direction) remain hard.
    */
   public static evaluate(reasons: string[], technicalData?: any): ConfirmationDiversityResult {
     const categoryBreakdown: Record<ConfirmationCategory, string[]> = {
@@ -62,6 +65,102 @@ export class Gate28ConfirmationDiversity {
       PARTICIPATION: [],
       CONTEXT: [],
     };
+
+    // HARD REAL SAFETY GATES
+    if (technicalData) {
+      if (technicalData.price !== undefined && (typeof technicalData.price !== 'number' || isNaN(technicalData.price) || technicalData.price <= 0)) {
+        return {
+          isValid: false,
+          categoryCount: 0,
+          presentCategories: [],
+          categoryBreakdown,
+          diversityScore: 0,
+          rejectionReason: 'REJECTED: INVALID_PRICE. Invalid price parameter',
+          explanation: 'Market validity failure: invalid price',
+        };
+      }
+      if (technicalData.entryPrice !== undefined && (typeof technicalData.entryPrice !== 'number' || isNaN(technicalData.entryPrice) || technicalData.entryPrice <= 0)) {
+        return {
+          isValid: false,
+          categoryCount: 0,
+          presentCategories: [],
+          categoryBreakdown,
+          diversityScore: 0,
+          rejectionReason: 'REJECTED: INVALID_PRICE. Invalid entry price parameter',
+          explanation: 'Market validity failure: invalid entry price',
+        };
+      }
+      if (technicalData.direction !== undefined && technicalData.direction !== 'BUY' && technicalData.direction !== 'SELL') {
+        return {
+          isValid: false,
+          categoryCount: 0,
+          presentCategories: [],
+          categoryBreakdown,
+          diversityScore: 0,
+          rejectionReason: `REJECTED: INVALID_DIRECTION. Invalid trade direction: ${technicalData.direction}`,
+          explanation: 'Market validity failure: invalid direction',
+        };
+      }
+      if (technicalData.stopLoss !== undefined && technicalData.entryPrice !== undefined) {
+        if (technicalData.direction === 'BUY' && technicalData.stopLoss >= technicalData.entryPrice) {
+          return {
+            isValid: false,
+            categoryCount: 0,
+            presentCategories: [],
+            categoryBreakdown,
+            diversityScore: 0,
+            rejectionReason: 'REJECTED: INVALID_SL_TP. BUY stop-loss must be strictly below entry price',
+            explanation: 'Market validity failure: invalid stop loss',
+          };
+        }
+        if (technicalData.direction === 'SELL' && technicalData.stopLoss <= technicalData.entryPrice) {
+          return {
+            isValid: false,
+            categoryCount: 0,
+            presentCategories: [],
+            categoryBreakdown,
+            diversityScore: 0,
+            rejectionReason: 'REJECTED: INVALID_SL_TP. SELL stop-loss must be strictly above entry price',
+            explanation: 'Market validity failure: invalid stop loss',
+          };
+        }
+      }
+      if (technicalData.takeProfit !== undefined && technicalData.entryPrice !== undefined) {
+        if (technicalData.direction === 'BUY' && technicalData.takeProfit <= technicalData.entryPrice) {
+          return {
+            isValid: false,
+            categoryCount: 0,
+            presentCategories: [],
+            categoryBreakdown,
+            diversityScore: 0,
+            rejectionReason: 'REJECTED: INVALID_SL_TP. BUY take-profit must be strictly above entry price',
+            explanation: 'Market validity failure: invalid take profit',
+          };
+        }
+        if (technicalData.direction === 'SELL' && technicalData.takeProfit >= technicalData.entryPrice) {
+          return {
+            isValid: false,
+            categoryCount: 0,
+            presentCategories: [],
+            categoryBreakdown,
+            diversityScore: 0,
+            rejectionReason: 'REJECTED: INVALID_SL_TP. SELL take-profit must be strictly below entry price',
+            explanation: 'Market validity failure: invalid take profit',
+          };
+        }
+      }
+      if (technicalData.isStructureValid === false) {
+        return {
+          isValid: false,
+          categoryCount: 0,
+          presentCategories: [],
+          categoryBreakdown,
+          diversityScore: 0,
+          rejectionReason: 'REJECTED: INVALID_STRUCTURE. Market structure invalidation',
+          explanation: 'Market validity failure: invalid structure',
+        };
+      }
+    }
 
     if (Array.isArray(reasons)) {
       for (const reason of reasons) {
@@ -190,7 +289,9 @@ export class Gate28ConfirmationDiversity {
     ).filter((cat) => categoryBreakdown[cat].length > 0);
 
     const categoryCount = presentCategories.length;
-    const isValid = categoryCount >= this.MIN_REQUIRED_CATEGORIES;
+    // Gate 4.1: isValid indicates that the diversity evaluation completed successfully on valid market data.
+    // Having 1-2 confirmation categories is a soft quality factor and no longer causes automatic trade rejection.
+    const isValid = true;
 
     // Calculate diversity score (0 to 100)
     // 1 cat = 33, 2 cats = 66, 3 cats = 80, 4 cats = 90, 5+ cats = 100
@@ -201,12 +302,8 @@ export class Gate28ConfirmationDiversity {
     else if (categoryCount === 4) diversityScore = 90;
     else if (categoryCount >= 5) diversityScore = 100;
 
-    let rejectionReason: string | undefined;
-    if (!isValid) {
-      rejectionReason = `REJECTED: INSUFFICIENT_CONFIRMATION_DIVERSITY. Setup satisfies only ${categoryCount} independent confirmation category (${presentCategories.join(', ') || 'NONE'}). Minimum ${this.MIN_REQUIRED_CATEGORIES} distinct categories required (e.g., 1 STRUCTURE + 1 MOMENTUM + 1 LOCATION/PARTICIPATION).`;
-    }
-
-    const explanation = `Confirmation Diversity: ${categoryCount}/${this.MIN_REQUIRED_CATEGORIES} required categories satisfied [${presentCategories.join(', ')}]. Status: ${isValid ? 'PASSED' : 'REJECTED'}.`;
+    const rejectionReason: string | undefined = undefined;
+    const explanation = `Confirmation Diversity: ${categoryCount} categories satisfied [${presentCategories.join(', ') || 'NONE'}] (Diversity Score: ${diversityScore}/100, soft quality factor). Status: PASSED.`;
 
     logger.info(`[Gate 28 Diversity] ${explanation}`, {
       isValid,

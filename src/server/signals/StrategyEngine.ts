@@ -59,6 +59,7 @@ export interface MultiStrategyAgreement {
   regimeDetails: string;
   strategyResults: StrategyResult[];
   timeframeConfluenceScore: number;
+  timeframeAlignmentRatio?: number;
   evaluatedTimeframes: string[];
   reasons: string[];
   rejectionReason?: string;
@@ -226,12 +227,11 @@ export class StrategyEngine {
 
     const hasStrongConfluence = 
       passed && 
-      agreementScore >= 40 && 
-      timeframeAlignmentRatio >= thresholds.minimumTimeframeAlignment;
+      agreementScore >= 40;
 
     if (!hasStrongConfluence) {
       return this.createRejection(
-        `REJECTED: INSUFFICIENT_CONFLUENCE. Strategy agreement ratio ${(agreementRatio * 100).toFixed(1)}% (${agreeingStrategiesCount}/${totalStrategiesEvaluated}, min ${minimumRequiredAgreement * 100}%) with timeframe alignment ratio ${(timeframeAlignmentRatio * 100).toFixed(0)}% (${tfScores.alignedCount}/${tfScores.totalEvaluated}, min ${thresholds.minimumTimeframeAlignment * 100}%). Agreement Score: ${agreementScore}/100 (min 40 required)`,
+        `REJECTED: INSUFFICIENT_CONFLUENCE. Strategy agreement ratio ${(agreementRatio * 100).toFixed(1)}% (${agreeingStrategiesCount}/${totalStrategiesEvaluated}, min ${minimumRequiredAgreement * 100}%). Agreement Score: ${agreementScore}/100 (min 40 required)`,
         regime,
         regimeDetails
       );
@@ -265,6 +265,7 @@ export class StrategyEngine {
       regimeDetails,
       strategyResults,
       timeframeConfluenceScore: tfScores.confluenceScore,
+      timeframeAlignmentRatio,
       evaluatedTimeframes: availableTfs,
       reasons,
     };

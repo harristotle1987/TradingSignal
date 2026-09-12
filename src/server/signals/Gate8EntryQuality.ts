@@ -62,52 +62,54 @@ export class Gate8EntryQuality {
     if (direction === 'BUY') {
        distanceToIdeal = currentPrice - currentEma; // Positive means price is above ideal entry
        
-       if (distanceToIdeal > currentAtr * 1.5 || recentExpansion > 1.5) {
+       // Gate 8: Entry Flexibility - Relax overly strict entry thresholds.
+       // Only truly overextended entries (> 2.0 ATR or extreme chase) are classified as OVEREXTENDED.
+       if (distanceToIdeal > currentAtr * 2.2 || (distanceToIdeal > currentAtr * 1.6 && recentExpansion > 2.0)) {
           entryQuality = 'OVEREXTENDED';
           chaseRisk = 'EXTREME';
           entryScore = 20;
           reasons.push(`Price is severely overextended (${(distanceToIdeal/currentAtr).toFixed(1)} ATRs above mean). Do not chase.`);
-       } else if (distanceToIdeal > currentAtr * 0.8 || recentExpansion > 1.0) {
+       } else if (distanceToIdeal > currentAtr * 1.2 || recentExpansion > 1.6) {
           entryQuality = 'WAIT_FOR_PULLBACK';
           chaseRisk = 'HIGH';
-          entryScore = 40;
-          reasons.push('Price has moved significantly. Wait for a pullback to support/EMA before entering.');
-       } else if (distanceToIdeal > currentAtr * 0.4) {
+          entryScore = 50;
+          reasons.push('Price has expanded. Slightly extended entry; wait for minor pullback or enter with managed risk.');
+       } else if (distanceToIdeal > currentAtr * 0.5) {
           entryQuality = 'LATE_ENTRY';
           chaseRisk = 'MEDIUM';
-          entryScore = 65;
-          reasons.push('Acceptable entry, but slightly late. Breakout retest may occur. Reduced size recommended.');
-       } else if (distanceToIdeal >= -(currentAtr * 0.5) && distanceToIdeal <= currentAtr * 0.4) {
+          entryScore = 70;
+          reasons.push('Acceptable entry, slightly above baseline EMA. Favorable momentum continuation.');
+       } else if (distanceToIdeal >= -(currentAtr * 0.6) && distanceToIdeal <= currentAtr * 0.5) {
           entryQuality = 'OPTIMAL_ENTRY';
           chaseRisk = 'LOW';
           entryScore = 95;
           reasons.push('Optimal entry near baseline support/mean. Favorable risk-to-reward.');
        } else {
-          // Deep pullback - could be a trap or a deep value buy
+          // Deep pullback - value buy near support
           entryQuality = 'ACCEPTABLE_ENTRY';
           chaseRisk = 'LOW';
-          entryScore = 75;
+          entryScore = 80;
           reasons.push('Deep pullback entry. Ensure broader trend and S/R logic remains valid.');
        }
     } else { // SELL
-       distanceToIdeal = currentEma - currentPrice; // Positive means price is below ideal entry (good for shorting momentum, bad for chasing)
+       distanceToIdeal = currentEma - currentPrice; // Positive means price is below ideal entry
        
-       if (distanceToIdeal > currentAtr * 1.5 || recentExpansion > 1.5) {
+       if (distanceToIdeal > currentAtr * 2.2 || (distanceToIdeal > currentAtr * 1.6 && recentExpansion > 2.0)) {
           entryQuality = 'OVEREXTENDED';
           chaseRisk = 'EXTREME';
           entryScore = 20;
           reasons.push(`Price is severely overextended downwards (${(distanceToIdeal/currentAtr).toFixed(1)} ATRs below mean). Do not chase short.`);
-       } else if (distanceToIdeal > currentAtr * 0.8 || recentExpansion > 1.0) {
+       } else if (distanceToIdeal > currentAtr * 1.2 || recentExpansion > 1.6) {
           entryQuality = 'WAIT_FOR_PULLBACK';
           chaseRisk = 'HIGH';
-          entryScore = 40;
-          reasons.push('Price has dropped significantly. Wait for a pullback (bear flag/retest) before shorting.');
-       } else if (distanceToIdeal > currentAtr * 0.4) {
+          entryScore = 50;
+          reasons.push('Price has dropped rapidly. Extended short entry; wait for minor bear flag/retest or enter with managed size.');
+       } else if (distanceToIdeal > currentAtr * 0.5) {
           entryQuality = 'LATE_ENTRY';
           chaseRisk = 'MEDIUM';
-          entryScore = 65;
-          reasons.push('Acceptable short entry, but slightly late. Reduced size recommended.');
-       } else if (distanceToIdeal >= -(currentAtr * 0.5) && distanceToIdeal <= currentAtr * 0.4) {
+          entryScore = 70;
+          reasons.push('Acceptable short entry, slightly below baseline EMA. Momentum continuation.');
+       } else if (distanceToIdeal >= -(currentAtr * 0.6) && distanceToIdeal <= currentAtr * 0.5) {
           entryQuality = 'OPTIMAL_ENTRY';
           chaseRisk = 'LOW';
           entryScore = 95;
@@ -115,7 +117,7 @@ export class Gate8EntryQuality {
        } else {
           entryQuality = 'ACCEPTABLE_ENTRY';
           chaseRisk = 'LOW';
-          entryScore = 75;
+          entryScore = 80;
           reasons.push('Deep bounce short entry. Ensure broader downtrend remains valid.');
        }
     }

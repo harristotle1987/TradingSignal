@@ -546,22 +546,25 @@ export class OpportunityFunnelEngine {
       params.overrideMetrics
     );
 
-    // Compute effective composite score
-    const effectiveScore = params.score;
+    // Compute effective composite score with bounded secondary soft score adjustment
+    const softAdjustment = (softConditionsResult.softScore - 50) * 0.10;
+    const effectiveScore = Math.max(0, Math.min(100, params.score + softAdjustment));
 
     // 3. Funnel Stage Classification
-    if (effectiveScore < thresholds.watchingThreshold) {
+    // Hard floor rule: Soft confirmations cannot bypass the canonical score qualification threshold.
+    // Canonical params.score must meet thresholds, and effectiveScore reflects ranking/opportunity adjustment.
+    if (params.score < thresholds.watchingThreshold || effectiveScore < thresholds.watchingThreshold) {
       return {
         stage: 'WATCHING',
         isActionableSignal: false,
         hardGatesResult,
         softConditionsResult,
         score: effectiveScore,
-        message: `REJECTED: SCORE_BELOW_THRESHOLD. Score ${effectiveScore} below minimum watching threshold of ${thresholds.watchingThreshold}`,
+        message: `REJECTED: SCORE_BELOW_THRESHOLD. Score ${effectiveScore.toFixed(1)} below minimum watching threshold of ${thresholds.watchingThreshold}`,
       };
     }
 
-    if (effectiveScore < thresholds.qualifiedCandidateThreshold) {
+    if (params.score < thresholds.qualifiedCandidateThreshold || effectiveScore < thresholds.qualifiedCandidateThreshold) {
       // Score < qualifiedCandidateThreshold: WATCHING
       return {
         stage: 'WATCHING',
@@ -569,11 +572,11 @@ export class OpportunityFunnelEngine {
         hardGatesResult,
         softConditionsResult,
         score: effectiveScore,
-        message: `Opportunity classified as WATCHING (Score: ${effectiveScore}/${thresholds.signalThreshold}). Monitored for missing confirmations: [${softConditionsResult.missingConditions.join(', ')}]`,
+        message: `Opportunity classified as WATCHING (Score: ${effectiveScore.toFixed(1)}/${thresholds.signalThreshold}). Monitored for missing confirmations: [${softConditionsResult.missingConditions.join(', ')}]`,
       };
     }
 
-    if (effectiveScore < thresholds.signalThreshold) {
+    if (params.score < thresholds.signalThreshold || effectiveScore < thresholds.signalThreshold) {
       // Score >= qualifiedCandidateThreshold but < signalThreshold: QUALIFIED CANDIDATE (CONFIRMED)
       return {
         stage: 'CONFIRMED',
@@ -581,7 +584,7 @@ export class OpportunityFunnelEngine {
         hardGatesResult,
         softConditionsResult,
         score: effectiveScore,
-        message: `Opportunity classified as QUALIFIED CANDIDATE (Score: ${effectiveScore}/${thresholds.signalThreshold}). Waiting for final confirmation trigger.`,
+        message: `Opportunity classified as QUALIFIED CANDIDATE (Score: ${effectiveScore.toFixed(1)}/${thresholds.signalThreshold}). Waiting for final confirmation trigger.`,
       };
     }
 
@@ -592,7 +595,7 @@ export class OpportunityFunnelEngine {
       hardGatesResult,
       softConditionsResult,
       score: effectiveScore,
-      message: `Full actionable SIGNAL generated (Score: ${effectiveScore}/${thresholds.signalThreshold}). All hard gates passed with high soft confluence.`,
+      message: `Full actionable SIGNAL generated (Score: ${effectiveScore.toFixed(1)}/${thresholds.signalThreshold}). All hard gates passed; secondary confirmations contribute to trade quality and ranking.`,
     };
   }
 }

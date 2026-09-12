@@ -365,12 +365,42 @@ export class ScoringEngine {
       higherTfTrendScore = 8;
     }
 
-    if (timeframeAlignmentRatio < thresholds.minimumTimeframeAlignment) {
-      return this.createRejection(
-        `REJECTED: INSUFFICIENT_TIMEFRAME_ALIGNMENT. Insufficient timeframe confirmation: ${(timeframeAlignmentRatio * 100).toFixed(0)}% aligned (${timeframesAligned}/${totalTfsEvaluated}, minimum ${thresholds.minimumTimeframeAlignment * 100}% required)`,
-        marketRegime,
-        regimeDetails
-      );
+    // Gate 4.1: Timeframe alignment is a scoring/quality factor, not an automatic rejection
+    if (timeframeAlignmentRatio >= 0.80) {
+      higherTfTrendScore = Math.max(higherTfTrendScore, 16);
+    } else if (timeframeAlignmentRatio >= 0.60) {
+      higherTfTrendScore = Math.max(higherTfTrendScore, 13);
+    } else if (timeframeAlignmentRatio >= 0.40) {
+      higherTfTrendScore = Math.max(higherTfTrendScore, 10);
+    } else {
+      higherTfTrendScore = Math.max(higherTfTrendScore, 7);
+    }
+
+    // HARD EXCEPTION: A genuine higher-timeframe structural contradiction remains HARD.
+    // Do NOT allow a setup to pass merely because the score is high when the 4H/1D market structure directly contradicts the proposed trade direction.
+    if (s4h.length >= 10) {
+      const struct4h = TechnicalIndicators.calculateMarketStructure(s4h, Math.min(s4h.length - 1, 15));
+      const is4hContradiction = (direction === 'BUY' && struct4h.structureBias === 'BEARISH' && !is4hAligned) ||
+                                (direction === 'SELL' && struct4h.structureBias === 'BULLISH' && !is4hAligned);
+      if (is4hContradiction) {
+        return this.createRejection(
+          `REJECTED: HTF_STRUCTURAL_CONTRADICTION. 4H market structure (${struct4h.structureBias}) directly contradicts ${direction} trade direction`,
+          marketRegime,
+          regimeDetails
+        );
+      }
+    }
+    if (s1d.length >= 10) {
+      const struct1d = TechnicalIndicators.calculateMarketStructure(s1d, Math.min(s1d.length - 1, 15));
+      const is1dContradiction = (direction === 'BUY' && struct1d.structureBias === 'BEARISH' && !is1dAligned) ||
+                                (direction === 'SELL' && struct1d.structureBias === 'BULLISH' && !is1dAligned);
+      if (is1dContradiction) {
+        return this.createRejection(
+          `REJECTED: HTF_STRUCTURAL_CONTRADICTION. 1D market structure (${struct1d.structureBias}) directly contradicts ${direction} trade direction`,
+          marketRegime,
+          regimeDetails
+        );
+      }
     }
 
     // =========================================================================
@@ -990,7 +1020,7 @@ export class ScoringEngine {
       agreeingStrategiesCount: strategyEval.agreeingStrategiesCount,
       totalStrategiesCount: 6,
       strategyAgreementRatio: strategyEval.agreementRatio,
-      isTopTradeCandidate: totalScore >= thresholds.signalThreshold && timeframeAlignmentRatio >= (thresholds.minimumTimeframeAlignment || 0.50),
+      isTopTradeCandidate: totalScore >= thresholds.signalThreshold,
       estimatedFriction: {
         spreadPipsOrPoints: spreadUnits,
         feeBufferPct: feePct,

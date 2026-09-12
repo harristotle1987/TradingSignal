@@ -66,7 +66,12 @@ export class BitgetAdapter implements IMarketDataProvider {
       }
 
       if (!response.ok) {
-        return this.createErrorTicker(appSymbol, providerSymbol, assetType, `Bitget API returned HTTP ${response.status}`);
+        let msg = `Bitget API returned HTTP ${response.status}`;
+        try {
+          const errJson = await response.json();
+          if (errJson && errJson.msg) msg = errJson.msg;
+        } catch (_) {}
+        return this.createErrorTicker(appSymbol, providerSymbol, assetType, msg);
       }
 
       const json = (await response.json()) as BitgetTickerResponse;
@@ -154,12 +159,18 @@ export class BitgetAdapter implements IMarketDataProvider {
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const url = `https://api.bitget.com/api/v2/spot/market/candles?symbol=${encodeURIComponent(providerSymbol)}&granularity=${granularity}&limit=${limit}`;
+      const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
+      const url = `https://api.bitget.com/api/v2/spot/market/candles?symbol=${encodeURIComponent(providerSymbol)}&granularity=${granularity}&limit=${safeLimit}`;
       const response = await fetch(url, { signal: controller.signal });
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        throw new Error(`Bitget candles API returned HTTP ${response.status}`);
+        let errorDetail = `HTTP ${response.status}`;
+        try {
+          const errJson = await response.json();
+          if (errJson && errJson.msg) errorDetail = `${errorDetail}: ${errJson.msg}`;
+        } catch (_) {}
+        throw new Error(`Bitget candles API returned ${errorDetail}`);
       }
 
       const json = await response.json();
@@ -206,20 +217,34 @@ export class BitgetAdapter implements IMarketDataProvider {
 
     const granularity = this.mapTimeframeToGranularity(timeframe);
 
+    let directFetchError: string | null = null;
     // 1. Direct fetch if granularity mapped
     if (granularity) {
       try {
         const direct = await this.fetchDirectCandles(appSymbol, providerSymbol, timeframe, granularity, limit, globalScanDeadlineMs);
         if (direct && direct.length > 0) return direct;
       } catch (err) {
-        logger.warn(`Bitget direct fetch failed for '${timeframe}' (${granularity})`, { appSymbol, error: String(err) });
+        directFetchError = String(err);
+        const isNotAvailable = directFetchError.includes('does not exist') || directFetchError.includes('40034') || directFetchError.includes('HTTP 404');
+        if (isNotAvailable) {
+          logger.info(`Bitget direct fetch unavailable for '${timeframe}' on ${appSymbol} (symbol not listed on Bitget)`);
+        } else {
+          logger.warn(`Bitget direct fetch failed for '${timeframe}' (${granularity})`, { appSymbol, error: directFetchError });
+        }
       }
     }
 
     // 2. Aggregate lower timeframe if unmapped or direct failed
+    // Do not attempt lower-timeframe aggregation if the symbol does not exist on Bitget
+    if (directFetchError && (directFetchError.includes('does not exist') || directFetchError.includes('40034') || directFetchError.includes('HTTP 404') || directFetchError.includes('HTTP 400'))) {
+      logger.info(`Timeframe '${timeframe}' unavailable for ${appSymbol} on Bitget`);
+      return [];
+    }
+
     const lowerGranularity = '1min';
     try {
-      const lowerCandles = await this.fetchDirectCandles(appSymbol, providerSymbol, '1m', lowerGranularity, limit * 60, globalScanDeadlineMs);
+      const lowerLimit = Math.min(1000, limit * 60);
+      const lowerCandles = await this.fetchDirectCandles(appSymbol, providerSymbol, '1m', lowerGranularity, lowerLimit, globalScanDeadlineMs);
       if (lowerCandles && lowerCandles.length > 0) {
         const aggregated = aggregateOHLCCandles(lowerCandles, timeframe, limit);
         if (aggregated && aggregated.length > 0) return aggregated;

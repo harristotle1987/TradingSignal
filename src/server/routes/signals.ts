@@ -39,6 +39,8 @@ import { ScannerPersistence, PersistedSentSignal } from '../signals/ScannerPersi
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { adminAuthMiddleware } from '../middleware/adminAuth.js';
 import { CronJobOrgService } from '../cron/CronJobOrgService.js';
+import { HistoricalOutcomeFeedbackEngine } from '../signals/HistoricalOutcomeFeedbackEngine.js';
+import { AdaptiveCalibrationEngine } from '../signals/AdaptiveCalibrationEngine.js';
 
 const router = Router();
 
@@ -1991,6 +1993,56 @@ router.get('/signals/gate7/validate/:symbol', async (req: Request, res: Response
     res.status(500).json({
       success: false,
       message: `Failed to run Gate 7 validation for ${req.params.symbol}`,
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * GET /api/signals/outcome-feedback
+ * GATE 14: Analyzes live production outcome feedback and factor correlations.
+ * Test and simulation records are strictly excluded.
+ */
+router.get('/signals/outcome-feedback', async (_req: Request, res: Response) => {
+  try {
+    const report = await HistoricalOutcomeFeedbackEngine.analyzeLiveOutcomeFeedback();
+    res.status(200).json({
+      success: true,
+      gate: 'GATE_14_OUTCOME_FEEDBACK',
+      data: report,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to evaluate live outcome feedback',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * GET /api/signals/calibration
+ * GATE 15: Evaluates adaptive calibration status from verified live production outcomes.
+ * Enforces hard safety floors (1.8R min RR, 70 min score) and sample size guardrails.
+ */
+router.get('/signals/calibration', async (_req: Request, res: Response) => {
+  try {
+    const calibration = await AdaptiveCalibrationEngine.evaluateCalibration();
+    res.status(200).json({
+      success: true,
+      gate: 'GATE_15_ADAPTIVE_CALIBRATION',
+      data: calibration,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to evaluate adaptive calibration',
       error: msg,
       timestamp: Date.now(),
     });

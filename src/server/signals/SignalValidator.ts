@@ -118,15 +118,17 @@ export class SignalValidator {
     }
 
     // 5. Entry Price Integrity (INVALID_ENTRY)
+    // Gate 8: Relax unnecessarily strict entry drift tolerance (0.15% -> 0.40%)
+    // Still reject entries that are genuinely unsafe, stale, or structurally invalid.
     const livePrice = ctx.liveTicker.price;
     const entryDiffPct = Math.abs(livePrice - ctx.entryPrice) / ctx.entryPrice;
-    const maxDriftTolerance = 0.0015; // 0.15% (15 bps)
+    const maxDriftTolerance = 0.0040; // 0.40% (40 bps)
 
     if (entryDiffPct > maxDriftTolerance) {
       return {
         isValid: false,
         validationReason: 'INVALID_ENTRY',
-        detailedMessage: `Live price drifted ${(entryDiffPct * 100).toFixed(4)}% beyond max tolerance (${maxDriftTolerance * 100}%)`,
+        detailedMessage: `Live price drifted ${(entryDiffPct * 100).toFixed(4)}% beyond max tolerance (${(maxDriftTolerance * 100).toFixed(2)}%)`,
         snapshotId,
         validatedAt: now,
       };
@@ -496,22 +498,20 @@ export class SignalValidator {
       const tp2Dist = Math.abs(adjustedTp2 - livePrice);
       const tp3Dist = Math.abs(adjustedTp3 - livePrice);
 
-      if (tp1Dist < minSafeTargetDistance * 0.5) {
+      const minConservativeTp1Dist = Math.min(minSafeStopDistance * 0.5, atr * 0.5);
+      if (tp1Dist < minConservativeTp1Dist) {
         return {
           isValid: false,
-          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP1 distance (${tp1Dist.toFixed(precision)}) is below minimum conservative target distance (${(minSafeTargetDistance * 0.5).toFixed(precision)}, derived as 0.5 * minimumRR * SL-noise-floor)`,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP1 distance (${tp1Dist.toFixed(precision)}) is below minimum conservative target distance (${minConservativeTp1Dist.toFixed(precision)}, derived as conservative floor on 0.5 * SL-noise-floor)`,
         };
       }
-      if (tp2Dist < minSafeTargetDistance) {
+
+      // Either TP2 or TP3 must achieve the minimum safe target expansion hurdle
+      const qualifyingTargetDist = Math.max(tp2Dist, tp3Dist);
+      if (qualifyingTargetDist < minSafeTargetDistance) {
         return {
           isValid: false,
-          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP2 distance (${tp2Dist.toFixed(precision)}) is below minimum primary target distance (${minSafeTargetDistance.toFixed(precision)}, derived as minimumRR * SL-noise-floor)`,
-        };
-      }
-      if (tp3Dist < minSafeTargetDistance * 1.5) {
-        return {
-          isValid: false,
-          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Expected TP3 distance (${tp3Dist.toFixed(precision)}) is below minimum extended target distance (${(minSafeTargetDistance * 1.5).toFixed(precision)}, derived as 1.5 * minimumRR * SL-noise-floor)`,
+          message: `REJECTED: INSUFFICIENT_TARGET_DISTANCE. Neither primary (TP2: ${tp2Dist.toFixed(precision)}) nor extended (TP3: ${tp3Dist.toFixed(precision)}) target reaches the minimum volatility profit expansion hurdle (${minSafeTargetDistance.toFixed(precision)}, derived as minimumRR * SL-noise-floor of ${atr.toFixed(precision)})`,
         };
       }
     } else {
@@ -524,7 +524,18 @@ export class SignalValidator {
     }
 
     // 3. Execution Cost & Friction Hurdle Verification
-    const frictionCheck = this.verifyExecutionCost(symbol, livePrice, risk, reward);
+    const frictionCheck = this.verifyExecutionCost(
+      symbol,
+      livePrice,
+      risk,
+      reward,
+      direction,
+      adjustedSL,
+      adjustedTP,
+      adjustedTp1,
+      adjustedTp2,
+      adjustedTp3
+    );
     if (!frictionCheck.isValid) {
       return {
         isValid: false,
@@ -631,13 +642,58 @@ export class SignalValidator {
     symbol: string,
     price: number,
     rawRisk: number,
-    rawReward: number
+    rawReward: number,
+    direction: SignalDirection = 'BUY',
+    actualStopLoss?: number,
+    actualTakeProfit?: number,
+    actualTp1?: number,
+    actualTp2?: number,
+    actualTp3?: number
   ): { isValid: boolean; message: string; netRR?: number; totalRoundTripFriction?: number } {
     // Gate 34 — Execution Friction Stress Test
-    const dummyStopLoss = price - rawRisk;
-    const dummyTakeProfit = price + rawReward;
+    let finalSl: number;
+    let finalTp: number;
+    let finalTp1: number;
+    let finalTp2: number;
+    let finalTp3: number;
 
-    const res = Gate34ExecutionFrictionStressTest.evaluate(symbol, price, dummyStopLoss, dummyTakeProfit, dummyTakeProfit, dummyTakeProfit, dummyTakeProfit);
+    if (
+      actualStopLoss !== undefined &&
+      actualTakeProfit !== undefined &&
+      actualTp1 !== undefined &&
+      actualTp2 !== undefined &&
+      actualTp3 !== undefined
+    ) {
+      finalSl = actualStopLoss;
+      finalTp = actualTakeProfit;
+      finalTp1 = actualTp1;
+      finalTp2 = actualTp2;
+      finalTp3 = actualTp3;
+    } else {
+      if (direction === 'BUY') {
+        finalSl = price - rawRisk;
+        finalTp = price + rawReward;
+        finalTp1 = price + rawReward * 0.6;
+        finalTp2 = price + rawReward;
+        finalTp3 = price + rawReward * 1.4;
+      } else {
+        finalSl = price + rawRisk;
+        finalTp = price - rawReward;
+        finalTp1 = price - rawReward * 0.6;
+        finalTp2 = price - rawReward;
+        finalTp3 = price - rawReward * 1.4;
+      }
+    }
+
+    const res = Gate34ExecutionFrictionStressTest.evaluate(
+      symbol,
+      price,
+      finalSl,
+      finalTp,
+      finalTp1,
+      finalTp2,
+      finalTp3
+    );
 
     if (!res.isPassed) {
       return {

@@ -117,7 +117,9 @@ export type SignalValidationReason =
   | 'HIGH_NEWS_RISK'
   | 'MARKET_DATA_UNAVAILABLE';
 
-export type RankTier = 'BEST_TRADE' | 'SECOND_BEST' | 'SUGGESTION';
+export type SignalQualityTier = 'BEST' | 'HIGH_QUALITY' | 'VALID' | 'WATCHING';
+
+export type RankTier = 'BEST_TRADE' | 'SECOND_BEST' | 'SUGGESTION' | 'BEST' | 'HIGH_QUALITY' | 'VALID' | 'WATCHING';
 
 export type ExecutionEvidenceState =
   | 'CONFIRMED_EXECUTABLE'
@@ -189,6 +191,9 @@ export interface TradingSignal {
   isSecondBest?: boolean;
   isSuggestion?: boolean;
   rankTier?: RankTier;
+  qualityTier?: SignalQualityTier;
+  qualityTierLabel?: string;
+  expectancy?: number;
   estimatedWinRate?: number;
   modelEstimatedWinRate?: number;
   empiricalCalibratedProbability?: number | null;

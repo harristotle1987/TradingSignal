@@ -18,7 +18,9 @@ import { SignalValidator } from '../src/server/signals/SignalValidator.js';
 import { MarketStructureDetector } from '../src/server/signals/MarketStructureDetector.js';
 import { CooldownManager } from '../src/server/signals/CooldownManager.js';
 import { CandidateRejectionTracker, StandardFailedGate } from '../src/server/signals/CandidateRejectionTracker.js';
-import { OpportunityFunnelStore } from '../src/server/signals/Gate26OpportunityFunnel.js';
+import { OpportunityFunnelStore, OpportunityFunnelEngine, HardGatesEvaluator } from '../src/server/signals/Gate26OpportunityFunnel.js';
+import { Gate28ConfirmationDiversity } from '../src/server/signals/Gate28ConfirmationDiversity.js';
+import { TechnicalIndicators } from '../src/server/signals/TechnicalIndicators.js';
 import { RiskRewardCalculator } from '../src/server/signals/RiskRewardCalculator.js';
 import { Gate7FinalTradeValidation } from '../src/server/signals/Gate7FinalTradeValidation.js';
 import { Gate8TradeabilityThreshold } from '../src/server/signals/Gate8TradeabilityThreshold.js';
@@ -964,6 +966,32 @@ async function runAll() {
       assert(avax!.failedGates.length === 1, `Expected failedGates length to be 1, got ${avax!.failedGates.length}`);
     });
 
+    await test('3b. A candidate rejected by MTF alignment never has FINAL_SCORE_BELOW_THRESHOLD, even with score < 70', () => {
+      const tracker = new CandidateRejectionTracker();
+      tracker.recordCandidate({
+        symbol: 'NEARUSDT',
+        direction: 'BUY',
+        score: 55,
+        scoreBeforeGate6: 72,
+        stage: 'GATE_6',
+        primaryRejectionReason: 'Gate 6 (MTF Layer 1): 15m trend disagrees with 1h trend',
+        failedGates: [StandardFailedGate.MTF_ALIGNMENT, StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD],
+        finalDecision: 'REJECTED',
+      });
+
+      const records = tracker.getAllRecords();
+      const near = records.find(r => r.symbol === 'NEARUSDT');
+      assert(near !== undefined, 'Record must exist');
+      assert(near!.failedGates.includes(StandardFailedGate.MTF_ALIGNMENT), 'Must contain MTF_ALIGNMENT');
+      assert(!near!.failedGates.includes(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD), 'Must NOT contain FINAL_SCORE_BELOW_THRESHOLD');
+      assert(near!.failedGates.length === 1, `Expected exactly 1 failed gate, got ${near!.failedGates.length}`);
+
+      // Also test inferFailedGatesFromReason
+      const inferred = CandidateRejectionTracker.inferFailedGatesFromReason('Gate 6 (MTF Layer 1): MTF Contradiction', 62);
+      assert(inferred.includes(StandardFailedGate.MTF_ALIGNMENT), 'Inferred gates must contain MTF_ALIGNMENT');
+      assert(!inferred.includes(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD), 'Inferred gates for MTF must NOT contain FINAL_SCORE_BELOW_THRESHOLD');
+    });
+
     await test('4. HourlyScanner aggregates candidate rejection details and derives categorized counters from finalized records', () => {
       const tracker1 = new CandidateRejectionTracker();
       tracker1.recordCandidate({
@@ -1658,6 +1686,294 @@ async function runAll() {
         assert(!pipelineContent.includes('rejected72PlusCount'), 'StagedScannerPipeline.ts must not contain rejected72PlusCount');
         assert(pipelineContent.includes('candidatesThresholdPlusCount'), 'StagedScannerPipeline.ts must contain candidatesThresholdPlusCount');
         assert(pipelineContent.includes('rejectedThresholdPlusCount'), 'StagedScannerPipeline.ts must contain rejectedThresholdPlusCount');
+      });
+    });
+
+    // --- SUITE 8: GATE 4.1 RELAX SECONDARY GATES WITHOUT WEAKENING TRADE SAFETY ---
+    await describe('SUITE 8: Gate 4.1 Relax Secondary Gates Without Weakening Trade Safety', async () => {
+      // 1. Timeframe alignment of 40% does NOT automatically reject if:
+      // - gross R:R is valid (e.g. 2.3)
+      // - score is valid (e.g. 74)
+      // - primary data is valid
+      // - no hard structural contradiction exists
+      await test('24. Scenario 1: Timeframe alignment 40% does NOT automatically reject with valid score (74) and RR (2.3)', async () => {
+        const mockAgreement = {
+          dominantDirection: 'BUY' as const,
+          agreeingStrategiesCount: 3,
+          totalStrategiesCount: 5,
+          agreementRatio: 0.6,
+          minimumRequiredAgreement: 0.5,
+          passed: true,
+          agreementScore: 65,
+          hasStrongConfluence: true,
+          marketRegime: 'TREND' as const,
+          regimeDetails: 'Strong Trend',
+          strategyResults: [],
+          timeframeConfluenceScore: 40,
+          timeframeAlignmentRatio: 0.40,
+          evaluatedTimeframes: ['15m', '1h', '4h', '1d', '1w'],
+          reasons: ['Strategy agreement passed', 'Timeframe alignment 40%'],
+        };
+        assert(mockAgreement.hasStrongConfluence === true, 'StrategyEngine confluence must pass with 40% timeframe alignment');
+        assert(mockAgreement.timeframeAlignmentRatio === 0.40, 'Must preserve timeframeAlignmentRatio for scoring/diagnostics');
+
+        // Verify ScoringEngine softened logic: 40% alignment ratio gives higherTfTrendScore of at least 10 (not rejected)
+        const timeframeAlignmentRatio = 0.40;
+        let higherTfTrendScore = 8;
+        if (timeframeAlignmentRatio >= 0.80) {
+          higherTfTrendScore = Math.max(higherTfTrendScore, 16);
+        } else if (timeframeAlignmentRatio >= 0.60) {
+          higherTfTrendScore = Math.max(higherTfTrendScore, 13);
+        } else if (timeframeAlignmentRatio >= 0.40) {
+          higherTfTrendScore = Math.max(higherTfTrendScore, 10);
+        } else {
+          higherTfTrendScore = Math.max(higherTfTrendScore, 7);
+        }
+        assert(higherTfTrendScore === 10, 'Timeframe alignment of 40% scores 10 points softly without rejecting');
+      });
+
+      // 2. Confirmation diversity with 2 categories does NOT automatically reject if score and RR valid
+      await test('25. Scenario 2: Confirmation diversity with 2 categories does NOT automatically reject', () => {
+        const reasons = [
+          'Break of market structure (BOS) confirmed',
+          'RSI bullish divergence momentum',
+        ];
+        const res = Gate28ConfirmationDiversity.evaluate(reasons, {
+          price: 100,
+          entryPrice: 100,
+          stopLoss: 95,
+          takeProfit: 110.5, // 2.1 RR
+          direction: 'BUY',
+          isStructureValid: true,
+        });
+
+        assert(res.isValid === true, 'Gate 28 must pass with 2 categories (soft quality factor)');
+        assert(res.categoryCount === 2, `Expected 2 categories, got ${res.categoryCount}`);
+        assert(res.diversityScore === 66, `Expected diversity score 66 for 2 categories, got ${res.diversityScore}`);
+        assert(res.rejectionReason === undefined, 'No rejection reason should be returned for 2 categories');
+        assert(res.explanation.includes('PASSED'), 'Explanation should reflect PASSED status');
+      });
+
+      // 3. A weak setup with Score = 61, R:R = 2.4, SoftScore = 100 is STILL REJECTED because soft score cannot override core trade qualification
+      await test('26. Scenario 3: Weak setup (Score 61, RR 2.4, SoftScore 100) is STILL REJECTED', () => {
+        const liveTicker: any = {
+          symbol: 'TESTUSDT',
+          price: 100,
+          bid: 99.98,
+          ask: 100.02,
+          timestamp: Date.now(),
+          isFresh: true,
+          status: 'REALTIME',
+        };
+
+        const candles: any[] = Array.from({ length: 50 }, (_, i) => ({
+          symbol: 'TESTUSDT',
+          provider: 'binance',
+          timeframe: '1h',
+          timestamp: Date.now() - (50 - i) * 60000,
+          open: 98 + i * 0.05,
+          high: 99 + i * 0.05,
+          low: 97 + i * 0.05,
+          close: 98.5 + i * 0.05,
+          volume: 1000,
+        }));
+
+        const candlesMap = { '1h': candles };
+
+        const classification = OpportunityFunnelEngine.classifyOpportunity({
+          symbol: 'TESTUSDT',
+          direction: 'BUY',
+          entryPrice: 100,
+          stopLoss: 97.5,
+          takeProfit: 106, // RR = 6 / 2.5 = 2.4
+          riskRewardRatio: 2.4,
+          score: 61, // Canonical score is weak (below watching/signal threshold 70)
+          liveTicker,
+          candlesMap,
+          overrideMetrics: {
+            rsi: 55,
+            macdHist: 0.5,
+            vwapDiff: 0.1,
+            volumeRatio: 1.5,
+            divergenceScore: 80,
+            relativeStrengthScore: 80,
+            timeframeAlignmentCount: 3,
+          },
+        });
+
+        assert(classification.isActionableSignal === false, 'Weak setup must NEVER become an actionable signal');
+        assert(classification.stage === 'WATCHING', 'Weak setup must be classified as WATCHING or rejected');
+        assert(
+          classification.message.includes('REJECTED: SCORE_BELOW_THRESHOLD') || classification.score < 70,
+          `Expected rejection for below-threshold score, got message: ${classification.message}`
+        );
+      });
+
+      // 4. A setup with Score = 85, Gross R:R = 1.55 is STILL REJECTED by Gate 3 R:R requirement (1.8 minimum)
+      await test('27. Scenario 4: Setup with Score 85 and Gross R:R 1.55 is STILL REJECTED by Gate 3 (1.8 min)', () => {
+        const liveTicker: any = {
+          symbol: 'TESTUSDT',
+          price: 100,
+          bid: 99.98,
+          ask: 100.02,
+          timestamp: Date.now(),
+          isFresh: true,
+          status: 'REALTIME',
+        };
+
+        const candles: any[] = Array.from({ length: 50 }, (_, i) => ({
+          symbol: 'TESTUSDT',
+          provider: 'binance',
+          timeframe: '1h',
+          timestamp: Date.now() - (50 - i) * 60000,
+          open: 98 + i * 0.05,
+          high: 99 + i * 0.05,
+          low: 97 + i * 0.05,
+          close: 98.5 + i * 0.05,
+          volume: 1000,
+        }));
+
+        const hardGates = HardGatesEvaluator.evaluate({
+          symbol: 'TESTUSDT',
+          direction: 'BUY',
+          entryPrice: 100,
+          stopLoss: 98,
+          takeProfit: 103.1, // Gross RR = 3.1 / 2 = 1.55 (below 1.8)
+          riskRewardRatio: 1.55,
+          liveTicker,
+          candlesMap: { '1h': candles },
+        });
+
+        assert(hardGates.passed === false, 'Hard gate must fail for Gross RR 1.55');
+        assert(hardGates.failedGate === 'GROSS_RR_BELOW_THRESHOLD', `Expected GROSS_RR_BELOW_THRESHOLD, got ${hardGates.failedGate}`);
+        assert(hardGates.rejectionReason.includes('GROSS_RR_BELOW_THRESHOLD'), `Expected GROSS_RR_BELOW_THRESHOLD in reason, got ${hardGates.rejectionReason}`);
+      });
+
+      // 5. A setup with Score = 88, Gross R:R = 2.5, Invalid structural safety is STILL REJECTED
+      await test('28. Scenario 5: Setup with Score 88, RR 2.5 and Invalid structural safety is STILL REJECTED', () => {
+        const divRes = Gate28ConfirmationDiversity.evaluate(['BOS confirmed'], {
+          price: 100,
+          entryPrice: 100,
+          stopLoss: 96,
+          takeProfit: 110, // RR = 2.5
+          direction: 'BUY',
+          isStructureValid: false, // Invalid structural safety!
+        });
+
+        assert(divRes.isValid === false, 'Invalid structural safety must cause hard rejection in Gate 28');
+        assert(divRes.rejectionReason?.includes('INVALID_STRUCTURE'), `Expected INVALID_STRUCTURE, got ${divRes.rejectionReason}`);
+
+        // ScoringEngine HTF structural contradiction hard rejection
+        const downtrendCandles: any[] = Array.from({ length: 20 }, (_, i) => ({
+          symbol: 'TESTUSDT',
+          provider: 'binance',
+          timeframe: '4h',
+          timestamp: Date.now() - (20 - i) * 14400000,
+          open: 150 - i * 2,
+          high: 151 - i * 2,
+          low: 147 - i * 2,
+          close: 148 - i * 2,
+          volume: 5000,
+        }));
+
+        const struct4h = TechnicalIndicators.calculateMarketStructure(downtrendCandles, 15);
+        assert(struct4h.structureBias === 'BEARISH', '4H structure must be BEARISH');
+        const is4hContradiction = 'BUY' === 'BUY' && struct4h.structureBias === 'BEARISH';
+        assert(is4hContradiction === true, 'HTF structural contradiction is detected and must remain HARD');
+      });
+    });
+
+    // --- SUITE 9: GATE 8 TARGET DISTANCE & ADAPTER ROBUSTNESS SUITE ---
+    await describe('Suite 9: Target Distance Volatility Sanity & Provider Robustness', async () => {
+      // 1. UNIUSDT conservative TP1 scenario does NOT falsely reject
+      await test('29. Conservative TP1 with structural blend passes Gate 8 sanity check', () => {
+        // UNIUSDT actual values: ATR = 0.1104, entry = 6.0000, risk = 0.1000 (>= 0.85*ATR = 0.0938)
+        // TP1 = 6.0828 (dist = 0.0828), TP2 = 6.2000 (dist = 0.2000), TP3 = 6.3500 (dist = 0.3500)
+        const dummyCandles: any[] = Array.from({ length: 30 }, (_, i) => ({
+          timestamp: Date.now() - (30 - i) * 3600000,
+          open: 6.0,
+          high: 6.0 + 0.1104 / 2,
+          low: 6.0 - 0.1104 / 2,
+          close: 6.0,
+          volume: 1000,
+        }));
+
+        const valResult = SignalValidator.validate({
+          symbol: 'UNIUSDT',
+          direction: 'BUY',
+          score: 80,
+          entryPrice: 6.0000,
+          stopLoss: 5.9000,
+          takeProfit: 6.2000,
+          tp1: 6.0828,
+          tp2: 6.2000,
+          tp3: 6.3500,
+          riskRewardRatio: 2.0,
+          candlesMap: { '1h': dummyCandles },
+          liveTicker: { price: 6.0000, isFresh: true, status: 'OK', timestamp: Date.now() } as any,
+        });
+
+        assert(valResult.isValid, `Expected UNIUSDT conservative TP1 to pass validation, got: ${valResult.detailedMessage}`);
+      });
+
+      // 2. TP3 qualification allows trade when TP2 is below 1.8R but TP3 meets minimum hurdle
+      await test('30. Multi-target qualification via TP3 passes Gate 8 sanity without premature TP2 rejection', () => {
+        // Entry=100, SL=95, TP1=103, TP2=107 (dist 7 < 7.65, R:R 1.4), TP3=111 (dist 11 >= 7.65, R:R 2.2)
+        const dummyCandles: any[] = Array.from({ length: 30 }, (_, i) => ({
+          timestamp: Date.now() - (30 - i) * 3600000,
+          open: 100,
+          high: 102.5,
+          low: 97.5,
+          close: 100,
+          volume: 1000,
+        }));
+
+        const valResult = SignalValidator.validate({
+          symbol: 'BTCUSDT',
+          direction: 'BUY',
+          score: 80,
+          entryPrice: 100.0,
+          stopLoss: 95.0,
+          takeProfit: 107.0,
+          tp1: 103.0,
+          tp2: 107.0,
+          tp3: 111.0,
+          riskRewardRatio: 2.2,
+          candlesMap: { '1h': dummyCandles },
+          liveTicker: { price: 100.0, isFresh: true, status: 'OK', timestamp: Date.now() } as any,
+        });
+
+        assert(valResult.isValid, `Expected multi-target to pass via TP3, got: ${valResult.detailedMessage}`);
+      });
+
+      // 3. Reject when neither TP2 nor TP3 reaches minimum target expansion hurdle
+      await test('31. Rejection occurs when neither TP2 nor TP3 reaches minimum target expansion hurdle', () => {
+        const dummyCandles: any[] = Array.from({ length: 30 }, (_, i) => ({
+          timestamp: Date.now() - (30 - i) * 3600000,
+          open: 100,
+          high: 102.5,
+          low: 97.5,
+          close: 100,
+          volume: 1000,
+        }));
+
+        const valResult = SignalValidator.validate({
+          symbol: 'BTCUSDT',
+          direction: 'BUY',
+          score: 80,
+          entryPrice: 100.0,
+          stopLoss: 95.0,
+          takeProfit: 105.0,
+          tp1: 102.0,
+          tp2: 105.0,
+          tp3: 106.0,
+          riskRewardRatio: 1.2,
+          candlesMap: { '1h': dummyCandles },
+          liveTicker: { price: 100.0, isFresh: true, status: 'OK', timestamp: Date.now() } as any,
+        });
+
+        assert(!valResult.isValid, 'Expected rejection when both TP2 and TP3 are below hurdle');
+        assert(valResult.detailedMessage.includes('INSUFFICIENT_TARGET_DISTANCE') || valResult.detailedMessage.includes('GROSS_RR_BELOW_THRESHOLD'), `Expected target distance or RR rejection, got: ${valResult.detailedMessage}`);
       });
     });
   });

@@ -147,14 +147,14 @@ export class Gate8TradeabilityThreshold {
     if (entryQuality >= 4) highlights.push(`High-Precision Dynamic Entry Location (${entryQuality}/5)`);
 
     // Factor 8: R:R Quality (Weight: 5)
-    // Net Risk-Reward evaluation
+    // Gate 9: Keep 1.8R hard minimum baseline; progressively reward 2.0R, 2.5R, 3.0R+ setups.
     const effRr = input.netRiskRewardRatio ?? input.riskRewardRatio ?? 0;
-    let rrScore = 3.5;
+    let rrScore = 1.0;
     if (effRr >= 3.0) rrScore = 5.0;
     else if (effRr >= 2.5) rrScore = 4.5;
     else if (effRr >= 2.0) rrScore = 4.0;
-    else if (effRr >= 1.5) rrScore = 3.5;
-    else if (effRr >= 1.2) rrScore = 2.5;
+    else if (effRr >= 1.8) rrScore = 3.5;
+    else if (effRr >= 1.5) rrScore = 2.0;
     else rrScore = 1.0;
     const rrQuality = Math.max(0, Math.min(5, Number(rrScore.toFixed(1))));
     if (rrQuality >= 4) highlights.push(`Favorable R:R Profile (${effRr.toFixed(2)}:1) (${rrQuality}/5)`);
