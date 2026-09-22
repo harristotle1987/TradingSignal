@@ -26,6 +26,7 @@
 
 import { logger } from '../logger.js';
 import { AssetType } from '../../types/index.js';
+import { serverConfig } from '../config.js';
 
 export type AssetClass = 'CRYPTO' | 'FOREX' | 'STOCKS' | 'STOCK' | 'INDEX' | 'UNKNOWN';
 
@@ -47,6 +48,7 @@ export interface RegimeThresholdPolicyConfig {
 
 export interface AdaptiveThresholdResult {
   isExecutable: boolean;
+  passed: boolean;
   resolvedThreshold: number;
   actualScore: number;
   marginAboveThreshold: number;
@@ -210,13 +212,25 @@ export class Gate27RegimeThresholds {
     const strategy = params.strategy || 'DEFAULT';
     const assetClass = (params.assetClass || this.detectAssetClass(symbol)).toUpperCase();
 
-    // 1. Base Regime Threshold
-    const baseRegimeThreshold = this.policy.regimeThresholds[normalizedRegime];
+    // 1. Base Regime Threshold dynamically calibrated to active sensitivity signal floor
+    const currentFloor = serverConfig.getConfig().thresholds.signalThreshold;
+    let baseRegimeThreshold: number | null = null;
+
+    if (normalizedRegime === 'UNKNOWN') {
+      baseRegimeThreshold = null;
+    } else if (normalizedRegime === 'HIGH_VOLATILITY') {
+      baseRegimeThreshold = Math.min(90, currentFloor + 4);
+    } else if (normalizedRegime === 'TRANSITION') {
+      baseRegimeThreshold = Math.min(92, currentFloor + 5);
+    } else {
+      baseRegimeThreshold = currentFloor;
+    }
 
     // Check UNKNOWN / No Signal Policy
     if (baseRegimeThreshold === null || normalizedRegime === 'UNKNOWN') {
       const result: AdaptiveThresholdResult = {
         isExecutable: false,
+        passed: false,
         resolvedThreshold: 999,
         actualScore: params.actualScore,
         marginAboveThreshold: params.actualScore - 999,
@@ -257,8 +271,8 @@ export class Gate27RegimeThresholds {
 
     // 4. Calculate Final Composite Threshold
     const rawResolved = baseRegimeThreshold + strategyModifier + assetModifier;
-    // Hard boundary clamps: never below 70 (floor) and never above 92 (ceiling for executable)
-    const resolvedThreshold = Math.min(92, Math.max(70, Math.round(rawResolved)));
+    // Hard boundary clamps: never below current authoritative floor and never above 92 (ceiling for executable)
+    const resolvedThreshold = Math.min(92, Math.max(currentFloor, Math.round(rawResolved)));
 
     const marginAboveThreshold = Math.round((params.actualScore - resolvedThreshold) * 10) / 10;
     const passed = marginAboveThreshold >= 0;
@@ -267,6 +281,7 @@ export class Gate27RegimeThresholds {
 
     const result: AdaptiveThresholdResult = {
       isExecutable: true,
+      passed,
       resolvedThreshold,
       actualScore: params.actualScore,
       marginAboveThreshold,

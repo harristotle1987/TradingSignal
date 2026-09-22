@@ -156,6 +156,8 @@ export interface ScannerPersistenceData {
     notificationsEnabled: boolean;
     notifyOnNoTrade: boolean;
     intervalMinutes: number;
+    sensitivityProfile?: string;
+    customSensitivity?: any;
   };
 }
 

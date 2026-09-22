@@ -28,6 +28,8 @@ import { Gate9RiskManagement } from '../src/server/signals/Gate9RiskManagement.j
 import { Gate35SignalFunnelAnalytics, FunnelStage } from '../src/server/signals/Gate35SignalFunnelAnalytics.js';
 import { HourlyScannerService } from '../src/server/signals/HourlyScanner.js';
 import { ScoringEngine } from '../src/server/signals/ScoringEngine.js';
+import { SignalSensitivityManager } from '../src/server/signals/SignalSensitivityManager.js';
+import { Gate27RegimeThresholds } from '../src/server/signals/Gate27RegimeThresholds.js';
 import { logger } from '../src/server/logger.js';
 
 // Disable default log output during tests to keep output clean
@@ -1975,6 +1977,76 @@ async function runAll() {
         assert(!valResult.isValid, 'Expected rejection when both TP2 and TP3 are below hurdle');
         assert(valResult.detailedMessage.includes('INSUFFICIENT_TARGET_DISTANCE') || valResult.detailedMessage.includes('GROSS_RR_BELOW_THRESHOLD'), `Expected target distance or RR rejection, got: ${valResult.detailedMessage}`);
       });
+    });
+  });
+
+  await describe('SUITE 10: Signal Sensitivity Profiles & Dynamic Strictness Calibration', async () => {
+    await test('32. Canonical profiles exist and BALANCED has score 65, gross RR 1.5, net RR 1.10', () => {
+      const profiles = SignalSensitivityManager.getAllProfiles();
+      assert(!!profiles.BALANCED, 'BALANCED profile missing');
+      assert(!!profiles.CONSERVATIVE, 'CONSERVATIVE profile missing');
+      assert(!!profiles.ACTIVE, 'ACTIVE profile missing');
+      assert(!!profiles.CUSTOM, 'CUSTOM profile missing');
+      assert(profiles.BALANCED.signalThreshold === 65, 'BALANCED signalThreshold must be 65');
+      assert(profiles.BALANCED.minimumRR === 1.5, 'BALANCED minimumRR must be 1.5');
+      assert(profiles.BALANCED.minimumNetRR === 1.10, 'BALANCED minimumNetRR must be 1.10');
+    });
+
+    await test('33. Activating BALANCED updates serverConfig and lowers Gate 27 dynamic floor to 65', () => {
+      SignalSensitivityManager.setActiveProfile('BALANCED');
+      assert(SignalSensitivityManager.getActiveProfileName() === 'BALANCED', 'Active profile must be BALANCED');
+      assert(serverConfig.getConfig().thresholds.signalThreshold === 65, 'serverConfig signalThreshold must be 65');
+      assert(serverConfig.getConfig().thresholds.minimumRR === 1.5, 'serverConfig minimumRR must be 1.5');
+
+      const res = Gate27RegimeThresholds.resolveThreshold({
+        symbol: 'EURUSD',
+        regime: 'NORMAL_TREND',
+        strategy: 'TREND_CONTINUATION',
+        assetClass: 'FOREX',
+        actualScore: 66,
+      });
+      assert(res.resolvedThreshold === 65, `Expected threshold 65, got ${res.resolvedThreshold}`);
+      assert(res.passed === true, 'Score 66 must pass threshold 65');
+    });
+
+    await test('34. Switching to CONSERVATIVE raises hurdle to 72 score and 1.8 R:R, rejecting score 66', () => {
+      SignalSensitivityManager.setActiveProfile('CONSERVATIVE');
+      assert(SignalSensitivityManager.getActiveProfileName() === 'CONSERVATIVE', 'Active profile must be CONSERVATIVE');
+      assert(serverConfig.getConfig().thresholds.signalThreshold === 72, 'serverConfig signalThreshold must be 72');
+      assert(serverConfig.getConfig().thresholds.minimumRR === 1.8, 'serverConfig minimumRR must be 1.8');
+
+      const res = Gate27RegimeThresholds.resolveThreshold({
+        symbol: 'EURUSD',
+        regime: 'NORMAL_TREND',
+        strategy: 'TREND_CONTINUATION',
+        assetClass: 'FOREX',
+        actualScore: 66,
+      });
+      assert(res.resolvedThreshold === 72, `Expected threshold 72, got ${res.resolvedThreshold}`);
+      assert(res.passed === false, 'Score 66 must be rejected against hurdle 72');
+    });
+
+    await test('35. Switching to ACTIVE trader profile sets floor to 62 score and 1.3 R:R', () => {
+      SignalSensitivityManager.setActiveProfile('ACTIVE');
+      assert(SignalSensitivityManager.getActiveProfileName() === 'ACTIVE', 'Active profile must be ACTIVE');
+      assert(serverConfig.getConfig().thresholds.signalThreshold === 62, 'serverConfig signalThreshold must be 62');
+      assert(serverConfig.getConfig().thresholds.minimumRR === 1.3, 'serverConfig minimumRR must be 1.3');
+
+      const res = Gate27RegimeThresholds.resolveThreshold({
+        symbol: 'BTCUSDT',
+        regime: 'BREAKOUT',
+        strategy: 'MOMENTUM_CONTINUATION',
+        assetClass: 'CRYPTO',
+        actualScore: 63,
+      });
+      assert(res.resolvedThreshold === 62, `Expected threshold 62, got ${res.resolvedThreshold}`);
+      assert(res.passed === true, 'Score 63 must pass threshold 62');
+    });
+
+    await test('36. ResetToDefault restores BALANCED profile and safe hurdles', () => {
+      SignalSensitivityManager.resetToDefault();
+      assert(SignalSensitivityManager.getActiveProfileName() === 'BALANCED', 'Active profile must be BALANCED');
+      assert(serverConfig.getConfig().thresholds.signalThreshold === 65, 'serverConfig signalThreshold must be 65');
     });
   });
 

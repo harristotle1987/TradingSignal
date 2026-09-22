@@ -23,9 +23,13 @@ import { hourlyScanner } from './src/server/signals/HourlyScanner.js';
 import { RepairService } from './src/server/signals/RepairService.js';
 import { SignalLifecycleManager } from './src/server/signals/SignalLifecycleManager.js';
 import { PushNotificationService } from './src/server/notifications/PushNotificationService.js';
+import { SignalSensitivityManager } from './src/server/signals/SignalSensitivityManager.js';
 
 export async function createServer() {
   const app = express();
+
+  // Initialize Sensitivity and Calibration Manager
+  SignalSensitivityManager.init();
 
   app.use(express.json());
 

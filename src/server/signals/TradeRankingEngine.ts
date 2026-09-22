@@ -337,13 +337,14 @@ export class TradeRankingEngine {
     }
 
     // 11. Execution Quality & Progressive R:R (Gate 9)
-    // Keep 1.8R hard minimum; progressively reward 2.0R, 2.5R, 3R+ setups
+    const activeMinRR = serverConfig.getConfig().thresholds.minimumRR || 1.5;
     const effRR = scoring.estimatedFriction?.netRiskRewardRatio ?? signal.netRiskRewardRatio ?? signal.riskRewardRatio;
     if (typeof effRR === 'number') {
       if (effRR >= 3.0) modifier += 3.0;
       else if (effRR >= 2.5) modifier += 2.0;
       else if (effRR >= 2.0) modifier += 1.0;
-      else if (effRR < 1.8) modifier -= 2.0;
+      else if (effRR >= activeMinRR) modifier += 0.5;
+      else if (effRR < activeMinRR) modifier -= 2.0;
     }
 
     // 12. Mathematical Expectancy Optimization (Gate 10)

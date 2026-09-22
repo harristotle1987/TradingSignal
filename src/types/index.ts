@@ -662,4 +662,23 @@ export function isActionableSignal(signal: {
   return false;
 }
 
+export type SensitivityProfileName = 'BALANCED' | 'CONSERVATIVE' | 'ACTIVE' | 'CUSTOM';
+
+export interface SensitivityProfileConfig {
+  name: SensitivityProfileName;
+  label: string;
+  badge: string;
+  description: string;
+  signalThreshold: number;
+  minimumScore: number;
+  minimumRR: number;
+  minimumNetRR: number;
+  watchingThreshold: number;
+  qualifiedCandidateThreshold: number;
+  minimumWinProbability: number;
+  minimumTimeframeAlignment: number;
+  minimumStrategyAgreement: number;
+  estimatedFrequency: string;
+}
+
 

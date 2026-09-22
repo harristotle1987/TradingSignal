@@ -13,6 +13,8 @@ import {
   PerformanceMetricsResponse,
   HistoricalPerformanceResponse,
   HistoricalPerformanceRange,
+  SensitivityProfileName,
+  SensitivityProfileConfig,
 } from '../types/index.js';
 
 class ApiClient {
@@ -456,6 +458,50 @@ class ApiClient {
    */
   async getGate5Preview(): Promise<any> {
     return this.fetchJson<any>('/api/signals/gate5/preview');
+  }
+
+  /**
+   * Fetch all signal sensitivity profiles and active configuration
+   */
+  async getSensitivityProfiles(): Promise<{
+    success: boolean;
+    activeProfile: SensitivityProfileName;
+    currentConfig: SensitivityProfileConfig;
+    profiles: Record<SensitivityProfileName, SensitivityProfileConfig>;
+  }> {
+    return this.fetchJson<any>('/api/sensitivity/profiles');
+  }
+
+  /**
+   * Switch active sensitivity profile or customize thresholds
+   */
+  async updateSensitivityProfile(
+    profile: SensitivityProfileName,
+    customOverrides?: Partial<SensitivityProfileConfig>
+  ): Promise<{
+    success: boolean;
+    message: string;
+    activeProfile: SensitivityProfileName;
+    currentConfig: SensitivityProfileConfig;
+  }> {
+    return this.fetchJson<any>('/api/sensitivity/profile', {
+      method: 'POST',
+      body: JSON.stringify({ profile, customOverrides }),
+    });
+  }
+
+  /**
+   * Reset sensitivity profile to recommended BALANCED default
+   */
+  async resetSensitivityProfile(): Promise<{
+    success: boolean;
+    message: string;
+    activeProfile: SensitivityProfileName;
+    currentConfig: SensitivityProfileConfig;
+  }> {
+    return this.fetchJson<any>('/api/sensitivity/reset', {
+      method: 'POST',
+    });
   }
 }
 

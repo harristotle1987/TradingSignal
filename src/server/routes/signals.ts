@@ -41,6 +41,7 @@ import { adminAuthMiddleware } from '../middleware/adminAuth.js';
 import { CronJobOrgService } from '../cron/CronJobOrgService.js';
 import { HistoricalOutcomeFeedbackEngine } from '../signals/HistoricalOutcomeFeedbackEngine.js';
 import { AdaptiveCalibrationEngine } from '../signals/AdaptiveCalibrationEngine.js';
+import { SignalSensitivityManager } from '../signals/SignalSensitivityManager.js';
 
 const router = Router();
 
@@ -2043,6 +2044,93 @@ router.get('/signals/calibration', async (_req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       message: 'Failed to evaluate adaptive calibration',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * GET /api/sensitivity/profiles
+ * Retrieves all signal sensitivity profiles and the currently active profile.
+ */
+router.get('/sensitivity/profiles', (_req: Request, res: Response) => {
+  try {
+    const profiles = SignalSensitivityManager.getAllProfiles();
+    const activeProfile = SignalSensitivityManager.getActiveProfileName();
+    const currentConfig = SignalSensitivityManager.getActiveConfig();
+
+    res.status(200).json({
+      success: true,
+      activeProfile,
+      currentConfig,
+      profiles,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch sensitivity profiles',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/sensitivity/profile
+ * Updates the active sensitivity profile or custom overrides.
+ */
+router.post('/sensitivity/profile', (req: Request, res: Response) => {
+  try {
+    const { profile, customOverrides } = req.body || {};
+    if (!profile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing profile name in request body',
+      });
+    }
+
+    const updatedConfig = SignalSensitivityManager.setActiveProfile(profile, customOverrides);
+
+    res.status(200).json({
+      success: true,
+      message: `Active sensitivity profile updated to ${profile}`,
+      activeProfile: profile,
+      currentConfig: updatedConfig,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(400).json({
+      success: false,
+      message: 'Failed to update sensitivity profile',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/sensitivity/reset
+ * Resets sensitivity profile to recommended BALANCED default.
+ */
+router.post('/sensitivity/reset', (_req: Request, res: Response) => {
+  try {
+    const updatedConfig = SignalSensitivityManager.resetToDefault();
+    res.status(200).json({
+      success: true,
+      message: 'Sensitivity profile reset to recommended BALANCED setting',
+      activeProfile: 'BALANCED',
+      currentConfig: updatedConfig,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to reset sensitivity profile',
       error: msg,
       timestamp: Date.now(),
     });

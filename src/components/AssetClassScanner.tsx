@@ -10,7 +10,8 @@
  * Does not generate synthetic or placeholder signals.
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { api } from '../api/client.js';
 import { TargetTracker } from './TargetTracker.js';
 import { Rejected72PlusPanel } from './Rejected72PlusPanel.js';
 import { ReportZoomControls, useReportZoom } from './ReportZoomControls.js';
@@ -51,6 +52,7 @@ import {
   Copy,
   Check,
   Maximize2,
+  Sliders,
 } from 'lucide-react';
 
 export type AssetCategory = 'CRYPTO' | 'FOREX' | 'STOCKS';
@@ -221,6 +223,22 @@ export function AssetClassScanner({
       ? scanResult.signal
       : null;
 
+  const [sensitivityLabel, setSensitivityLabel] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    api.getSensitivityProfiles()
+      .then((res) => {
+        if (isMounted && res.success && res.activeConfig) {
+          setSensitivityLabel(`${res.activeConfig.label} (≥${res.activeConfig.signalThreshold} Score, ${res.activeConfig.minimumRR}:1 R:R)`);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-5">
       {/* Scanner Header Banner */}
@@ -242,8 +260,17 @@ export function AssetClassScanner({
           </div>
         </div>
 
-        {/* Category Badge Indicator */}
-        <div className="flex items-center gap-2">
+        {/* Category & Sensitivity Indicators */}
+        <div className="flex flex-wrap items-center gap-2">
+          {sensitivityLabel && (
+            <span
+              className="text-[11px] font-mono text-emerald-300 bg-emerald-950/50 px-2.5 py-1 rounded-lg border border-emerald-800/60 flex items-center gap-1.5"
+              title="Active Institutional Gating Sensitivity"
+            >
+              <Sliders className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Sensitivity: <strong>{sensitivityLabel}</strong></span>
+            </span>
+          )}
           <span className="text-[11px] font-mono text-slate-400 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 flex items-center gap-1.5">
             <Database className="w-3.5 h-3.5 text-blue-400" />
             Source: <strong className="text-white">{currentSymbolInfo.provider}</strong>
