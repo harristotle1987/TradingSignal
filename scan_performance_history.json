@@ -1,98 +1,5 @@
 [
   {
-    "scanId": "scan_prof_1788046589398_l5cnq",
-    "startTime": 1788046584395,
-    "endTime": 1788046589416,
-    "totalDurationMs": 5021,
-    "stageDurations": {
-      "Stage 0: Session Screening": 17,
-      "Gate 3: Preliminary Screening": 0
-    },
-    "providerRequests": 0,
-    "networkRequests": 0,
-    "cacheHits": 0,
-    "cacheMisses": 2,
-    "cacheHitRate": 0,
-    "providerLatency": 0,
-    "preliminaryCandidates": 0,
-    "deepCandidates": 0,
-    "MTFCandidates": 0,
-    "72PlusCandidates": 0,
-    "rejected72PlusCandidates": 0,
-    "signalsGenerated": 0,
-    "signalsAccepted": 0,
-    "rejectionReasons": {},
-    "globalDeadline": 1788046584495,
-    "deadlineRemaining": 0,
-    "providerRequestsStoppedByBudget": 0,
-    "errors": [],
-    "providerHealth": {
-      "twelvedata": "HEALTHY",
-      "finnhub": "HEALTHY",
-      "bitget": "HEALTHY",
-      "exchangerate": "HEALTHY"
-    },
-    "scanStartTime": 1788046584395,
-    "scanEndTime": 1788046589416,
-    "TOTAL_SCAN_DURATION_MS": 5021,
-    "TOTAL_PROVIDER_LATENCY": 0,
-    "totalProviderRequests": 0,
-    "totalCacheHits": 0,
-    "totalCacheMisses": 2,
-    "stages": {
-      "Stage 0: Session Screening": {
-        "stageName": "Stage 0: Session Screening",
-        "startTime": 1788046589399,
-        "endTime": 1788046589416,
-        "durationMs": 17,
-        "providerRequests": 0,
-        "providerLatencyMs": 0,
-        "cacheHits": 0,
-        "cacheMisses": 2,
-        "candidatesIn": 1,
-        "candidatesOut": 1
-      },
-      "Gate 3: Preliminary Screening": {
-        "stageName": "Gate 3: Preliminary Screening",
-        "startTime": 1788046589416,
-        "endTime": 1788046589416,
-        "durationMs": 0,
-        "providerRequests": 0,
-        "providerLatencyMs": 0,
-        "cacheHits": 0,
-        "cacheMisses": 0,
-        "candidatesIn": 1,
-        "candidatesOut": 0
-      }
-    },
-    "stageList": [
-      {
-        "stageName": "Stage 0: Session Screening",
-        "startTime": 1788046589399,
-        "endTime": 1788046589416,
-        "durationMs": 17,
-        "providerRequests": 0,
-        "providerLatencyMs": 0,
-        "cacheHits": 0,
-        "cacheMisses": 2,
-        "candidatesIn": 1,
-        "candidatesOut": 1
-      },
-      {
-        "stageName": "Gate 3: Preliminary Screening",
-        "startTime": 1788046589416,
-        "endTime": 1788046589416,
-        "durationMs": 0,
-        "providerRequests": 0,
-        "providerLatencyMs": 0,
-        "cacheHits": 0,
-        "cacheMisses": 0,
-        "candidatesIn": 1,
-        "candidatesOut": 0
-      }
-    ]
-  },
-  {
     "scanId": "scan_prof_1788047302793_gr6qs",
     "startTime": 1788047302793,
     "endTime": 1788047304440,
@@ -9663,12 +9570,12 @@
     ]
   },
   {
-    "scanId": "scan_prof_1789889650151_qlqnf",
-    "startTime": 1789889645148,
-    "endTime": 1789889650173,
-    "totalDurationMs": 5025,
+    "scanId": "scan_prof_1790067681361_77d9u",
+    "startTime": 1790067676358,
+    "endTime": 1790067681381,
+    "totalDurationMs": 5023,
     "stageDurations": {
-      "Stage 0: Session Screening": 20,
+      "Stage 0: Session Screening": 19,
       "Gate 3: Preliminary Screening": 1
     },
     "providerRequests": 0,
@@ -9685,7 +9592,7 @@
     "signalsGenerated": 0,
     "signalsAccepted": 0,
     "rejectionReasons": {},
-    "globalDeadline": 1789889645248,
+    "globalDeadline": 1790067676458,
     "deadlineRemaining": 0,
     "providerRequestsStoppedByBudget": 0,
     "errors": [],
@@ -9695,9 +9602,9 @@
       "bitget": "HEALTHY",
       "exchangerate": "HEALTHY"
     },
-    "scanStartTime": 1789889645148,
-    "scanEndTime": 1789889650173,
-    "TOTAL_SCAN_DURATION_MS": 5025,
+    "scanStartTime": 1790067676358,
+    "scanEndTime": 1790067681381,
+    "TOTAL_SCAN_DURATION_MS": 5023,
     "TOTAL_PROVIDER_LATENCY": 0,
     "totalProviderRequests": 0,
     "totalCacheHits": 0,
@@ -9705,9 +9612,9 @@
     "stages": {
       "Stage 0: Session Screening": {
         "stageName": "Stage 0: Session Screening",
-        "startTime": 1789889650152,
-        "endTime": 1789889650172,
-        "durationMs": 20,
+        "startTime": 1790067681361,
+        "endTime": 1790067681380,
+        "durationMs": 19,
         "providerRequests": 0,
         "providerLatencyMs": 0,
         "cacheHits": 0,
@@ -9717,8 +9624,8 @@
       },
       "Gate 3: Preliminary Screening": {
         "stageName": "Gate 3: Preliminary Screening",
-        "startTime": 1789889650172,
-        "endTime": 1789889650173,
+        "startTime": 1790067681380,
+        "endTime": 1790067681381,
         "durationMs": 1,
         "providerRequests": 0,
         "providerLatencyMs": 0,
@@ -9731,9 +9638,9 @@
     "stageList": [
       {
         "stageName": "Stage 0: Session Screening",
-        "startTime": 1789889650152,
-        "endTime": 1789889650172,
-        "durationMs": 20,
+        "startTime": 1790067681361,
+        "endTime": 1790067681380,
+        "durationMs": 19,
         "providerRequests": 0,
         "providerLatencyMs": 0,
         "cacheHits": 0,
@@ -9743,8 +9650,8 @@
       },
       {
         "stageName": "Gate 3: Preliminary Screening",
-        "startTime": 1789889650172,
-        "endTime": 1789889650173,
+        "startTime": 1790067681380,
+        "endTime": 1790067681381,
         "durationMs": 1,
         "providerRequests": 0,
         "providerLatencyMs": 0,
@@ -9756,9 +9663,9 @@
     ]
   },
   {
-    "scanId": "scan_prof_1789889664890_zi5rh",
-    "startTime": 1789889659886,
-    "endTime": 1789889664910,
+    "scanId": "scan_prof_1790067851868_eo08s",
+    "startTime": 1790067846864,
+    "endTime": 1790067851888,
     "totalDurationMs": 5024,
     "stageDurations": {
       "Stage 0: Session Screening": 19,
@@ -9778,7 +9685,7 @@
     "signalsGenerated": 0,
     "signalsAccepted": 0,
     "rejectionReasons": {},
-    "globalDeadline": 1789889659986,
+    "globalDeadline": 1790067846964,
     "deadlineRemaining": 0,
     "providerRequestsStoppedByBudget": 0,
     "errors": [],
@@ -9788,8 +9695,8 @@
       "bitget": "HEALTHY",
       "exchangerate": "HEALTHY"
     },
-    "scanStartTime": 1789889659886,
-    "scanEndTime": 1789889664910,
+    "scanStartTime": 1790067846864,
+    "scanEndTime": 1790067851888,
     "TOTAL_SCAN_DURATION_MS": 5024,
     "TOTAL_PROVIDER_LATENCY": 0,
     "totalProviderRequests": 0,
@@ -9798,8 +9705,8 @@
     "stages": {
       "Stage 0: Session Screening": {
         "stageName": "Stage 0: Session Screening",
-        "startTime": 1789889664890,
-        "endTime": 1789889664909,
+        "startTime": 1790067851868,
+        "endTime": 1790067851887,
         "durationMs": 19,
         "providerRequests": 0,
         "providerLatencyMs": 0,
@@ -9810,8 +9717,8 @@
       },
       "Gate 3: Preliminary Screening": {
         "stageName": "Gate 3: Preliminary Screening",
-        "startTime": 1789889664910,
-        "endTime": 1789889664910,
+        "startTime": 1790067851888,
+        "endTime": 1790067851888,
         "durationMs": 0,
         "providerRequests": 0,
         "providerLatencyMs": 0,
@@ -9824,8 +9731,8 @@
     "stageList": [
       {
         "stageName": "Stage 0: Session Screening",
-        "startTime": 1789889664890,
-        "endTime": 1789889664909,
+        "startTime": 1790067851868,
+        "endTime": 1790067851887,
         "durationMs": 19,
         "providerRequests": 0,
         "providerLatencyMs": 0,
@@ -9836,8 +9743,8 @@
       },
       {
         "stageName": "Gate 3: Preliminary Screening",
-        "startTime": 1789889664910,
-        "endTime": 1789889664910,
+        "startTime": 1790067851888,
+        "endTime": 1790067851888,
         "durationMs": 0,
         "providerRequests": 0,
         "providerLatencyMs": 0,
@@ -9849,12 +9756,12 @@
     ]
   },
   {
-    "scanId": "scan_prof_1789889684076_5ea9n",
-    "startTime": 1789889679073,
-    "endTime": 1789889684101,
-    "totalDurationMs": 5028,
+    "scanId": "scan_prof_1790068196215_coahr",
+    "startTime": 1790068191211,
+    "endTime": 1790068196238,
+    "totalDurationMs": 5027,
     "stageDurations": {
-      "Stage 0: Session Screening": 24,
+      "Stage 0: Session Screening": 23,
       "Gate 3: Preliminary Screening": 0
     },
     "providerRequests": 0,
@@ -9871,7 +9778,7 @@
     "signalsGenerated": 0,
     "signalsAccepted": 0,
     "rejectionReasons": {},
-    "globalDeadline": 1789889679173,
+    "globalDeadline": 1790068191311,
     "deadlineRemaining": 0,
     "providerRequestsStoppedByBudget": 0,
     "errors": [],
@@ -9881,9 +9788,9 @@
       "bitget": "HEALTHY",
       "exchangerate": "HEALTHY"
     },
-    "scanStartTime": 1789889679073,
-    "scanEndTime": 1789889684101,
-    "TOTAL_SCAN_DURATION_MS": 5028,
+    "scanStartTime": 1790068191211,
+    "scanEndTime": 1790068196238,
+    "TOTAL_SCAN_DURATION_MS": 5027,
     "TOTAL_PROVIDER_LATENCY": 0,
     "totalProviderRequests": 0,
     "totalCacheHits": 0,
@@ -9891,9 +9798,9 @@
     "stages": {
       "Stage 0: Session Screening": {
         "stageName": "Stage 0: Session Screening",
-        "startTime": 1789889684076,
-        "endTime": 1789889684100,
-        "durationMs": 24,
+        "startTime": 1790068196215,
+        "endTime": 1790068196238,
+        "durationMs": 23,
         "providerRequests": 0,
         "providerLatencyMs": 0,
         "cacheHits": 0,
@@ -9903,8 +9810,8 @@
       },
       "Gate 3: Preliminary Screening": {
         "stageName": "Gate 3: Preliminary Screening",
-        "startTime": 1789889684101,
-        "endTime": 1789889684101,
+        "startTime": 1790068196238,
+        "endTime": 1790068196238,
         "durationMs": 0,
         "providerRequests": 0,
         "providerLatencyMs": 0,
@@ -9917,9 +9824,9 @@
     "stageList": [
       {
         "stageName": "Stage 0: Session Screening",
-        "startTime": 1789889684076,
-        "endTime": 1789889684100,
-        "durationMs": 24,
+        "startTime": 1790068196215,
+        "endTime": 1790068196238,
+        "durationMs": 23,
         "providerRequests": 0,
         "providerLatencyMs": 0,
         "cacheHits": 0,
@@ -9929,8 +9836,8 @@
       },
       {
         "stageName": "Gate 3: Preliminary Screening",
-        "startTime": 1789889684101,
-        "endTime": 1789889684101,
+        "startTime": 1790068196238,
+        "endTime": 1790068196238,
         "durationMs": 0,
         "providerRequests": 0,
         "providerLatencyMs": 0,
@@ -9942,10 +9849,10 @@
     ]
   },
   {
-    "scanId": "scan_prof_1789889863697_x6iix",
-    "startTime": 1789889858694,
-    "endTime": 1789889863719,
-    "totalDurationMs": 5025,
+    "scanId": "scan_prof_1790068437229_dppnb",
+    "startTime": 1790068432225,
+    "endTime": 1790068437251,
+    "totalDurationMs": 5026,
     "stageDurations": {
       "Stage 0: Session Screening": 20,
       "Gate 3: Preliminary Screening": 0
@@ -9964,7 +9871,7 @@
     "signalsGenerated": 0,
     "signalsAccepted": 0,
     "rejectionReasons": {},
-    "globalDeadline": 1789889858794,
+    "globalDeadline": 1790068432325,
     "deadlineRemaining": 0,
     "providerRequestsStoppedByBudget": 0,
     "errors": [],
@@ -9974,9 +9881,9 @@
       "bitget": "HEALTHY",
       "exchangerate": "HEALTHY"
     },
-    "scanStartTime": 1789889858694,
-    "scanEndTime": 1789889863719,
-    "TOTAL_SCAN_DURATION_MS": 5025,
+    "scanStartTime": 1790068432225,
+    "scanEndTime": 1790068437251,
+    "TOTAL_SCAN_DURATION_MS": 5026,
     "TOTAL_PROVIDER_LATENCY": 0,
     "totalProviderRequests": 0,
     "totalCacheHits": 0,
@@ -9984,8 +9891,8 @@
     "stages": {
       "Stage 0: Session Screening": {
         "stageName": "Stage 0: Session Screening",
-        "startTime": 1789889863698,
-        "endTime": 1789889863718,
+        "startTime": 1790068437230,
+        "endTime": 1790068437250,
         "durationMs": 20,
         "providerRequests": 0,
         "providerLatencyMs": 0,
@@ -9996,8 +9903,8 @@
       },
       "Gate 3: Preliminary Screening": {
         "stageName": "Gate 3: Preliminary Screening",
-        "startTime": 1789889863718,
-        "endTime": 1789889863718,
+        "startTime": 1790068437250,
+        "endTime": 1790068437250,
         "durationMs": 0,
         "providerRequests": 0,
         "providerLatencyMs": 0,
@@ -10010,8 +9917,8 @@
     "stageList": [
       {
         "stageName": "Stage 0: Session Screening",
-        "startTime": 1789889863698,
-        "endTime": 1789889863718,
+        "startTime": 1790068437230,
+        "endTime": 1790068437250,
         "durationMs": 20,
         "providerRequests": 0,
         "providerLatencyMs": 0,
@@ -10022,8 +9929,101 @@
       },
       {
         "stageName": "Gate 3: Preliminary Screening",
-        "startTime": 1789889863718,
-        "endTime": 1789889863718,
+        "startTime": 1790068437250,
+        "endTime": 1790068437250,
+        "durationMs": 0,
+        "providerRequests": 0,
+        "providerLatencyMs": 0,
+        "cacheHits": 0,
+        "cacheMisses": 0,
+        "candidatesIn": 1,
+        "candidatesOut": 0
+      }
+    ]
+  },
+  {
+    "scanId": "scan_prof_1790068488664_zqkza",
+    "startTime": 1790068483661,
+    "endTime": 1790068488684,
+    "totalDurationMs": 5023,
+    "stageDurations": {
+      "Stage 0: Session Screening": 18,
+      "Gate 3: Preliminary Screening": 0
+    },
+    "providerRequests": 0,
+    "networkRequests": 0,
+    "cacheHits": 0,
+    "cacheMisses": 2,
+    "cacheHitRate": 0,
+    "providerLatency": 0,
+    "preliminaryCandidates": 0,
+    "deepCandidates": 0,
+    "MTFCandidates": 0,
+    "72PlusCandidates": 0,
+    "rejected72PlusCandidates": 0,
+    "signalsGenerated": 0,
+    "signalsAccepted": 0,
+    "rejectionReasons": {},
+    "globalDeadline": 1790068483761,
+    "deadlineRemaining": 0,
+    "providerRequestsStoppedByBudget": 0,
+    "errors": [],
+    "providerHealth": {
+      "twelvedata": "HEALTHY",
+      "finnhub": "HEALTHY",
+      "bitget": "HEALTHY",
+      "exchangerate": "HEALTHY"
+    },
+    "scanStartTime": 1790068483661,
+    "scanEndTime": 1790068488684,
+    "TOTAL_SCAN_DURATION_MS": 5023,
+    "TOTAL_PROVIDER_LATENCY": 0,
+    "totalProviderRequests": 0,
+    "totalCacheHits": 0,
+    "totalCacheMisses": 2,
+    "stages": {
+      "Stage 0: Session Screening": {
+        "stageName": "Stage 0: Session Screening",
+        "startTime": 1790068488665,
+        "endTime": 1790068488683,
+        "durationMs": 18,
+        "providerRequests": 0,
+        "providerLatencyMs": 0,
+        "cacheHits": 0,
+        "cacheMisses": 2,
+        "candidatesIn": 1,
+        "candidatesOut": 1
+      },
+      "Gate 3: Preliminary Screening": {
+        "stageName": "Gate 3: Preliminary Screening",
+        "startTime": 1790068488684,
+        "endTime": 1790068488684,
+        "durationMs": 0,
+        "providerRequests": 0,
+        "providerLatencyMs": 0,
+        "cacheHits": 0,
+        "cacheMisses": 0,
+        "candidatesIn": 1,
+        "candidatesOut": 0
+      }
+    },
+    "stageList": [
+      {
+        "stageName": "Stage 0: Session Screening",
+        "startTime": 1790068488665,
+        "endTime": 1790068488683,
+        "durationMs": 18,
+        "providerRequests": 0,
+        "providerLatencyMs": 0,
+        "cacheHits": 0,
+        "cacheMisses": 2,
+        "candidatesIn": 1,
+        "candidatesOut": 1
+      },
+      {
+        "stageName": "Gate 3: Preliminary Screening",
+        "startTime": 1790068488684,
+        "endTime": 1790068488684,
         "durationMs": 0,
         "providerRequests": 0,
         "providerLatencyMs": 0,

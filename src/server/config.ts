@@ -111,8 +111,8 @@ class ConfigService {
 
     const thresholds: SignalThresholds = {
       minimumScore: authoritativeMinScore,
-      watchingThreshold: parseInt(process.env.THRESHOLD_WATCHING_SCORE || '65', 10),
-      qualifiedCandidateThreshold: parseInt(process.env.THRESHOLD_QUALIFIED_CANDIDATE_SCORE || '68', 10),
+      watchingThreshold: parseInt(process.env.THRESHOLD_WATCHING_SCORE || '60', 10),
+      qualifiedCandidateThreshold: parseInt(process.env.THRESHOLD_QUALIFIED_CANDIDATE_SCORE || '65', 10),
       signalThreshold: authoritativeMinScore,
       minimumRR: parseFloat(process.env.THRESHOLD_MIN_RR || '1.8'),
       minimumNetRR: parseFloat(process.env.THRESHOLD_MIN_NET_RR || '1.2'),

@@ -208,21 +208,9 @@ export class HardGatesEvaluator {
       }
     }
 
-    // 5. HARD GATE 5: Negative Mathematical Expectancy
-    if (params.estimatedWinRate !== undefined && params.estimatedWinRate <= thresholds.minimumWinProbability) {
-      return {
-        passed: false,
-        failedGate: 'NEGATIVE_EXPECTANCY',
-        rejectionReason: `REJECTED: WIN_RATE_BELOW_THRESHOLD. Estimated win rate (${params.estimatedWinRate}%) is at or below ${thresholds.minimumWinProbability}% threshold`,
-      };
-    }
-    if (params.expectancy !== undefined && params.expectancy <= 0) {
-      return {
-        passed: false,
-        failedGate: 'NEGATIVE_EXPECTANCY',
-        rejectionReason: `REJECTED: NEGATIVE_EXPECTANCY. Mathematical expectancy (${params.expectancy.toFixed(3)}R) is non-positive`,
-      };
-    }
+    // 5. Mathematical Expectancy & Win Rate Analytics (Soft modifier / Ranking analytics, not hard vetoes per Gate 6 & 7)
+    // Recorded for opportunity ranking and calibration without independent rejection
+
 
     // 6. HARD GATE 6: Gross & Net Risk/Reward Hurdle Checks
     // 6a: Gross R:R check

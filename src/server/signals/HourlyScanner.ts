@@ -585,27 +585,9 @@ export class HourlyScannerService {
           continue;
         }
 
-        // Condition 2: Estimated win rate > threshold
-        if (winRate <= thresholds.minimumWinProbability) {
-          const reason = `REJECTED: WIN_RATE_BELOW_THRESHOLD. Estimated win-rate (${winRate}%) <= mandatory ${thresholds.minimumWinProbability}% threshold.`;
-          rejectedDuringScan.push({
-            symbol: sig.symbol,
-            direction: sig.direction,
-            score,
-            reason,
-          });
-          Gate35SignalFunnelAnalytics.recordCandidate({
-            symbol: sig.symbol,
-            direction: sig.direction,
-            stage: 'GATE_4',
-            score,
-            strategy: sig.strategy,
-            rejectionReason: reason,
-            ...sigTelemetry,
-            rejectionStage: 'GATE_4',
-          });
-          continue;
-        }
+        // Condition 2: Track win rate for telemetry / analytics without independent hard veto (Gate 6)
+        sig.modelEstimatedWinRate = winRate;
+
 
         // GATE 45 Condition 3: Minimum acceptable GROSS Risk/Reward ratio
         if (grossRR < thresholds.minimumRR) {

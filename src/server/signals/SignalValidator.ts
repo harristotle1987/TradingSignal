@@ -193,13 +193,13 @@ export class SignalValidator {
     // 8. Confluence & Quality Score Check (INSUFFICIENT_CONFLUENCE with Gate 31 CAUTION threshold elevation)
     const thresholds = serverConfig.getConfig().thresholds;
     const requiredMinScore = newsRiskResult.classification === 'CAUTION'
-      ? Math.max(thresholds.minimumScore, newsRiskResult.minRequiredConfirmationScore)
-      : thresholds.minimumScore;
+      ? Math.max(thresholds.signalThreshold, newsRiskResult.minRequiredConfirmationScore)
+      : (thresholds.watchingThreshold ?? 60);
 
     if (ctx.score < requiredMinScore) {
       const reasonMsg = newsRiskResult.classification === 'CAUTION'
         ? `REJECTED: SCORE_BELOW_CAUTION_NEWS_THRESHOLD. Score ${ctx.score} is below elevated CAUTION news threshold of ${requiredMinScore}`
-        : `REJECTED: SCORE_BELOW_THRESHOLD. Deterministic score ${ctx.score}/100 is below minimum actionable threshold of ${thresholds.minimumScore}`;
+        : `REJECTED: SCORE_BELOW_THRESHOLD. Deterministic score ${ctx.score}/100 is below minimum threshold of ${requiredMinScore}`;
 
       return {
         isValid: false,
@@ -617,20 +617,7 @@ export class SignalValidator {
     const netEV = pWin * netReward - pLoss * netRisk;
     const expectancyRatio = netRisk > 0 ? netEV / netRisk : -1;
 
-    if (netEV <= 0) {
-      return {
-        isValid: false,
-        message: `REJECTED: NEGATIVE_EXPECTANCY. Expected Value rejected: Positive statistical edge not established (Net EV: ${netEV.toFixed(4)} <= 0 for estimated win rate ${(pWin * 100).toFixed(1)}%)`,
-      };
-    }
-
-    if (expectancyRatio < 0.01) {
-      return {
-        isValid: false,
-        message: `REJECTED: NEGATIVE_EXPECTANCY. Expected Value rejected: Expectancy ratio (${(expectancyRatio * 100).toFixed(1)}%) below minimum positive risk-adjusted hurdle`,
-      };
-    }
-
+    // GATE 7: Expectancy is used for analytics and ranking, not as an independent hard veto
     return {
       isValid: true,
       message: 'OK',

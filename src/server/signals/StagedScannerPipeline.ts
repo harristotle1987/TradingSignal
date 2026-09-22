@@ -736,6 +736,8 @@ export async function runStagedPipeline(
           tp3: scoring.tp3,
           grossRR: scoring.grossRR ?? scoring.riskRewardRatio,
           primaryRR: scoring.primaryRR ?? scoring.riskRewardRatio,
+          atr: scoring.technicalMetrics?.atr || 0,
+          timeframeAlignmentRatio: scoring.timeframeAlignmentRatio,
           tp1RR: scoring.tp1RR,
           tp2RR: scoring.tp2RR,
           tp3RR: scoring.tp3RR,
@@ -822,70 +824,11 @@ export async function runStagedPipeline(
       const winRate = ScoringEngine.estimateWinRate(scoring.score, finalRR, scoring.agreeingStrategiesCount);
       const expectancy = ScoringEngine.calculateExpectancy(winRate, finalRR);
 
+      // GATE 6 & GATE 7: Win rate and mathematical expectancy analytics
+      // Model-estimated win rate and mathematical expectancy are preserved for analytics,
+      // ranking, and confidence modification, rather than acting as independent hard vetoes.
       const anyOptimizedPathPassed = !!(scoring as any).anyOptimizedPathPassed;
       const effectiveMinWinProb = anyOptimizedPathPassed ? 35 : thresholds.minimumWinProbability;
-
-      if (winRate <= effectiveMinWinProb) {
-        const reason = `Estimated win rate (${winRate}% <= ${effectiveMinWinProb}% threshold)`;
-        const failedGates: StandardFailedGate[] = [StandardFailedGate.WIN_RATE_BELOW_THRESHOLD];
-        if ((scoring.score || 0) < thresholds.signalThreshold) {
-          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
-        }
-        if (finalRR < thresholds.minimumRR) {
-          failedGates.push(StandardFailedGate.RR);
-        }
-        rejectionTracker.recordCandidate({
-          symbol: asset,
-          direction: scoring.direction,
-          score: scoring.score || 0,
-          primaryRejectionReason: reason,
-          failedGates,
-          finalDecision: 'REJECTED',
-          stage: 'WIN_RATE_CHECK',
-          entryPrice: finalEntry,
-          stopLoss: finalSL,
-          takeProfit: finalTP,
-          tp1: scoring.tp1,
-          tp2: scoring.tp2,
-          tp3: scoring.tp3,
-          timestamp: now,
-          factors: scoring.factors,
-          tpDiagnostics: scoring.tpDiagnostics,
-        });
-        logAuditHelper(asset, scoring, primaryStrategyName, crossCheck, fp, reason);
-        continue;
-      }
-
-      if (expectancy <= 0) {
-        const reason = `Non-positive expectancy (${expectancy}R <= 0)`;
-        const failedGates: StandardFailedGate[] = [StandardFailedGate.NEGATIVE_EXPECTANCY];
-        if ((scoring.score || 0) < thresholds.signalThreshold) {
-          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
-        }
-        if (finalRR < thresholds.minimumRR) {
-          failedGates.push(StandardFailedGate.RR);
-        }
-        rejectionTracker.recordCandidate({
-          symbol: asset,
-          direction: scoring.direction,
-          score: scoring.score || 0,
-          primaryRejectionReason: reason,
-          failedGates,
-          finalDecision: 'REJECTED',
-          stage: 'EXPECTANCY_CHECK',
-          entryPrice: finalEntry,
-          stopLoss: finalSL,
-          takeProfit: finalTP,
-          tp1: scoring.tp1,
-          tp2: scoring.tp2,
-          tp3: scoring.tp3,
-          timestamp: now,
-          factors: scoring.factors,
-          tpDiagnostics: scoring.tpDiagnostics,
-        });
-        logAuditHelper(asset, scoring, primaryStrategyName, crossCheck, fp, reason);
-        continue;
-      }
 
       const classification = SymbolNormalizer.getAssetClassification(asset);
 
@@ -960,6 +903,10 @@ export async function runStagedPipeline(
           tp1: scoring.tp1,
           tp2: scoring.tp2,
           tp3: scoring.tp3,
+          grossRR: finalRR,
+          primaryRR: finalRR,
+          atr: scoring.technicalMetrics?.atr || 0,
+          timeframeAlignmentRatio: scoring.timeframeAlignmentRatio,
           timestamp: now,
           factors: gate8Eval.factors,
         });
@@ -1055,14 +1002,33 @@ export async function runStagedPipeline(
       });
     }
 
-    // Gate 6: Rank qualified candidates by overall trade quality and prioritize strongest 3–5 for expensive analysis
+    // GATE 12: Active Candidate Ranking
+    // Sort/rank candidates using:
+    // 1. Confluence score
+    // 2. R:R quality
+    // 3. Higher-timeframe trend alignment
+    // 4. Win-rate estimate / expectancy
+    // 5. AI confidence
     const filteredCandidates = [...candidates].sort((a, b) => {
       const scoreA = a.signal.score ?? a.scoring.score ?? 0;
       const scoreB = b.signal.score ?? b.scoring.score ?? 0;
       if (scoreB !== scoreA) return scoreB - scoreA;
+
       const rrA = a.signal.riskRewardRatio ?? a.scoring.primaryRR ?? 0;
       const rrB = b.signal.riskRewardRatio ?? b.scoring.primaryRR ?? 0;
-      return rrB - rrA;
+      if (rrB !== rrA) return rrB - rrA;
+
+      const htfA = a.scoring.factors?.higherTfTrendScore ?? 0;
+      const htfB = b.scoring.factors?.higherTfTrendScore ?? 0;
+      if (htfB !== htfA) return htfB - htfA;
+
+      const expA = (a.signal.estimatedWinRate ?? 50) * (a.signal.expectancy ?? 0.5);
+      const expB = (b.signal.estimatedWinRate ?? 50) * (b.signal.expectancy ?? 0.5);
+      if (expB !== expA) return expB - expA;
+
+      const aiA = a.aiConfidence ?? 0;
+      const aiB = b.aiConfidence ?? 0;
+      return aiB - aiA;
     });
 
     // -----------------------------------------------------------------

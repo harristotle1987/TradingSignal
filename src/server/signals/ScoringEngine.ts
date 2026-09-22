@@ -807,68 +807,26 @@ export class ScoringEngine {
     const isOptimizedPath = isStrongTrendPath || isGoodBreakoutPath || isGoodReversalPath || isGoodMomentumPath;
     const effectiveMinWinProb = isOptimizedPath ? 35 : thresholds.minimumWinProbability;
 
-    // Historical Win Rate & Positive Expectancy Calculation
+    // GATE 6 & GATE 7: Historical Win Rate & Mathematical Expectancy Analytics
+    // Model-estimated win rate and expectancy are recorded for analytics, ranking, and confidence modification,
+    // rather than functioning as independent hard vetoes.
     const estimatedWinRate = this.estimateWinRate(totalScore, rawRR, strategyEval.agreeingStrategiesCount);
-    if (estimatedWinRate <= effectiveMinWinProb) {
-      return this.createRejection(
-        `REJECTED: WIN_RATE_BELOW_THRESHOLD. Estimated win rate (${estimatedWinRate}%) is at or below ${effectiveMinWinProb}% threshold`,
-        marketRegime,
-        regimeDetails,
-        totalScore,
-        direction,
-        stopLoss,
-        takeProfit,
-        tp1,
-        tp2,
-        tp3,
-        rawRR,
-        entryPrice,
-        rrResult.primaryRR,
-        rrResult.tp1RR,
-        rrResult.tp2RR,
-        rrResult.tp3RR,
-        factors,
-        tpSetup.diagnostics
-      );
-    }
-
     const expectancy = this.calculateExpectancy(estimatedWinRate, rawRR);
-    if (expectancy <= 0) {
-      return this.createRejection(
-        `REJECTED: NEGATIVE_EXPECTANCY. Negative mathematical expectancy (${expectancy}R per trade). Setup discarded.`,
-        marketRegime,
-        regimeDetails,
-        totalScore,
-        direction,
-        stopLoss,
-        takeProfit,
-        tp1,
-        tp2,
-        tp3,
-        rawRR,
-        entryPrice,
-        rrResult.primaryRR,
-        rrResult.tp1RR,
-        rrResult.tp2RR,
-        rrResult.tp3RR,
-        factors,
-        tpSetup.diagnostics
-      );
-    }
 
-    // Score Classification using Centralized Configuration:
-    // score >= signalThreshold → ACTIONABLE SIGNAL (HIGH_QUALITY)
-    // score >= qualifiedCandidateThreshold → QUALIFIED CANDIDATE (VALID)
-    // score >= watchingThreshold → WATCHING (VALID)
-    // Below watchingThreshold → REJECT
+    // Score Classification using Centralized Configuration (GATE 5):
+    // score >= 80 → HIGH_CONFLUENCE_SIGNAL
+    // score >= signalThreshold (70) → ACTIONABLE SIGNAL (HIGH_QUALITY)
+    // score >= qualifiedCandidateThreshold (65) → QUALIFIED CANDIDATE (VALID)
+    // score >= watchingThreshold (60) → WATCHING (VALID)
+    // Below watchingThreshold (60) → REJECT
     let qualityTier: QualityTier = 'REJECT';
     if (totalScore >= thresholds.signalThreshold) qualityTier = 'HIGH_QUALITY';
     else if (totalScore >= thresholds.qualifiedCandidateThreshold) qualityTier = 'VALID';
     else if (totalScore >= thresholds.watchingThreshold) qualityTier = 'VALID';
 
-    if (totalScore < thresholds.minimumScore) {
+    if (totalScore < thresholds.watchingThreshold) {
       return this.createRejection(
-        `REJECTED: SCORE_BELOW_THRESHOLD. Deterministic quality score ${totalScore}/100 is below minimum actionable threshold of ${thresholds.minimumScore}`,
+        `REJECTED: SCORE_BELOW_THRESHOLD. Deterministic quality score ${totalScore}/100 is below watching threshold of ${thresholds.watchingThreshold}`,
         marketRegime,
         regimeDetails,
         totalScore,

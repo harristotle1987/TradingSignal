@@ -198,15 +198,16 @@ export class StrategyEngine {
     const rawWeightedScore = totalWeight > 0 ? weightedScoreSum / totalWeight : 0;
     const weightedAgreementRatio = totalWeight > 0 ? (weightedScoreSum / totalWeight) / 100 : agreementRatio;
 
-    // GATE 84: Different valid setups qualify through different combinations of core evidence.
-    // A valid trend trade does NOT require breakout, pullback, mean reversion, or order flow simultaneously.
-    // Archetype core combinations:
-    // 1. Trend: Trend Following (s1) or Momentum (s2) + Volatility Filter (s6) + at least 3 agreeing strategies OR weighted agreement >= 40%
-    // 2. Breakout: Breakout (s3) + Volatility Filter (s6) + (Momentum s2 || Order Flow s5 || agreeing >= 2)
-    // 3. Range: Mean Reversion (s4) + Volatility Filter (s6) + agreeing >= 2
-    const isCoreTrendCombo = StrategyEngine.isTrending(regime) && (s1.passed || s2.passed) && s6.passed && (agreeingStrategiesCount >= 3 || weightedAgreementRatio >= 0.40);
-    const isCoreBreakoutCombo = StrategyEngine.isBreakout(regime) && s3.passed && s6.passed && (agreeingStrategiesCount >= 2 || s2.passed || s5.passed);
-    const isCoreRangeCombo = (StrategyEngine.isRanging(regime) || StrategyEngine.isLowVolatility(regime)) && s4.passed && s6.passed && agreeingStrategiesCount >= 2;
+    // GATE 3 & GATE 13: Setup-Specific Qualification Pathways
+    // Allow a candidate to qualify through a valid setup pathway:
+    // - TREND: Trend Following (s1) passed in dominant direction
+    // - BREAKOUT: Breakout (s3) passed in dominant direction
+    // - REVERSAL: Mean Reversion / Reversal (s4) passed in dominant direction
+    // - MOMENTUM: Momentum Continuation (s2) passed in dominant direction
+    const isCoreTrendCombo = s1.passed && s1.direction === dominantDirection;
+    const isCoreBreakoutCombo = s3.passed && s3.direction === dominantDirection;
+    const isCoreRangeCombo = s4.passed && s4.direction === dominantDirection;
+    const isCoreMomentumCombo = s2.passed && s2.direction === dominantDirection;
 
     const agreementScore = Math.round(
       Math.max(agreementRatio, weightedAgreementRatio) * 40 +
@@ -214,7 +215,7 @@ export class StrategyEngine {
         (rawWeightedScore / 100) * 30
     );
 
-    // Require configurable minimum strategies agreeing ratio (or qualified core combination), minimum 40 agreement score, and configurable minimum timeframe alignment ratio
+    // Require configurable minimum strategies agreeing ratio (or qualified core setup pathway)
     const thresholds = serverConfig.getConfig().thresholds;
     const minimumRequiredAgreement = thresholds.minimumStrategyAgreement;
     const passed =
@@ -222,16 +223,15 @@ export class StrategyEngine {
       weightedAgreementRatio >= (minimumRequiredAgreement * 0.8) ||
       isCoreTrendCombo ||
       isCoreBreakoutCombo ||
-      isCoreRangeCombo;
+      isCoreRangeCombo ||
+      isCoreMomentumCombo;
     const timeframeAlignmentRatio = tfScores.totalEvaluated > 0 ? tfScores.alignedCount / tfScores.totalEvaluated : 0;
 
-    const hasStrongConfluence = 
-      passed && 
-      agreementScore >= 40;
+    const hasStrongConfluence = passed;
 
     if (!hasStrongConfluence) {
       return this.createRejection(
-        `REJECTED: INSUFFICIENT_CONFLUENCE. Strategy agreement ratio ${(agreementRatio * 100).toFixed(1)}% (${agreeingStrategiesCount}/${totalStrategiesEvaluated}, min ${minimumRequiredAgreement * 100}%). Agreement Score: ${agreementScore}/100 (min 40 required)`,
+        `REJECTED: INSUFFICIENT_CONFLUENCE. Strategy agreement ratio ${(agreementRatio * 100).toFixed(1)}% (${agreeingStrategiesCount}/${totalStrategiesEvaluated}, min ${minimumRequiredAgreement * 100}%). Agreement Score: ${agreementScore}/100`,
         regime,
         regimeDetails
       );

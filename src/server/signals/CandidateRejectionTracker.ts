@@ -79,6 +79,8 @@ export interface CandidateRejectionAudit {
   tp3?: number;
   grossRR?: number;
   primaryRR?: number;
+  atr?: number;
+  timeframeAlignmentRatio?: number;
   tp1RR?: number;
   tp2RR?: number;
   tp3RR?: number;
