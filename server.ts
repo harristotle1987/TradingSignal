@@ -33,6 +33,15 @@ export async function createServer() {
 
   app.use(express.json());
 
+  // Hardened Security Response Headers
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+  });
+
   // Explicit Allowed-Origin CORS Middleware (Gate 69)
   app.use(corsMiddleware);
 
