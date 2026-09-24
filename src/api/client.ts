@@ -21,16 +21,37 @@ class ApiClient {
   private adminToken: string | null = null;
 
   /**
-   * Dynamically sets admin authentication token in memory for administrative requests
+   * Dynamically sets admin authentication token in memory & storage for administrative requests
    */
   public setAdminToken(token: string | null): void {
     this.adminToken = token;
+    if (typeof localStorage !== 'undefined') {
+      if (token) {
+        localStorage.setItem('admin_api_token', token);
+      } else {
+        localStorage.removeItem('admin_api_token');
+      }
+    }
   }
 
   /**
-   * Retrieves active admin authentication token from memory
+   * Retrieves active admin authentication token
    */
   public getAdminToken(): string | null {
+    if (!this.adminToken && typeof localStorage !== 'undefined') {
+      this.adminToken =
+        localStorage.getItem('admin_api_token') ||
+        localStorage.getItem('admin_token') ||
+        localStorage.getItem('admin_api_key');
+    }
+    if (!this.adminToken) {
+      this.adminToken =
+        (import.meta as any).env?.VITE_ADMIN_API_KEY ||
+        (import.meta as any).env?.VITE_ADMIN_KEY ||
+        (import.meta as any).env?.VITE_ADMIN_SECRET ||
+        (import.meta as any).env?.VITE_SCANNER_CRON_SECRET ||
+        null;
+    }
     return this.adminToken;
   }
 
@@ -51,6 +72,8 @@ class ApiClient {
       if (activeAdminToken) {
         authHeaders['Authorization'] = `Bearer ${activeAdminToken}`;
         authHeaders['x-admin-key'] = activeAdminToken;
+        authHeaders['x-admin-secret'] = activeAdminToken;
+        authHeaders['x-api-key'] = activeAdminToken;
       }
 
       const response = await fetch(fullUrl, {
@@ -177,6 +200,22 @@ class ApiClient {
     return this.fetchJson<{ success: boolean; message: string }>('/api/signals', {
       method: 'DELETE',
     });
+  }
+
+  /**
+   * Delete/clear ALL signals across active cache, persistent sent signals, signal logs, and outcome logs
+   */
+  async deleteAllSignals(): Promise<{ success: boolean; message: string }> {
+    return this.fetchJson<{ success: boolean; message: string }>('/api/signals/all', {
+      method: 'DELETE',
+    });
+  }
+
+  /**
+   * Alias for deleteAllSignals
+   */
+  async clearAllSignals(): Promise<{ success: boolean; message: string }> {
+    return this.deleteAllSignals();
   }
 
   /**

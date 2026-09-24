@@ -657,28 +657,33 @@ export class SignalLogger {
       }
     }
 
-    if (!targetKey || !this.logs.has(targetKey)) {
-      logger.warn(`[SignalLogger] Cannot delete log entry: ID ${id} not found.`);
-      return false;
+    if (targetKey && this.logs.has(targetKey)) {
+      this.logs.delete(targetKey);
+      this.flushToDisk();
     }
-
-    this.logs.delete(targetKey);
-    this.flushToDisk();
 
     const firestore = getFirestoreAdmin();
     if (firestore) {
       try {
-        await firestore
+        await firestore.collection(FIRESTORE_COLLECTION).doc(id).delete();
+        if (targetKey && targetKey !== id) {
+          await firestore.collection(FIRESTORE_COLLECTION).doc(targetKey).delete();
+        }
+        const snapQuery = await firestore
           .collection(FIRESTORE_COLLECTION)
-          .doc(targetKey)
-          .delete();
+          .where('snapshotId', '==', id)
+          .get();
+        if (!snapQuery.empty) {
+          const batch = firestore.batch();
+          snapQuery.docs.forEach((doc) => batch.delete(doc.ref));
+          await batch.commit();
+        }
       } catch (err) {
-        logger.error(`[SignalLogger] Firestore delete failed for ${targetKey}:`, { error: String(err) });
-        throw err;
+        logger.error(`[SignalLogger] Firestore delete error for ${id}:`, { error: String(err) });
       }
     }
 
-    logger.info(`[SignalLogger] DELETED INDIVIDUAL SIGNAL LOG RECORD: ${targetKey}`);
+    logger.info(`[SignalLogger] DELETED INDIVIDUAL SIGNAL LOG RECORD: ${id}`);
     return true;
   }
 

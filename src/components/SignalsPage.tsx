@@ -251,22 +251,26 @@ export function SignalsPage({ health }: SignalsPageProps) {
     loadDedicatedSignalLogs();
   }, [loadDedicatedSignalLogs]);
 
-  // Clear history handler
+  // Clear history handler - wipes local state and triggers DELETE /api/signals/all
   const handleClearHistory = async () => {
     setSignalHistory([]);
+    setActiveSignals([]);
+    setLastGenResult(null);
     try {
       localStorage.removeItem(HISTORY_STORAGE_KEY);
-      await api.clearSignalLogs();
+      await api.deleteAllSignals();
+      await api.clearSignalLogs().catch(() => {});
     } catch (e) {
       console.warn('Failed to wipe signal history:', e);
     }
   };
 
-  // Individual history item deletion handler
+  // Individual history item deletion handler - triggers DELETE /api/signals/:id & /api/signals/log/:id
   const handleDeleteHistoryItem = async (id: string, symbol: string) => {
     setDeletingIds((prev) => [...prev, id]);
     try {
-      await api.deleteSignalLog(id);
+      await api.deleteSignal(id).catch(() => {});
+      await api.deleteSignalLog(id).catch(() => {});
       setSignalHistory((prev) => {
         const updated = prev.filter((item) => item.id !== id && item.snapshotId !== id);
         try {
@@ -276,8 +280,9 @@ export function SignalsPage({ health }: SignalsPageProps) {
         }
         return updated;
       });
+      setActiveSignals((prev) => prev.filter((s) => s.id !== id && s.snapshotId !== id));
     } catch (e) {
-      console.warn(`Failed to delete backend signal log entry ${id}:`, e);
+      console.warn(`Failed to delete backend signal entry ${id}:`, e);
       throw e;
     } finally {
       setDeletingIds((prev) => prev.filter((dId) => dId !== id));
@@ -288,7 +293,10 @@ export function SignalsPage({ health }: SignalsPageProps) {
   const handleDeleteMultipleHistoryItems = async (ids: string[]) => {
     setDeletingIds((prev) => [...prev, ...ids]);
     try {
-      await api.deleteSignalLogs(ids);
+      await api.deleteSignalLogs(ids).catch(() => {});
+      for (const id of ids) {
+        await api.deleteSignal(id).catch(() => {});
+      }
       setSignalHistory((prev) => {
         const updated = prev.filter((item) => !ids.includes(item.id) && !ids.includes(item.snapshotId));
         try {
@@ -298,6 +306,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
         }
         return updated;
       });
+      setActiveSignals((prev) => prev.filter((s) => !ids.includes(s.id) && !ids.includes(s.snapshotId)));
     } catch (e) {
       console.error('Failed to bulk delete signal logs:', e);
       throw e;

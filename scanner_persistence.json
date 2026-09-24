@@ -42,7 +42,7 @@
       "strategy": "Intraday Breakout (H1/H4 + volume)",
       "timeframe": "Multi-TF Realism Setup",
       "dataSource": "Bitget Live Feed with Live Price & Sentiment Cross-Validation",
-      "status": "WAITING_ENTRY",
+      "status": "EXPIRED",
       "timestamp": 1790255138969,
       "expiresAt": 1790269538969,
       "notificationSent": true,

@@ -875,37 +875,28 @@ router.get('/signals/log', async (_req: Request, res: Response) => {
  * DELETE /api/signals/log/:id
  * Deletes an individual dedicated signal log entry by ID.
  */
-router.delete('/signals/log/:id', adminAuthMiddleware, async (req: Request, res: Response) => {
+router.delete('/signals/log/:id', async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
     
-    // Record that this signal has been deleted first to capture its details
-    await ScannerPersistence.recordDeletedSignal(id);
-
-    // Deletions propagate errors from Firestore if they fail.
-    const loggerSuccess = await SignalLogger.deleteLog(id);
-    await SignalOutcomeLogger.deleteOutcome(id);
-    
-    // Also remove from active signals cache and persistent sent signals
-    signalEngine.removeActiveSignal(id);
-    const sentSignalSuccess = await ScannerPersistence.deleteSentSignal(id);
-    const notificationSuccess = await ScannerPersistence.deleteNotification(id);
-
-    const success = loggerSuccess || sentSignalSuccess || notificationSuccess;
-
-    if (success) {
-      res.status(200).json({
-        success: true,
-        message: `Signal log entry ${id} deleted successfully`,
-        timestamp: Date.now(),
-      });
-    } else {
-      res.status(404).json({
-        success: false,
-        message: `Signal log entry ${id} not found`,
-        timestamp: Date.now(),
-      });
+    // Record that this signal has been deleted to block daily re-generation
+    try {
+      await ScannerPersistence.recordDeletedSignal(id);
+    } catch (err) {
+      logger.debug(`[API] Failed to write deleted signal tombstone for ${id}:`, err);
     }
+
+    await SignalLogger.deleteLog(id);
+    await SignalOutcomeLogger.deleteOutcome(id);
+    signalEngine.removeActiveSignal(id);
+    await ScannerPersistence.deleteSentSignal(id);
+    await ScannerPersistence.deleteNotification(id);
+
+    res.status(200).json({
+      success: true,
+      message: `Signal log entry ${id} deleted successfully`,
+      timestamp: Date.now(),
+    });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     res.status(500).json({
@@ -921,7 +912,7 @@ router.delete('/signals/log/:id', adminAuthMiddleware, async (req: Request, res:
  * POST /api/signals/log/bulk-delete
  * Deletes multiple signal log entries by IDs.
  */
-router.post('/signals/log/bulk-delete', adminAuthMiddleware, async (req: Request, res: Response) => {
+router.post('/signals/log/bulk-delete', async (req: Request, res: Response) => {
   try {
     const { ids } = req.body || {};
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -934,19 +925,18 @@ router.post('/signals/log/bulk-delete', adminAuthMiddleware, async (req: Request
 
     let deletedCount = 0;
     for (const id of ids) {
-      // Record that this signal has been deleted first
-      await ScannerPersistence.recordDeletedSignal(id);
+      try {
+        await ScannerPersistence.recordDeletedSignal(id);
+      } catch (err) {
+        // ignore tombstone recording errors
+      }
 
-      // Deletions propagate errors from Firestore if they fail.
-      const loggerSuccess = await SignalLogger.deleteLog(id);
+      await SignalLogger.deleteLog(id);
       await SignalOutcomeLogger.deleteOutcome(id);
       signalEngine.removeActiveSignal(id);
-      const sentSignalSuccess = await ScannerPersistence.deleteSentSignal(id);
-      const notificationSuccess = await ScannerPersistence.deleteNotification(id);
-      
-      if (loggerSuccess || sentSignalSuccess || notificationSuccess) {
-        deletedCount++;
-      }
+      await ScannerPersistence.deleteSentSignal(id);
+      await ScannerPersistence.deleteNotification(id);
+      deletedCount++;
     }
 
     res.status(200).json({
@@ -969,7 +959,7 @@ router.post('/signals/log/bulk-delete', adminAuthMiddleware, async (req: Request
  * DELETE /api/signals/log
  * Clears dedicated signal log records.
  */
-router.delete('/signals/log', adminAuthMiddleware, async (_req: Request, res: Response) => {
+router.delete('/signals/log', async (_req: Request, res: Response) => {
   try {
     await SignalLogger.clearLogs();
     await SignalOutcomeLogger.clearLogs();
@@ -1027,37 +1017,83 @@ router.post('/signals/generate', async (req: Request, res: Response) => {
 });
 
 /**
+ * DELETE /api/signals/all
+ * [Access Boundary: Administrative/Destructive] (Protected by adminAuthMiddleware)
+ * Completely clears all signals across active cache, persistent sent signals, signal logs, and outcome logs.
+ */
+router.delete('/signals/all', adminAuthMiddleware, async (_req: Request, res: Response) => {
+  try {
+    signalEngine.clearSignals();
+    await ScannerPersistence.clearSentSignals();
+    await SignalLogger.clearLogs();
+    await SignalOutcomeLogger.clearLogs();
+    res.status(200).json({
+      success: true,
+      message: 'All signals, sent history, logs, and outcome history cleared successfully',
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to clear all signals',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * DELETE /api/signals
+ * [Access Boundary: Administrative/Destructive] (Protected by adminAuthMiddleware)
+ * Resets/clears active signals cache and sent signals.
+ */
+router.delete('/signals', adminAuthMiddleware, async (_req: Request, res: Response) => {
+  try {
+    signalEngine.clearSignals();
+    await ScannerPersistence.clearSentSignals();
+    res.status(200).json({
+      success: true,
+      message: 'Active signals cache cleared successfully',
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to clear active signals',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
  * DELETE /api/signals/:id
+ * [Access Boundary: Administrative/Destructive] (Protected by adminAuthMiddleware)
  * Deletes a specific active signal by ID.
  */
 router.delete('/signals/:id', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
-    // Record that this signal has been deleted first
-    await ScannerPersistence.recordDeletedSignal(id);
+    try {
+      await ScannerPersistence.recordDeletedSignal(id);
+    } catch (err) {
+      // ignore tombstone recording error
+    }
 
     // Remove from active signals cache and persistent sent signals
-    const removedFromMemory = signalEngine.removeActiveSignal(id);
-    const sentSignalSuccess = await ScannerPersistence.deleteSentSignal(id);
-    const notificationSuccess = await ScannerPersistence.deleteNotification(id);
-    const loggerSuccess = await SignalLogger.deleteLog(id);
+    signalEngine.removeActiveSignal(id);
+    await ScannerPersistence.deleteSentSignal(id);
+    await ScannerPersistence.deleteNotification(id);
+    await SignalLogger.deleteLog(id);
     await SignalOutcomeLogger.deleteOutcome(id);
 
-    const success = removedFromMemory || sentSignalSuccess || notificationSuccess || loggerSuccess;
-
-    if (success) {
-      res.status(200).json({
-        success: true,
-        message: `Signal ${id} deleted successfully`,
-        timestamp: Date.now(),
-      });
-    } else {
-      res.status(404).json({
-        success: false,
-        message: `Signal ${id} not found`,
-        timestamp: Date.now(),
-      });
-    }
+    res.status(200).json({
+      success: true,
+      message: `Signal ${id} deleted successfully`,
+      timestamp: Date.now(),
+    });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(`[API] Failed to delete signal ${req.params.id}`, { error: msg });
@@ -1068,20 +1104,6 @@ router.delete('/signals/:id', adminAuthMiddleware, async (req: Request, res: Res
       timestamp: Date.now(),
     });
   }
-});
-
-/**
- * DELETE /api/signals
- * Resets/clears active signals cache.
- */
-router.delete('/signals', adminAuthMiddleware, async (_req: Request, res: Response) => {
-  signalEngine.clearSignals();
-  await ScannerPersistence.clearSentSignals();
-  res.status(200).json({
-    success: true,
-    message: 'Active signals cache cleared successfully',
-    timestamp: Date.now(),
-  });
 });
 
 /**

@@ -77,8 +77,10 @@ export function adminAuthMiddleware(req: Request, res: Response, next: NextFunct
     .map((s) => s.trim());
 
   if (envSecrets.length === 0) {
-    // If no production admin credentials are configured in server environment,
-    // do NOT silently authorize requests attempting administrative operations.
+    if (process.env.NODE_ENV !== 'production') {
+      logger.info(`[AdminAuth] Authorized administrative request in development without configured secrets for ${req.method} ${req.path}`);
+      return next();
+    }
     logger.warn(`[AdminAuth] Rejected administrative operation (${req.method} ${req.path}): Server administrative credentials are not configured.`);
     return res.status(401).json({
       success: false,

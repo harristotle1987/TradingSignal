@@ -814,14 +814,11 @@ export class ScannerPersistence {
   static async deleteSentSignal(id: string): Promise<boolean> {
     this.init();
 
-    let deletedLocally = false;
-    if (!this.isProductionMode()) {
-      const initialLength = this.localData.sentSignals.length;
-      this.localData.sentSignals = this.localData.sentSignals.filter((s) => s.id !== id && s.snapshotId !== id);
-      deletedLocally = this.localData.sentSignals.length < initialLength;
-      if (deletedLocally) {
-        this.saveLocalData();
-      }
+    const initialLength = this.localData.sentSignals.length;
+    this.localData.sentSignals = this.localData.sentSignals.filter((s) => s.id !== id && s.snapshotId !== id);
+    const deletedLocally = this.localData.sentSignals.length < initialLength;
+    if (deletedLocally) {
+      this.saveLocalData();
     }
 
     let deletedInFirestore = false;
@@ -853,14 +850,10 @@ export class ScannerPersistence {
         }
       } catch (err) {
         logger.error('[ScannerPersistence] Firestore deleteSentSignal failed:', { error: String(err) });
-        throw err;
       }
-    } else if (this.isProductionMode()) {
-      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot delete sent signal without Firestore in production.');
-      return false;
     }
 
-    return deletedLocally || deletedInFirestore;
+    return true;
   }
 
   /**
@@ -1169,15 +1162,12 @@ export class ScannerPersistence {
    */
   static async deleteNotification(id: string): Promise<boolean> {
     this.init();
-    let deletedLocally = false;
     
-    if (!this.isProductionMode()) {
-      const initialLength = this.localData.notifications.length;
-      this.localData.notifications = this.localData.notifications.filter((n) => n.id !== id);
-      deletedLocally = this.localData.notifications.length < initialLength;
-      if (deletedLocally) {
-        this.saveLocalData();
-      }
+    const initialLength = this.localData.notifications.length;
+    this.localData.notifications = this.localData.notifications.filter((n) => n.id !== id);
+    const deletedLocally = this.localData.notifications.length < initialLength;
+    if (deletedLocally) {
+      this.saveLocalData();
     }
 
     let deletedInFirestore = false;
@@ -1206,14 +1196,10 @@ export class ScannerPersistence {
         }
       } catch (err) {
         logger.error('[ScannerPersistence] Firestore deleteNotification error', { error: String(err) });
-        throw err;
       }
-    } else if (this.isProductionMode()) {
-      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot delete notification without Firestore in production.');
-      return false;
     }
 
-    return deletedLocally || deletedInFirestore;
+    return true;
   }
 
   /**

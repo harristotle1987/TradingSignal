@@ -2899,7 +2899,7 @@ async function runAll() {
       });
 
       assert(evalResult.passed === true, 'Strategy evaluation should pass under normal/caution conditions');
-      assert(evalResult.dominantDirection !== 'NEUTRAL', 'Dominant direction must be resolved');
+      assert((evalResult.dominantDirection as string) !== 'NEUTRAL', 'Dominant direction must be resolved');
       assert(evalResult.strategyResults.length === 6, 'All 6 strategy engines must be evaluated as evidence');
     });
 
@@ -3007,12 +3007,13 @@ async function runAll() {
         stopLoss: 1.1050, // SL above entry on BUY -> invalid!
         takeProfit: 1.1200,
         score: 85,
+        riskRewardRatio: 2.0,
         marketRegime: 'TRENDING_UP',
         atr: 0.0050,
         candlesMap: {
           '1h': [{ symbol: 'EURUSD', provider: 'twelvedata', timeframe: '1h', timestamp: Date.now(), open: 1.09, high: 1.11, low: 1.08, close: 1.10, volume: 1000 }],
         },
-        liveTicker: { symbol: 'EURUSD', price: 1.1000, timestamp: Date.now(), change24h: 0, high24h: 1.11, low24h: 1.08, volume24h: 1000, source: 'twelvedata', status: 'FRESH' },
+        liveTicker: { symbol: 'EURUSD', rawSymbol: 'EURUSD', provider: 'twelvedata', assetType: 'FOREX', bid: 1.1000, ask: 1.1001, price: 1.1000, timestamp: Date.now(), receivedAt: Date.now(), source: 'LIVE' as const, isFresh: true, status: 'OK' as const },
       });
 
       assert(invalidSlRes.isTradeable === false, 'Invalid SL direction must be rejected regardless of score');
@@ -3087,10 +3088,11 @@ async function runAll() {
         tp2: 110.5,
         tp3: 112.5,
         score: gate8Eval.finalScore,
+        riskRewardRatio: 2.5,
         marketRegime: 'TRENDING_UP',
         atr: 1.5,
         candlesMap: { '1h': validCandles },
-        liveTicker: { symbol: 'SOLUSDT', price: 106.3, timestamp: now, change24h: 2.5, high24h: 107.0, low24h: 104.0, volume24h: 50000, source: 'binance', status: 'FRESH' },
+        liveTicker: { symbol: 'SOLUSDT', rawSymbol: 'SOLUSDT', provider: 'bitget', assetType: 'CRYPTO', bid: 106.3, ask: 106.4, price: 106.3, timestamp: now, receivedAt: now, source: 'LIVE' as const, isFresh: true, status: 'OK' as const },
       });
 
       assert(g7Res.allHardGatesPassed === true, 'All Gate 7 hard gates must pass');
