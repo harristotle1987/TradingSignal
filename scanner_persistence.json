@@ -1,12 +1,60 @@
 {
   "capState": {
-    "date": "2026-09-20",
-    "dailySignalCount": 0,
+    "date": "2026-09-24",
+    "dailySignalCount": 1,
     "dailySignalCap": 10,
-    "lastScanTime": 1787738409619,
-    "reservations": []
+    "lastScanTime": 1790227807209,
+    "lastCronExecution": 1790227807209,
+    "lastAutomatedScan": 1790227807209,
+    "lastScanCompletedAt": 1790227825676,
+    "lastScanDuration": 18467,
+    "lastCandidatesEvaluated": 10,
+    "lastSignalsFound": 1,
+    "lastAcceptedSignals": 0,
+    "lastCronTriggerTime": 1790227807209,
+    "reservations": [
+      {
+        "id": "res_1790255141073_kmrzq",
+        "status": "RESERVED",
+        "timestamp": 1790255141345
+      }
+    ]
   },
-  "sentSignals": [],
+  "sentSignals": [
+    {
+      "id": "sig_1790255138969_1hvdf",
+      "snapshotId": "snap_1790255140963_BTCUSDT_52h2t",
+      "symbol": "BTCUSDT",
+      "direction": "BUY",
+      "entryPrice": 83747.94,
+      "stopLoss": 82945.85,
+      "takeProfit": 85264.27,
+      "tp1": 84166.68,
+      "tp2": 84650.52,
+      "tp3": 85264.27,
+      "tp1Rr": 0.52,
+      "tp2Rr": 1.13,
+      "tp3Rr": 1.89,
+      "riskRewardRatio": 1.89,
+      "targetQualityScore": 72,
+      "score": 70,
+      "rankTier": "BEST_TRADE",
+      "strategy": "Intraday Breakout (H1/H4 + volume)",
+      "timeframe": "Multi-TF Realism Setup",
+      "dataSource": "Bitget Live Feed with Live Price & Sentiment Cross-Validation",
+      "status": "WAITING_ENTRY",
+      "timestamp": 1790255138969,
+      "expiresAt": 1790269538969,
+      "notificationSent": true,
+      "notificationTimestamp": 1790255141589,
+      "date": "2026-09-24",
+      "estimatedWinRate": 61,
+      "aiAssessment": "NVIDIA AI Rank #1 [RECOMMENDED]: Algorithmic score 70/100 with 1.89:1 R:R (Intraday Breakout (H1/H4 + volume)).",
+      "marketRegime": "UNKNOWN",
+      "isTradeableSignal": true,
+      "signalClassification": "TRADEABLE"
+    }
+  ],
   "rejectedCandidates": [
     {
       "id": "rej_1787224048739_vv27f",

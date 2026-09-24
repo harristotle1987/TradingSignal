@@ -109,6 +109,7 @@ export interface ScoringResult {
     ltfMacdHistogram: number;
     atr: number;
   };
+  volatilityCondition?: 'NORMAL' | 'CAUTION' | 'UNSAFE';
 }
 
 interface AssetExecutionProfile {
@@ -214,6 +215,7 @@ export class ScoringEngine {
       rej.strategyAgreementRatio = strategyEval.agreementRatio;
       rej.agreeingStrategiesCount = strategyEval.agreeingStrategiesCount;
       rej.totalStrategiesCount = strategyEval.totalStrategiesCount || 6;
+      rej.volatilityCondition = strategyEval.volatilityCondition;
       return rej;
     }
 
@@ -521,23 +523,29 @@ export class ScoringEngine {
 
     // =========================================================================
     // 6. Volatility / ATR Score (Max 10 Points)
-    // Executable bounds, non-dead, non-erratic volatility expansion
+    // Three-tier volatility classification: NORMAL, CAUTION, UNSAFE
     // =========================================================================
     let volatilityAtrScore = 0;
     const vm1h = TechnicalIndicators.calculateVolatilityMetrics(s1h, 14);
 
-    if (vm1h.isDeadMarket || vm1h.isErratic || vm1h.atrRatio < 0.45 || vm1h.atrRatio > 2.8) {
+    // Hard safety block ONLY for extreme flash volatility spikes or completely uncomputable ATR
+    const isUnsafeExtreme = vm1h.atrRatio > 3.2 || (vm1h.isErratic && vm1h.atrRatio > 2.8) || vm1h.currentAtr <= 0;
+    if (isUnsafeExtreme) {
       return this.createRejection(
-        `REJECTED: INSUFFICIENT_ATR. Volatility filter rejected: ATR ratio (${vm1h.atrRatio}x) outside executable safety bounds`,
+        `REJECTED: EXTREME_VOLATILITY. Volatility filter rejected: ATR ratio (${vm1h.atrRatio.toFixed(2)}x) indicates extreme unsafe flash volatility`,
         marketRegime,
         regimeDetails
       );
     }
 
-    if (vm1h.isValidExpansion || (vm1h.atrRatio >= 1.05 && vm1h.atrRatio <= 2.5)) {
+    // Normal vs Caution soft score assignment (modest score/ranking penalty, no hard veto)
+    const isCaution = vm1h.isDeadMarket || vm1h.isSqueeze || vm1h.atrRatio < 0.55 || vm1h.atrRatio > 2.2;
+    if (vm1h.isValidExpansion || (vm1h.atrRatio >= 1.05 && vm1h.atrRatio <= 2.2)) {
       volatilityAtrScore = 10;
-    } else if (vm1h.isHealthyVolatility) {
+    } else if (vm1h.isHealthyVolatility && !isCaution) {
       volatilityAtrScore = 8;
+    } else if (isCaution) {
+      volatilityAtrScore = 5; // Caution: modest penalty, continues!
     } else {
       volatilityAtrScore = 6;
     }
@@ -710,7 +718,7 @@ export class ScoringEngine {
     const isBuyDirection = direction === 'BUY';
 
     const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, thresholds.minimumRR);
-    if (!rrResult.isValid) {
+    if (!rrResult.isValid && rrResult.rejectionReason !== 'GROSS_RR_BELOW_THRESHOLD') {
       logRrRejectionDiagnostic({
         symbol: cleanSymbol,
         direction,
@@ -745,47 +753,18 @@ export class ScoringEngine {
         tpSetup.diagnostics
       );
     }
-    const rawRR = rrResult.grossRR;
-    takeProfit = rrResult.selectedTarget === 'TP3' ? tp3 : tp2;
-    const calculatedRisk = rrResult.riskDistance;
-    const calculatedReward = rrResult.rewardDistance;
+    const rawRR = rrResult.isValid
+      ? rrResult.grossRR
+      : Math.max(rrResult.tp2GrossRR, rrResult.tp3GrossRR);
+    takeProfit = (rrResult.selectedTarget === 'TP3' || (rrResult.tp3GrossRR >= thresholds.minimumRR && rrResult.tp2GrossRR < thresholds.minimumRR))
+      ? tp3
+      : tp2;
+    const calculatedRisk = rrResult.riskDistance > 0 ? rrResult.riskDistance : Math.abs(entryPrice - stopLoss);
+    const calculatedReward = Math.abs(takeProfit - entryPrice);
 
-    // GATE 45 Step 1 & 2: Calculate Gross R:R & Reject if gross R:R < minimum acceptable GROSS R:R
-    if (rawRR < thresholds.minimumRR) {
-      logRrRejectionDiagnostic({
-        symbol: cleanSymbol,
-        direction,
-        entryPrice,
-        stopLoss,
-        tp1,
-        tp2,
-        tp3,
-        structural15m: isBuyDirection ? resistance15m : support15m,
-        structural1h: isBuyDirection ? majorResistance1h : majorSupport1h,
-        assetClass: profile.assetClass,
-        rejectionReason: `GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${thresholds.minimumRR}:1)`,
-      });
-      return this.createRejection(
-        `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${thresholds.minimumRR}:1)`,
-        marketRegime,
-        regimeDetails,
-        totalScore,
-        direction,
-        stopLoss,
-        takeProfit,
-        tp1,
-        tp2,
-        tp3,
-        rawRR,
-        entryPrice,
-        rrResult.primaryRR,
-        rrResult.tp1RR,
-        rrResult.tp2RR,
-        rrResult.tp3RR,
-        factors,
-        tpSetup.diagnostics
-      );
-    }
+    // GATE 45 Step 1 & 2: Calculate Gross R:R & Target R:Rs for factor scoring without independent hard rejection
+    // Consolidated authoritative final R:R validation (FINAL_RR >= 1.8) occurs after final Entry, SL and TP are finalized.
+    factors.riskRewardScore = rawRR >= 2.5 ? 10 : (rawRR >= 1.8 ? 8 : (rawRR >= 1.2 ? 5 : 2));
 
     // Gate 91: 4 High-Quality Optimized Pathways
     const hasStrongTrend = higherTfTrendScore >= 12;
@@ -861,56 +840,15 @@ export class ScoringEngine {
       tp3
     );
 
-    // GATE 45 Step 4: Reject if normal net R:R < minimumNetRR
-    if (stressTest.normal.netRR < thresholds.minimumNetRR) {
-      return this.createRejection(
-        `REJECTED: NET_RR_BELOW_THRESHOLD. Normal Net Risk/Reward ratio (${stressTest.normal.netRR.toFixed(2)}:1) is below minimum acceptable NET R:R (${thresholds.minimumNetRR}:1) (Gross R:R: ${rawRR.toFixed(2)}:1)`,
-        marketRegime,
-        regimeDetails,
-        totalScore,
-        direction,
-        stopLoss,
-        takeProfit,
-        tp1,
-        tp2,
-        tp3,
-        rawRR,
-        entryPrice,
-        rrResult.primaryRR,
-        rrResult.tp1RR,
-        rrResult.tp2RR,
-        rrResult.tp3RR,
-        factors,
-        tpSetup.diagnostics
-      );
-    }
-
-    // GATE 45 Step 5 & 6: Adverse Net R:R as risk-quality modifier unless hard gate enabled
-    if (thresholds.enforceAdverseNetRRHardGate && stressTest.adverse.netRR < (thresholds.minimumAdverseNetRR ?? 1.0)) {
-      return this.createRejection(
-        `REJECTED: ADVERSE_NET_RR_BELOW_THRESHOLD. Adverse Net Risk/Reward ratio (${stressTest.adverse.netRR.toFixed(2)}:1) is below required stress floor (${(thresholds.minimumAdverseNetRR ?? 1.0)}:1)`,
-        marketRegime,
-        regimeDetails,
-        totalScore,
-        direction,
-        stopLoss,
-        takeProfit,
-        tp1,
-        tp2,
-        tp3,
-        rawRR,
-        entryPrice,
-        rrResult.primaryRR,
-        rrResult.tp1RR,
-        rrResult.tp2RR,
-        rrResult.tp3RR,
-        factors,
-        tpSetup.diagnostics
-      );
-    }
-
-    // Safety buffer / execution cost checks from Gate 34
-    if (!stressTest.isPassed && stressTest.rejectionReason && stressTest.rejectionReason !== 'ADVERSE_NET_RR_BELOW_THRESHOLD') {
+    // GATE 45: Net R:R and adverse Net R:R are calculated for ranking, confidence and telemetry without independent hard veto.
+    // Hard blocks occur ONLY when execution cost is genuinely unsafe (INSUFFICIENT_SAFETY_BUFFER or EXECUTION_COST_TOO_HIGH).
+    if (
+      !stressTest.isPassed &&
+      stressTest.rejectionReason &&
+      stressTest.rejectionReason !== 'ADVERSE_NET_RR_BELOW_THRESHOLD' &&
+      stressTest.rejectionReason !== 'NET_RR_BELOW_THRESHOLD' &&
+      stressTest.rejectionReason !== 'GROSS_RR_BELOW_THRESHOLD'
+    ) {
       return this.createRejection(
         stressTest.reasons[0] || `REJECTED: ${stressTest.rejectionReason}. Execution friction stress test failed.`,
         marketRegime,
@@ -1005,6 +943,7 @@ export class ScoringEngine {
         ltfMacdHistogram: macd_15m.histogram,
         atr: atr_15m,
       },
+      volatilityCondition: strategyEval.volatilityCondition || 'NORMAL',
     };
   }
 

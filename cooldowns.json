@@ -5,5 +5,12 @@
     "strategyCooldowns": {
       "breakout": 1787487148526
     }
+  },
+  {
+    "symbol": "BTCUSDT",
+    "lastAssetSignalMs": 1790255138969,
+    "strategyCooldowns": {
+      "intraday breakout (h1/h4 + volume)": 1790255138969
+    }
   }
 ]

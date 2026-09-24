@@ -74,31 +74,15 @@ export class TradeRankingEngine {
       assetClass: params.assetClass,
     });
 
-    if (!adaptiveRes.isExecutable) {
-      return {
-        isExecutable: false,
-        finalRequiredScore: 999,
-        regimeAdaptiveThreshold: 999,
-        signalThreshold: globalSignalFloor,
-        actualScore: params.actualScore,
-        passed: false,
-        marginAboveFinalThreshold: params.actualScore - 999,
-        rejectionReason: `REJECTED: REGIME_UNTRADEABLE. Market regime '${params.regime || 'UNKNOWN'}' is classified as UNKNOWN / NO SIGNAL under Gate 27 policy.`,
-      };
-    }
-
     const regimeAdaptiveThreshold = adaptiveRes.resolvedThreshold;
-    const finalRequiredScore = Math.max(globalSignalFloor, regimeAdaptiveThreshold);
+    // Under Gate 2: Market regime does not raise the executable score threshold above 65.
+    const finalRequiredScore = globalSignalFloor;
     const passed = params.actualScore >= finalRequiredScore;
     const marginAboveFinalThreshold = Math.round((params.actualScore - finalRequiredScore) * 10) / 10;
 
     let rejectionReason: string | undefined;
     if (!passed) {
-      if (params.actualScore < globalSignalFloor && globalSignalFloor >= regimeAdaptiveThreshold) {
-        rejectionReason = `REJECTED: SCORE_BELOW_GLOBAL_THRESHOLD. Quality score (${params.actualScore}/100) below global signal floor (${globalSignalFloor}) (regime adaptive threshold: ${regimeAdaptiveThreshold}).`;
-      } else {
-        rejectionReason = `REJECTED: SCORE_BELOW_REGIME_THRESHOLD. Quality score (${params.actualScore}/100) below final required score (${finalRequiredScore}) for regime '${adaptiveRes.normalizedRegime}' & strategy '${params.strategy}' (margin: ${marginAboveFinalThreshold >= 0 ? '+' : ''}${marginAboveFinalThreshold}).`;
-      }
+      rejectionReason = `REJECTED: SCORE_BELOW_GLOBAL_THRESHOLD. Quality score (${params.actualScore}/100) below global signal floor (${globalSignalFloor}).`;
     }
 
     return {
@@ -357,6 +341,29 @@ export class TradeRankingEngine {
     const spreadPoints = scoring.estimatedFriction?.spreadPipsOrPoints;
     if (typeof spreadPoints === 'number' && spreadPoints > 3.0) {
       modifier -= 1;
+    }
+
+    // 13. Regime Classification Modifier (Gate 2: Affects Confidence/Ranking Only)
+    // NORMAL/STRONG TREND → normal (0)
+    // BREAKOUT → normal (0)
+    // RANGE/REVERSAL → normal (0)
+    // HIGH_VOLATILITY → modest penalty (-2.0)
+    // TRANSITION → modest uncertainty penalty (-1.5)
+    // UNKNOWN → uncertainty penalty only (-2.0)
+    const rawRegime = signal.marketRegime || (candidate.scoring as any)?.marketRegime || (candidate.scoring as any)?.regime;
+    const normalizedRegime = Gate27RegimeThresholds.normalizeRegime(rawRegime);
+    if (normalizedRegime === 'HIGH_VOLATILITY') {
+      modifier -= 2.0;
+    } else if (normalizedRegime === 'TRANSITION') {
+      modifier -= 1.5;
+    } else if (normalizedRegime === 'UNKNOWN') {
+      modifier -= 2.0;
+    }
+
+    // 14. Volatility Protection Modifier (Gate 4: Normal = 0, Caution = -2.0)
+    const volCondition = (candidate.scoring as any)?.volatilityCondition || (signal as any)?.volatilityCondition;
+    if (volCondition === 'CAUTION') {
+      modifier -= 2.0;
     }
 
     // Composite ranking score

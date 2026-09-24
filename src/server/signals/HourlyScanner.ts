@@ -588,29 +588,6 @@ export class HourlyScannerService {
         // Condition 2: Track win rate for telemetry / analytics without independent hard veto (Gate 6)
         sig.modelEstimatedWinRate = winRate;
 
-
-        // GATE 45 Condition 3: Minimum acceptable GROSS Risk/Reward ratio
-        if (grossRR < thresholds.minimumRR) {
-          const reason = `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${grossRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${thresholds.minimumRR}:1).`;
-          rejectedDuringScan.push({
-            symbol: sig.symbol,
-            direction: sig.direction,
-            score,
-            reason,
-          });
-          Gate35SignalFunnelAnalytics.recordCandidate({
-            symbol: sig.symbol,
-            direction: sig.direction,
-            stage: 'GATE_9',
-            score,
-            strategy: sig.strategy,
-            rejectionReason: reason,
-            ...sigTelemetry,
-            rejectionStage: 'GATE_9',
-          });
-          continue;
-        }
-
         // Condition 4: Valid live provider price & status (Gate 46: actionable emitted signal state)
         if (!isActionableSignal(sig) || sig.validationReason === 'MARKET_DATA_UNAVAILABLE' || sig.validationReason === 'STALE_DATA') {
           const reason = `REJECTED: DATA_STALE. Signal state is not actionable (${sig.status}, ${sig.validationReason || 'Provider unverified'}). Stale or synthetic data rejected.`;
@@ -655,50 +632,7 @@ export class HourlyScannerService {
           continue;
         }
 
-        // GATE 45 Condition 6: Minimum acceptable NET Risk/Reward ratio after spread/slippage friction
-        if (netRR !== undefined && netRR < thresholds.minimumNetRR) {
-          const reason = `REJECTED: NET_RR_BELOW_THRESHOLD. Normal Net R:R after spread/slippage friction (${netRR.toFixed(2)}:1) is below minimum acceptable NET R:R (${thresholds.minimumNetRR}:1) (Gross R:R: ${grossRR.toFixed(2)}:1).`;
-          rejectedDuringScan.push({
-            symbol: sig.symbol,
-            direction: sig.direction,
-            score,
-            reason,
-          });
-          Gate35SignalFunnelAnalytics.recordCandidate({
-            symbol: sig.symbol,
-            direction: sig.direction,
-            stage: 'GATE_9',
-            score,
-            strategy: sig.strategy,
-            rejectionReason: reason,
-            ...sigTelemetry,
-            rejectionStage: 'GATE_9',
-          });
-          continue;
-        }
-
-        // GATE 45 Optional Adverse Net R:R Hard Gate
-        if (thresholds.enforceAdverseNetRRHardGate && adverseNetRR !== undefined && adverseNetRR < (thresholds.minimumAdverseNetRR ?? 1.0)) {
-          const reason = `REJECTED: ADVERSE_NET_RR_BELOW_THRESHOLD. Adverse Net R:R (${adverseNetRR.toFixed(2)}:1) is below required stress floor (${(thresholds.minimumAdverseNetRR ?? 1.0)}:1).`;
-          rejectedDuringScan.push({
-            symbol: sig.symbol,
-            direction: sig.direction,
-            score,
-            reason,
-          });
-          Gate35SignalFunnelAnalytics.recordCandidate({
-            symbol: sig.symbol,
-            direction: sig.direction,
-            stage: 'GATE_9',
-            score,
-            strategy: sig.strategy,
-            rejectionReason: reason,
-            ...sigTelemetry,
-            rejectionStage: 'GATE_9',
-          });
-          continue;
-        }
-
+        // Condition 5: Net R:R and adverse Net R:R are preserved on signal for ranking modifiers and telemetry without independent hard rejection
         qualifiedByQuality.push(sig);
       }
 

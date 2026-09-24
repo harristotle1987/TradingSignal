@@ -24,8 +24,9 @@
 
 import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 import { logger } from '../logger.js';
+import { serverConfig } from '../config.js';
 
-export type NewsClassification = 'NORMAL' | 'CAUTION' | 'BLOCK';
+export type NewsClassification = 'NORMAL' | 'CAUTION' | 'BLOCK' | 'UNAVAILABLE';
 
 export type NewsCategory =
   | 'MACRO_US'
@@ -459,35 +460,22 @@ export class Gate31NewsRiskClassification {
     const apiKeyFinnhub = process.env.FINNHUB_API_KEY;
     const hasAnyApiKey = Boolean((apiKeyTwelve && apiKeyTwelve.trim()) || (apiKeyFinnhub && apiKeyFinnhub.trim()));
 
-    // Fail-closed fallback when news data is genuinely unavailable or unconfigured and no fresh cache is present
+    // Non-blocking fallback when news data is genuinely unavailable or unconfigured and no fresh cache is present
     if ((!hasAnyApiKey || !this.lastFetchSuccessful) && isCacheExpired) {
-      const failClosedEvent: ScheduledNewsEvent = {
-        id: 'news_data_unavailable_fail_closed',
-        title: 'NEWS_DATA_UNAVAILABLE: Verified news/calendar source is unavailable or unconfigured (Fail-Closed Enforced)',
-        category: 'GENERAL_ECONOMIC',
-        impact: 'HIGH',
-        scheduledTimeMs: nowMs,
-        blackoutBeforeMinutes: 1440,
-        blackoutAfterMinutes: 1440,
-        provenance: 'fail_closed_fallback',
-      };
-      // NEWS_DATA_UNAVAILABLE is now treated as elevated uncertainty
-      // (CAUTION), not an automatic reject. It still meaningfully raises
-      // the confirmation bar required to trade (higher than a normal
-      // CAUTION event) so candidates need materially stronger confluence,
-      // but a single missing news feed can no longer by itself block an
-      // otherwise-valid signal.
+      // NEWS DATA UNAVAILABLE → uncertainty penalty only, non-blocking.
+      // Do not fabricate fake high-impact news events or treat missing news as dangerous news.
+      const standardThreshold = serverConfig.getConfig().thresholds.signalThreshold;
       return {
         symbol: cleanSymbol,
-        classification: 'CAUTION',
+        classification: 'UNAVAILABLE',
         isTradingAllowed: true,
-        requiredConfirmationScoreMultiplier: 1.5,
-        minRequiredConfirmationScore: 85,
-        activeEvents: [failClosedEvent],
+        requiredConfirmationScoreMultiplier: 1.0,
+        minRequiredConfirmationScore: standardThreshold,
+        activeEvents: [],
         recentArticles: this.getVerifiedArticles(cleanSymbol),
-        relevantEventsCount: 1,
-        reasons: ['CAUTION: NEWS_DATA_UNAVAILABLE. Verified news/calendar source is unavailable or returned error and no valid cache exists — treated as elevated uncertainty, requiring stronger confirmation.'],
-        explanation: `Gate 31 News Risk for ${cleanSymbol}: State=CAUTION, TradingAllowed=true, MinRequiredScore=85. Uncertainty penalty (not automatic block) applied due to NEWS_DATA_UNAVAILABLE.`,
+        relevantEventsCount: 0,
+        reasons: ['NEWS_DATA_UNAVAILABLE: Verified news/calendar source is unavailable or returned error and no valid cache exists — treated as uncertainty penalty only (non-blocking).'],
+        explanation: `Gate 31 News Risk for ${cleanSymbol}: State=UNAVAILABLE, TradingAllowed=true, MinRequiredScore=${standardThreshold}. Uncertainty penalty only (non-blocking).`,
         neverFabricateSignalEnforced: true,
       };
     }
@@ -512,7 +500,7 @@ export class Gate31NewsRiskClassification {
       const cautionBefore = event.cautionBeforeMinutes ?? (event.impact === 'HIGH' ? 90 : 45);
       const cautionAfter = event.cautionAfterMinutes ?? (event.impact === 'HIGH' ? 60 : 30);
 
-      // Check for BLOCK window
+      // Check for BLOCK window: MAJOR ACTIVE HIGH-IMPACT EVENT → HARD BLOCK
       if (diffMinutes >= -blackoutAfter && diffMinutes <= blackoutBefore) {
         activeEvents.push(event);
         highestClassification = 'BLOCK';
@@ -520,23 +508,23 @@ export class Gate31NewsRiskClassification {
           `BLOCK: Active major scheduled event '${event.title}' in ${diffMinutes.toFixed(1)}m (Blackout window: -${blackoutAfter}m to +${blackoutBefore}m).`
         );
       }
-      // Check for CAUTION window (if not already BLOCK)
+      // Check for CAUTION window (if not already BLOCK): NEWS CAUTION → modest penalty
       else if (diffMinutes >= -cautionAfter && diffMinutes <= cautionBefore) {
         activeEvents.push(event);
         if (highestClassification !== 'BLOCK') {
           highestClassification = 'CAUTION';
         }
         reasons.push(
-          `CAUTION: Approaching scheduled event '${event.title}' in ${diffMinutes.toFixed(1)}m. Elevated volatility requires stronger confirmation score.`
+          `CAUTION: Approaching scheduled event '${event.title}' in ${diffMinutes.toFixed(1)}m. Modest volatility caution penalty applied.`
         );
       }
     }
 
     const isTradingAllowed = highestClassification !== 'BLOCK';
-    const requiredConfirmationScoreMultiplier =
-      highestClassification === 'BLOCK' ? Infinity : highestClassification === 'CAUTION' ? 1.35 : 1.0;
+    // No artificial 80+ or 85+ score inflation for caution/unavailable; standard threshold applies
+    const requiredConfirmationScoreMultiplier = 1.0;
     const minRequiredConfirmationScore =
-      highestClassification === 'BLOCK' ? 1000 : highestClassification === 'CAUTION' ? 80 : 60;
+      highestClassification === 'BLOCK' ? 1000 : serverConfig.getConfig().thresholds.signalThreshold;
 
     if (highestClassification === 'NORMAL') {
       reasons.push('NORMAL: No active or approaching asset-relevant scheduled news risk detected. Standard confirmation policy applies.');

@@ -226,23 +226,52 @@ export class Gate6ProgressiveMTF {
     let trendScore = 50;
     if (isBuy) {
       if (tf1hDirection === 'BULLISH' && tf15mDirection === 'BULLISH') trendScore = 100;
-      else if (tf1hDirection === 'BULLISH' && tf15mDirection === 'NEUTRAL') trendScore = 75;
-      else if (tf1hDirection === 'NEUTRAL' && tf15mDirection === 'BULLISH') trendScore = 70;
-      else if (tf15mDirection === 'BEARISH' || tf1hDirection === 'BEARISH') {
-        trendScore = 20;
-        disagreements.push(`Trend conflict: 1h is ${tf1hDirection}, 15m is ${tf15mDirection} (opposing BUY).`);
+      else if (tf1hDirection === 'BULLISH' && tf15mDirection === 'NEUTRAL') trendScore = 80;
+      else if (tf1hDirection === 'NEUTRAL' && tf15mDirection === 'BULLISH') trendScore = 75;
+      else if (tf1hDirection === 'BULLISH' && tf15mDirection === 'BEARISH') {
+        // One MTF disagreement (15m pullback against 1h bullish trend): soft penalty, continue!
+        trendScore = 60;
+        disagreements.push('15m pullback against 1h bullish trend (one MTF disagreement, soft penalty applied).');
+      } else if (tf1hDirection === 'NEUTRAL' && tf15mDirection === 'NEUTRAL') {
+        trendScore = 55;
+      } else if (tf1hDirection === 'NEUTRAL' && tf15mDirection === 'BEARISH') {
+        trendScore = 50;
+        disagreements.push('15m bearish trend with neutral 1h (soft penalty applied).');
+      } else if (tf1hDirection === 'BEARISH' && tf15mDirection === 'BULLISH') {
+        // One MTF disagreement (15m bullish bounce against 1h bear trend): soft penalty, continue!
+        trendScore = 45;
+        disagreements.push('1h bearish trend with 15m bullish bounce (one MTF disagreement, soft penalty applied).');
+      } else {
+        // Severe HTF trend contradiction: both 1h and 15m trends oppose BUY
+        trendScore = 15;
+        disagreements.push('Severe HTF trend contradiction: both 1h and 15m trends oppose BUY.');
       }
     } else {
       if (tf1hDirection === 'BEARISH' && tf15mDirection === 'BEARISH') trendScore = 100;
-      else if (tf1hDirection === 'BEARISH' && tf15mDirection === 'NEUTRAL') trendScore = 75;
-      else if (tf1hDirection === 'NEUTRAL' && tf15mDirection === 'BEARISH') trendScore = 70;
-      else if (tf15mDirection === 'BULLISH' || tf1hDirection === 'BULLISH') {
-        trendScore = 20;
-        disagreements.push(`Trend conflict: 1h is ${tf1hDirection}, 15m is ${tf15mDirection} (opposing SELL).`);
+      else if (tf1hDirection === 'BEARISH' && tf15mDirection === 'NEUTRAL') trendScore = 80;
+      else if (tf1hDirection === 'NEUTRAL' && tf15mDirection === 'BEARISH') trendScore = 75;
+      else if (tf1hDirection === 'BEARISH' && tf15mDirection === 'BULLISH') {
+        // One MTF disagreement (15m pullback against 1h bearish trend): soft penalty, continue!
+        trendScore = 60;
+        disagreements.push('15m pullback against 1h bearish trend (one MTF disagreement, soft penalty applied).');
+      } else if (tf1hDirection === 'NEUTRAL' && tf15mDirection === 'NEUTRAL') {
+        trendScore = 55;
+      } else if (tf1hDirection === 'NEUTRAL' && tf15mDirection === 'BULLISH') {
+        trendScore = 50;
+        disagreements.push('15m bullish trend with neutral 1h (soft penalty applied).');
+      } else if (tf1hDirection === 'BULLISH' && tf15mDirection === 'BEARISH') {
+        // One MTF disagreement: soft penalty, continue!
+        trendScore = 45;
+        disagreements.push('1h bullish trend with 15m bearish pullback (one MTF disagreement, soft penalty applied).');
+      } else {
+        // Severe HTF trend contradiction: both 1h and 15m trends oppose SELL
+        trendScore = 15;
+        disagreements.push('Severe HTF trend contradiction: both 1h and 15m trends oppose SELL.');
       }
     }
 
     // --- B. EMA Structure (Price vs EMA21 / EMA50) ---
+    // EMA disagreement: soft penalty, continues!
     let emaStructureScore = 50;
     const price1hAboveEma21 = last1h.close >= valE21_1h;
     const price15mAboveEma21 = last15m.close >= valE21_15m;
@@ -250,22 +279,27 @@ export class Gate6ProgressiveMTF {
     if (isBuy) {
       if (price1hAboveEma21 && price15mAboveEma21) emaStructureScore = 95;
       else if (price1hAboveEma21 && !price15mAboveEma21) {
-        emaStructureScore = 60; // Potential pullback setup
-      } else if (!price1hAboveEma21 && !price15mAboveEma21) {
-        emaStructureScore = 25;
-        disagreements.push('EMA Structure: Price is below EMA21 on both 1h and 15m.');
+        emaStructureScore = 70; // Normal pullback setup into dynamic EMA
+      } else if (!price1hAboveEma21 && price15mAboveEma21) {
+        emaStructureScore = 60; // LTF recovery above EMA21
+      } else {
+        emaStructureScore = 40; // Price below EMA21 on both: soft penalty, continue
+        disagreements.push('EMA Structure: Price is below EMA21 on 1h and 15m (soft penalty applied).');
       }
     } else {
       if (!price1hAboveEma21 && !price15mAboveEma21) emaStructureScore = 95;
       else if (!price1hAboveEma21 && price15mAboveEma21) {
-        emaStructureScore = 60; // Potential pullback rally
-      } else if (price1hAboveEma21 && price15mAboveEma21) {
-        emaStructureScore = 25;
-        disagreements.push('EMA Structure: Price is above EMA21 on both 1h and 15m.');
+        emaStructureScore = 70; // Normal pullback rally into dynamic EMA
+      } else if (price1hAboveEma21 && !price15mAboveEma21) {
+        emaStructureScore = 60; // LTF rejection below EMA21
+      } else {
+        emaStructureScore = 40; // Price above EMA21 on both: soft penalty, continue
+        disagreements.push('EMA Structure: Price is above EMA21 on 1h and 15m (soft penalty applied).');
       }
     }
 
     // --- C. Momentum (ROC / Rate of Change over 10 bars) ---
+    // Momentum disagreement / weak momentum: soft penalty, continues!
     const lookback = 10;
     const prev1h = sorted1h[Math.max(0, sorted1h.length - 1 - lookback)];
     const prev15m = sorted15m[Math.max(0, sorted15m.length - 1 - lookback)];
@@ -277,56 +311,64 @@ export class Gate6ProgressiveMTF {
     if (isBuy) {
       if (roc1h > 0 && roc15m > 0) momScore = 90;
       else if (roc1h > 0 && roc15m >= -0.2) momScore = 70;
-      else if (roc1h < -0.5 && roc15m < -0.5) {
-        momScore = 20;
-        disagreements.push(`Momentum conflict: Negative velocity on both 1h (${roc1h.toFixed(2)}%) and 15m (${roc15m.toFixed(2)}%).`);
+      else if (roc1h > 0 && roc15m < -0.2) {
+        momScore = 55; // Minor LTF deceleration: soft penalty, continue
+        disagreements.push(`Momentum: Minor LTF velocity deceleration (15m ROC ${roc15m.toFixed(2)}%, soft penalty applied).`);
+      } else {
+        momScore = 40; // Weak momentum: soft penalty, continue
+        disagreements.push(`Momentum: Weak velocity on 1h (${roc1h.toFixed(2)}%) and 15m (${roc15m.toFixed(2)}%) (soft penalty applied).`);
       }
     } else {
       if (roc1h < 0 && roc15m < 0) momScore = 90;
       else if (roc1h < 0 && roc15m <= 0.2) momScore = 70;
-      else if (roc1h > 0.5 && roc15m > 0.5) {
-        momScore = 20;
-        disagreements.push(`Momentum conflict: Positive velocity on both 1h (${roc1h.toFixed(2)}%) and 15m (${roc15m.toFixed(2)}%).`);
+      else if (roc1h < 0 && roc15m > 0.2) {
+        momScore = 55; // Minor LTF deceleration: soft penalty, continue
+        disagreements.push(`Momentum: Minor LTF velocity deceleration (15m ROC ${roc15m.toFixed(2)}%, soft penalty applied).`);
+      } else {
+        momScore = 40; // Weak momentum: soft penalty, continue
+        disagreements.push(`Momentum: Weak velocity on 1h (${roc1h.toFixed(2)}%) and 15m (${roc15m.toFixed(2)}%) (soft penalty applied).`);
       }
     }
 
     // --- D. RSI ---
+    // Neutral RSI: healthy baseline score; mild overextension: soft penalty, continues!
     const rsi1hSeries = TechnicalIndicators.calculateRSI(sorted1h, 14);
     const rsi15mSeries = TechnicalIndicators.calculateRSI(sorted15m, 14);
     const rsi1h = rsi1hSeries[rsi1hSeries.length - 1] ?? 50;
     const rsi15m = rsi15mSeries[rsi15mSeries.length - 1] ?? 50;
 
-    let rsiScore = 50;
+    let rsiScore = 65;
     let rsiHealthy = true;
     if (isBuy) {
       if (rsi1h >= 45 && rsi1h <= 72 && rsi15m >= 40 && rsi15m <= 75) {
         rsiScore = 90;
       } else if (rsi1h < 35 && rsi15m < 30) {
-        rsiScore = 25;
-        rsiHealthy = false;
-        disagreements.push(`RSI severely oversold/collapsing: 1h RSI=${rsi1h.toFixed(1)}, 15m RSI=${rsi15m.toFixed(1)}.`);
+        rsiScore = 40; // Oversold: soft penalty, continue
+        disagreements.push(`RSI oversold: 1h RSI=${rsi1h.toFixed(1)}, 15m RSI=${rsi15m.toFixed(1)} (soft penalty applied).`);
       } else if (rsi15m > 80) {
-        rsiScore = 35;
-        disagreements.push(`RSI 15m is overextended/topping: RSI=${rsi15m.toFixed(1)}.`);
+        rsiScore = 45; // Overextended: soft penalty, continue
+        disagreements.push(`RSI 15m overextended: RSI=${rsi15m.toFixed(1)} (soft penalty applied).`);
       } else {
-        rsiScore = 65;
+        // Neutral RSI (e.g. 40-55): healthy continuation score
+        rsiScore = 70;
       }
     } else {
       if (rsi1h <= 55 && rsi1h >= 28 && rsi15m <= 60 && rsi15m >= 25) {
         rsiScore = 90;
       } else if (rsi1h > 65 && rsi15m > 70) {
-        rsiScore = 25;
-        rsiHealthy = false;
-        disagreements.push(`RSI severely overbought/surging: 1h RSI=${rsi1h.toFixed(1)}, 15m RSI=${rsi15m.toFixed(1)}.`);
+        rsiScore = 40; // Overbought: soft penalty, continue
+        disagreements.push(`RSI overbought: 1h RSI=${rsi1h.toFixed(1)}, 15m RSI=${rsi15m.toFixed(1)} (soft penalty applied).`);
       } else if (rsi15m < 20) {
-        rsiScore = 35;
-        disagreements.push(`RSI 15m is overextended/bottoming: RSI=${rsi15m.toFixed(1)}.`);
+        rsiScore = 45; // Overextended: soft penalty, continue
+        disagreements.push(`RSI 15m overextended: RSI=${rsi15m.toFixed(1)} (soft penalty applied).`);
       } else {
-        rsiScore = 65;
+        // Neutral RSI: healthy continuation score
+        rsiScore = 70;
       }
     }
 
     // --- E. MACD ---
+    // MACD disagreement: soft penalty, continues!
     const macd1h = TechnicalIndicators.calculateMACD(sorted1h);
     const macd15m = TechnicalIndicators.calculateMACD(sorted15m);
     let macdScore = 50;
@@ -338,27 +380,38 @@ export class Gate6ProgressiveMTF {
 
       if (isBuy) {
         if (macd1hBullish && macd15mBullish) macdScore = 95;
-        else if (macd1hBullish && !macd15mBullish) macdScore = 60;
-        else if (!macd1hBullish && !macd15mBullish) {
-          macdScore = 20;
+        else if (macd1hBullish && !macd15mBullish) {
+          macdScore = 65; // MACD disagreement (15m lag during pullback): soft penalty, continue
+          disagreements.push('MACD: 15m histogram negative during pullback (MACD disagreement, soft penalty applied).');
+        } else if (!macd1hBullish && macd15mBullish) {
+          macdScore = 60; // LTF momentum emerging
+          disagreements.push('MACD: 1h flat/lagging while 15m positive (soft penalty applied).');
+        } else {
+          macdScore = 40; // Both negative: soft penalty, continue
           macdAligned = false;
-          disagreements.push('MACD: Both 1h and 15m MACD histograms are negative, contradicting BUY.');
+          disagreements.push('MACD: Both 1h and 15m histograms negative (soft penalty applied).');
         }
       } else {
         if (!macd1hBullish && !macd15mBullish) macdScore = 95;
-        else if (!macd1hBullish && macd15mBullish) macdScore = 60;
-        else if (macd1hBullish && macd15mBullish) {
-          macdScore = 20;
+        else if (!macd1hBullish && macd15mBullish) {
+          macdScore = 65; // MACD disagreement (15m bounce during rally): soft penalty, continue
+          disagreements.push('MACD: 15m histogram positive during pullback (MACD disagreement, soft penalty applied).');
+        } else if (macd1hBullish && !macd15mBullish) {
+          macdScore = 60; // LTF momentum emerging
+          disagreements.push('MACD: 1h flat/lagging while 15m negative (soft penalty applied).');
+        } else {
+          macdScore = 40; // Both positive: soft penalty, continue
           macdAligned = false;
-          disagreements.push('MACD: Both 1h and 15m MACD histograms are positive, contradicting SELL.');
+          disagreements.push('MACD: Both 1h and 15m histograms positive (soft penalty applied).');
         }
       }
     }
 
     // --- F. ADX & Directional Movement ---
+    // ADX non-trending: baseline continuation score; opposing DM: soft penalty, continues!
     const adx1h = TechnicalIndicators.calculateADX(sorted1h, 14);
     const adx15m = TechnicalIndicators.calculateADX(sorted15m, 14);
-    let adxScore = 50;
+    let adxScore = 65;
     let isTrending = true;
 
     if (adx1h && adx15m) {
@@ -366,21 +419,23 @@ export class Gate6ProgressiveMTF {
         if (adx1h.pdi > adx1h.mdi && adx15m.pdi > adx15m.mdi) {
           adxScore = adx1h.adx >= 20 ? 95 : 80;
         } else if (adx1h.mdi > adx1h.pdi && adx1h.adx >= 25 && adx15m.mdi > adx15m.pdi) {
-          adxScore = 20;
+          adxScore = 40; // Opposing directional movement: soft penalty, continue
           isTrending = false;
-          disagreements.push(`ADX: Strong bearish directional movement (-DI > +DI) on 1h (ADX ${adx1h.adx.toFixed(1)}) and 15m.`);
+          disagreements.push(`ADX: Bearish directional movement (-DI > +DI) on 1h (ADX ${adx1h.adx.toFixed(1)}) and 15m (soft penalty applied).`);
         } else {
-          adxScore = 60;
+          // Normal / consolidating ADX: healthy baseline
+          adxScore = 65;
         }
       } else {
         if (adx1h.mdi > adx1h.pdi && adx15m.mdi > adx15m.pdi) {
           adxScore = adx1h.adx >= 20 ? 95 : 80;
         } else if (adx1h.pdi > adx1h.mdi && adx1h.adx >= 25 && adx15m.pdi > adx15m.mdi) {
-          adxScore = 20;
+          adxScore = 40; // Opposing directional movement: soft penalty, continue
           isTrending = false;
-          disagreements.push(`ADX: Strong bullish directional movement (+DI > -DI) on 1h (ADX ${adx1h.adx.toFixed(1)}) and 15m.`);
+          disagreements.push(`ADX: Bullish directional movement (+DI > -DI) on 1h (ADX ${adx1h.adx.toFixed(1)}) and 15m (soft penalty applied).`);
         } else {
-          adxScore = 60;
+          // Normal / consolidating ADX: healthy baseline
+          adxScore = 65;
         }
       }
     }
@@ -393,29 +448,33 @@ export class Gate6ProgressiveMTF {
 
     if (isBuy) {
       if (ms1h.structureBias === 'BULLISH' && ms15m.structureBias === 'BULLISH') msScore = 95;
-      else if (ms1h.structureBias === 'BULLISH' && ms15m.structureBias === 'RANGE') msScore = 75;
-      else if (ms1h.structureBias === 'BEARISH' && ms15m.structureBias === 'BEARISH') {
+      else if (ms1h.structureBias === 'BULLISH' && ms15m.structureBias === 'RANGE') msScore = 80;
+      else if (ms1h.structureBias === 'BULLISH' && ms15m.structureBias === 'BEARISH') {
+        // Minor 15m pullback within 1h bullish structure: soft penalty, continue
+        msScore = 60;
+        disagreements.push('Market Structure: 15m minor swing pullback within 1h bullish structure (soft penalty applied).');
+      } else if (ms1h.structureBias === 'BEARISH' && ms15m.structureBias === 'BEARISH') {
+        // Severe HTF structural contradiction: both 1h and 15m confirmed bearish
         msScore = 15;
         msAligned = false;
         disagreements.push('Market Structure: Lower highs and lower lows confirmed on both 1h and 15m (opposing BUY).');
-      } else if (ms15m.structureBias === 'BEARISH' && ms15m.lowerLowsCount >= 2) {
-        msScore = 30;
-        disagreements.push('Market Structure: 15m has broken market structure with multiple lower lows.');
       } else {
-        msScore = 60;
+        msScore = 65;
       }
     } else {
       if (ms1h.structureBias === 'BEARISH' && ms15m.structureBias === 'BEARISH') msScore = 95;
-      else if (ms1h.structureBias === 'BEARISH' && ms15m.structureBias === 'RANGE') msScore = 75;
-      else if (ms1h.structureBias === 'BULLISH' && ms15m.structureBias === 'BULLISH') {
+      else if (ms1h.structureBias === 'BEARISH' && ms15m.structureBias === 'RANGE') msScore = 80;
+      else if (ms1h.structureBias === 'BEARISH' && ms15m.structureBias === 'BULLISH') {
+        // Minor 15m bounce within 1h bearish structure: soft penalty, continue
+        msScore = 60;
+        disagreements.push('Market Structure: 15m minor swing bounce within 1h bearish structure (soft penalty applied).');
+      } else if (ms1h.structureBias === 'BULLISH' && ms15m.structureBias === 'BULLISH') {
+        // Severe HTF structural contradiction: both 1h and 15m confirmed bullish
         msScore = 15;
         msAligned = false;
         disagreements.push('Market Structure: Higher highs and higher lows confirmed on both 1h and 15m (opposing SELL).');
-      } else if (ms15m.structureBias === 'BULLISH' && ms15m.higherHighsCount >= 2) {
-        msScore = 30;
-        disagreements.push('Market Structure: 15m has broken market structure with multiple higher highs.');
       } else {
-        msScore = 60;
+        msScore = 65;
       }
     }
 
@@ -430,19 +489,15 @@ export class Gate6ProgressiveMTF {
       msScore * 0.10
     );
 
-    // Gate 4 / Gate 7: Convert non-critical confirmations from hard rejection -> scoring/penalty.
-    // Make minor lower-timeframe disagreement soft.
-    // Keep major higher-timeframe trend conflicts hard.
-    // Preserve structural invalidation as a hard rejection.
-    const isHtfTrendConflict = trendScore <= 20;
-    const isStructuralInvalidation = (msScore <= 20 && !msAligned);
+    // GATE 5: Secondary confluence factors (RSI, MACD, EMA, ADX, Momentum)
+    // act as soft penalties on compositeLayer1Score/ranking, NEVER hard rejections.
+    // Severe HTF structural contradiction remains HARD.
+    const isHtfTrendConflict = trendScore <= 15;
+    const isStructuralInvalidation = (msScore <= 15 && !msAligned);
 
-    // Only genuine major HTF conflicts or structural breaks trigger hard rejection.
-    // Secondary factors (RSI overextension, MACD lag, minor ROC deceleration, 15m EMA pullback)
-    // act as soft penalties on compositeLayer1Score without prematurely hard-vetoing strong setups.
     const hasHardContradiction = isHtfTrendConflict || isStructuralInvalidation;
-
-    const passed = !hasHardContradiction && compositeLayer1Score >= 50;
+    // Floor of 35 allows secondary indicator disagreements to adjust score and ranking without premature vetoes
+    const passed = !hasHardContradiction && compositeLayer1Score >= 35;
 
     const metrics: Gate6Layer1Metrics = {
       trendAlignment: { tf1hDirection, tf15mDirection, isAligned: trendScore >= 60, score: trendScore },
@@ -510,16 +565,30 @@ export class Gate6ProgressiveMTF {
       disagreements.push('ATR is non-positive or zero.');
     } else {
       const atrPct = (atr1h / currentPrice) * 100;
-      if (atrPct < 0.02) {
+      if (atrPct < 0.005) {
+        // Genuinely collapsed/dead ATR: hard stop
         volatilityState = 'DEAD';
         atrHealthy = false;
-        atrScore = 25;
+        atrScore = 20;
         disagreements.push(`Volatility is dead: 1h ATR is only ${atrPct.toFixed(4)}% of price.`);
-      } else if (atrPct > 12.0) {
+      } else if (atrPct < 0.02) {
+        // Compressed volatility: caution soft penalty, continues!
+        volatilityState = 'COMPRESSED';
+        atrHealthy = true;
+        atrScore = 55;
+        disagreements.push(`Volatility compressed: 1h ATR is ${atrPct.toFixed(4)}% of price (soft penalty applied).`);
+      } else if (atrPct > 20.0) {
+        // Extreme erratic flash spike: hard safety block
         volatilityState = 'ERRATIC';
         atrHealthy = false;
-        atrScore = 30;
-        disagreements.push(`Volatility is erratic: 1h ATR is ${atrPct.toFixed(2)}% of price.`);
+        atrScore = 20;
+        disagreements.push(`Volatility is extreme: 1h ATR is ${atrPct.toFixed(2)}% of price.`);
+      } else if (atrPct > 12.0) {
+        // Elevated volatility: caution soft penalty, continues!
+        volatilityState = 'NORMAL';
+        atrHealthy = true;
+        atrScore = 60;
+        disagreements.push(`Elevated volatility: 1h ATR is ${atrPct.toFixed(2)}% of price (soft penalty applied).`);
       } else if (atr15m > atr1h * 0.4) {
         volatilityState = 'EXPANDING';
         atrScore = 95;
@@ -572,6 +641,7 @@ export class Gate6ProgressiveMTF {
     const nearestSupport = supportLevels.length > 0 ? supportLevels[0] : currentPrice * 0.95;
 
     // --- C. Market Structure Confirmation (5m & 4h) ---
+    // Normal S/R proximity: soft penalty, continues!
     const ms5m = TechnicalIndicators.calculateMarketStructure(sorted5m);
     const ms4h = TechnicalIndicators.calculateMarketStructure(sorted4h);
 
@@ -582,12 +652,10 @@ export class Gate6ProgressiveMTF {
     if (isBuy) {
       clearancePct = ((nearestResistance - currentPrice) / currentPrice) * 100;
       if (clearancePct < 0.2 && currentPrice > 0) {
-        // Close to major resistance: allow breakout setups if macro structure is bullish or range, penalize if bearish/opposing
-        srScore = ms4h.structureBias === 'BEARISH' ? 40 : 70;
-        if (srScore < 50) {
-          srFavorable = false;
-          disagreements.push(`Resistance ceiling: Entry is only ${clearancePct.toFixed(2)}% below major resistance (${nearestResistance.toFixed(4)}).`);
-        }
+        // Normal S/R proximity: apply soft score penalty, continue!
+        srScore = ms4h.structureBias === 'BEARISH' ? 50 : 65;
+        srFavorable = true;
+        disagreements.push(`Normal S/R proximity: Entry is ${clearancePct.toFixed(2)}% below resistance (${nearestResistance.toFixed(4)}) (soft penalty applied).`);
       } else if (clearancePct > 1.0) {
         srScore = 95;
       } else {
@@ -596,12 +664,10 @@ export class Gate6ProgressiveMTF {
     } else {
       clearancePct = ((currentPrice - nearestSupport) / currentPrice) * 100;
       if (clearancePct < 0.2 && currentPrice > 0) {
-        // Close to major support: allow breakdown setups if macro structure is bearish or range, penalize if bullish/opposing
-        srScore = ms4h.structureBias === 'BULLISH' ? 40 : 70;
-        if (srScore < 50) {
-          srFavorable = false;
-          disagreements.push(`Support floor: Entry is only ${clearancePct.toFixed(2)}% above major support (${nearestSupport.toFixed(4)}).`);
-        }
+        // Normal S/R proximity: apply soft score penalty, continue!
+        srScore = ms4h.structureBias === 'BULLISH' ? 50 : 65;
+        srFavorable = true;
+        disagreements.push(`Normal S/R proximity: Entry is ${clearancePct.toFixed(2)}% above support (${nearestSupport.toFixed(4)}) (soft penalty applied).`);
       } else if (clearancePct > 1.0) {
         srScore = 95;
       } else {
@@ -618,7 +684,8 @@ export class Gate6ProgressiveMTF {
       } else if (ms4h.structureBias === 'RANGE' && ms5m.structureBias === 'BULLISH') {
         msConfScore = 80;
       } else if (ms4h.structureBias === 'BEARISH' && ms5m.structureBias === 'BEARISH') {
-        msConfScore = 20;
+        // Severe HTF structural contradiction
+        msConfScore = 15;
         msConfirmed = false;
         disagreements.push('Macro 4h and micro 5m structure both confirm Bearish regime (opposing BUY).');
       } else {
@@ -630,7 +697,8 @@ export class Gate6ProgressiveMTF {
       } else if (ms4h.structureBias === 'RANGE' && ms5m.structureBias === 'BEARISH') {
         msConfScore = 80;
       } else if (ms4h.structureBias === 'BULLISH' && ms5m.structureBias === 'BULLISH') {
-        msConfScore = 20;
+        // Severe HTF structural contradiction
+        msConfScore = 15;
         msConfirmed = false;
         disagreements.push('Macro 4h and micro 5m structure both confirm Bullish regime (opposing SELL).');
       } else {
@@ -644,10 +712,10 @@ export class Gate6ProgressiveMTF {
       msConfScore * 0.30
     );
 
-    // Gate 4 / Gate 7: Keep ATR health (dead/unexecutable) and macro structural invalidation hard.
-    // Near-support/resistance tests and minor lower-timeframe structure disagreements act as soft scoring factors.
-    const isMacroStructInvalidated = !msConfirmed && msConfScore <= 20;
-    const passed = atrHealthy && !isMacroStructInvalidated && compositeLayer2Score >= 50;
+    // GATE 5: Only dead ATR or severe macro structural invalidation trigger hard block.
+    // Proximity to S/R and minor timeframe fluctuations act as soft scoring penalties.
+    const isMacroStructInvalidated = !msConfirmed && msConfScore <= 15;
+    const passed = atrHealthy && !isMacroStructInvalidated && compositeLayer2Score >= 35;
 
     const metrics: Gate6Layer2Metrics = {
       atr: { atr5m, atr15m, atr1h, atr4h, volatilityState, isHealthy: atrHealthy, score: atrScore },
@@ -712,7 +780,7 @@ export class Gate6ProgressiveMTF {
 
     for (const cand of candidates) {
       const scoreBeforeGate6 = cand.preliminaryScore;
-      const maximumPossibleScoreAfterRemainingAnalysis = Math.min(100, scoreBeforeGate6 + 25);
+      const maximumPossibleScoreAfterRemainingAnalysis = Math.min(100, scoreBeforeGate6 + 40);
       const scoreAfterGate6 = scoreBeforeGate6;
       const finalScore = scoreBeforeGate6;
 
@@ -847,7 +915,7 @@ export class Gate6ProgressiveMTF {
 
           // POST-LAYER 1 SCORE AUDIT (Before Layer 2 5m & 4h expensive requests)
           const maxCompositeMtf = Math.round(l1Result.score * 0.6 + 100 * 0.4);
-          const maximumPossibleScoreAfterRemainingAnalysis = Math.min(100, maxCompositeMtf + 15);
+          const maximumPossibleScoreAfterRemainingAnalysis = Math.min(100, maxCompositeMtf + 25);
 
           if (maximumPossibleScoreAfterRemainingAnalysis < targetScoreThreshold) {
             auditTrail.push(`[Gate 6 Post-L1 Audit REJECTED] Post-Layer 1 score (${l1Result.score}/100) yields maximum possible score of ${maximumPossibleScoreAfterRemainingAnalysis}/100 (< required threshold ${targetScoreThreshold}). Halting Layer 2 (5m & 4h) requests.`);

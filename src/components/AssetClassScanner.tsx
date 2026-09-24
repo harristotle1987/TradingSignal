@@ -229,8 +229,8 @@ export function AssetClassScanner({
     let isMounted = true;
     api.getSensitivityProfiles()
       .then((res) => {
-        if (isMounted && res.success && res.activeConfig) {
-          setSensitivityLabel(`${res.activeConfig.label} (≥${res.activeConfig.signalThreshold} Score, ${res.activeConfig.minimumRR}:1 R:R)`);
+        if (isMounted && res.success && res.currentConfig) {
+          setSensitivityLabel(`${res.currentConfig.label} (≥${res.currentConfig.signalThreshold} Score, ${res.currentConfig.minimumRR}:1 R:R)`);
         }
       })
       .catch(() => {});

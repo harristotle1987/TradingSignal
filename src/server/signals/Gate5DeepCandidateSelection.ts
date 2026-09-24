@@ -347,17 +347,17 @@ export class Gate5DeepCandidateSelection {
         if (ms.structureBias === 'BULLISH') {
           marketStructureScore = (ms.higherHighsCount >= 2 && ms.higherLowsCount >= 2) ? 15 : 12;
         } else if (ms.structureBias === 'RANGE') {
-          marketStructureScore = 8;
+          marketStructureScore = (gate3Result?.detectedEvidence?.includes('BREAKOUT') || gate3Result?.detectedEvidence?.includes('REVERSAL')) ? 13 : 8;
         } else {
-          marketStructureScore = 4;
+          marketStructureScore = gate3Result?.detectedEvidence?.includes('REVERSAL') ? 12 : 5;
         }
       } else {
         if (ms.structureBias === 'BEARISH') {
           marketStructureScore = (ms.lowerHighsCount >= 2 && ms.lowerLowsCount >= 2) ? 15 : 12;
         } else if (ms.structureBias === 'RANGE') {
-          marketStructureScore = 8;
+          marketStructureScore = (gate3Result?.detectedEvidence?.includes('BREAKOUT') || gate3Result?.detectedEvidence?.includes('REVERSAL')) ? 13 : 8;
         } else {
-          marketStructureScore = 4;
+          marketStructureScore = gate3Result?.detectedEvidence?.includes('REVERSAL') ? 12 : 5;
         }
       }
     } catch {

@@ -35,7 +35,7 @@ import { Gate20ProbabilityCalibration } from './Gate20ProbabilityCalibration.js'
 import { Gate21WalkForwardValidation } from './Gate21WalkForwardValidation.js';
 import { Gate32AdaptiveCandidateSelection, Stage2CandidateInput } from './Gate32AdaptiveCandidateSelection.js';
 import { TargetQualityEvaluator, calculateTargetRr } from './TargetQualityEvaluator.js';
-import { RiskRewardCalculator } from './RiskRewardCalculator.js';
+import { RiskRewardCalculator, logRrRejectionDiagnostic } from './RiskRewardCalculator.js';
 import { Gate22MonteCarloSimulation } from './Gate22MonteCarloSimulation.js';
 import { NvidiaAIService, CandidateAnalysisPayload } from './NvidiaAIService.js';
 import { SignalValidator } from './SignalValidator.js';
@@ -566,9 +566,6 @@ export async function runStagedPipeline(
         if (gate7.tradingAllowed === 'NO') {
           scoring.isValid = false;
           scoring.rejectionReason = `REJECTED: MARKET_CONTEXT_BLOCKED. ${gate7.reasons.join('; ')}`;
-        } else if (gate9.rrRatio < thresholds.minimumRR) {
-          scoring.isValid = false;
-          scoring.rejectionReason = `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross R:R (${gate9.rrRatio.toFixed(2)}) below ${thresholds.minimumRR}`;
         } else {
           const compositeScore = Math.round(
             gate2.alignmentScore * 0.25 +
@@ -580,13 +577,9 @@ export async function runStagedPipeline(
           );
 
           scoring.score = Math.min(100, Math.max(scoring.score, compositeScore));
-
-          if (scoring.score < thresholds.minimumScore) {
-            scoring.isValid = false;
-            scoring.rejectionReason = `REJECTED: SCORE_BELOW_THRESHOLD. Composite signal score ${scoring.score}/100 is below the minimum required threshold of ${thresholds.minimumScore}`;
-          } else {
-            // scoring.stopLoss/takeProfit/tp1/tp2/tp3/riskRewardRatio retain the values ScoringEngine originally produced
-          }
+          // Preliminary scoring ranks candidates and updates scoring.score,
+          // but does NOT permanently veto or reject candidates early.
+          // Final qualification and score floor enforcement (>= 65) occurs authoritatively in Gate 8.
         }
       }
 
@@ -953,12 +946,86 @@ export async function runStagedPipeline(
       const safeTp2 = tpEnforced.tp2;
       const safeTp3 = tpEnforced.tp3;
 
-      const rrResult = RiskRewardCalculator.calculate(finalEntry, finalSL, safeTp1, safeTp2, safeTp3, scoring.direction);
+      const minRequiredRR = Math.max(1.8, serverConfig.getConfig().thresholds.minimumRR);
+      const rrResult = RiskRewardCalculator.calculate(finalEntry, finalSL, safeTp1, safeTp2, safeTp3, scoring.direction, minRequiredRR);
       const safeTakeProfit = rrResult.selectedTarget === 'TP3' ? safeTp3 : safeTp2;
       const tp1Rr = rrResult.tp1RR;
       const tp2Rr = rrResult.tp2RR;
       const tp3Rr = rrResult.tp3RR;
       const exactPrimaryRr = rrResult.primaryRR;
+
+      const finalRiskDistance = Math.abs(finalEntry - finalSL);
+      const finalRewardDistance = Math.abs(safeTakeProfit - finalEntry);
+      const finalPublishedRR = finalRiskDistance > 0 ? Number((finalRewardDistance / finalRiskDistance).toFixed(2)) : 0;
+
+      // =========================================================================
+      // ONE AUTHORITATIVE FINAL R:R VALIDATION (GATE 6)
+      // Executed after final Entry, SL and selected TP are finalized.
+      // Required: FINAL_RR >= 1.8.
+      // TP2 preferred when genuinely >= 1.8R.
+      // TP3 allowed when TP2 does not qualify.
+      // No artificial TP stretching.
+      // =========================================================================
+      const passesAuthoritativeFinalRR =
+        rrResult.isValid &&
+        rrResult.selectedTarget !== null &&
+        finalPublishedRR >= minRequiredRR &&
+        finalRiskDistance > 0 &&
+        finalRewardDistance > 0;
+
+      if (!passesAuthoritativeFinalRR) {
+        const rejectionReason = `REJECTED: GROSS_RR_BELOW_THRESHOLD. Final published Risk/Reward ratio (${finalPublishedRR.toFixed(2)}:1) is below ${minRequiredRR.toFixed(2)}:1 minimum acceptable R:R (TP2: ${rrResult.tp2GrossRR.toFixed(2)}:1, TP3: ${rrResult.tp3GrossRR.toFixed(2)}:1)`;
+        logRrRejectionDiagnostic({
+          symbol: asset,
+          direction: scoring.direction,
+          entryPrice: finalEntry,
+          stopLoss: finalSL,
+          tp1: safeTp1,
+          tp2: safeTp2,
+          tp3: safeTp3,
+          assetClass: classification,
+          rejectionReason,
+        });
+        rejectionTracker.recordCandidate({
+          symbol: asset,
+          direction: scoring.direction,
+          score: gate8Eval.finalScore,
+          primaryRejectionReason: rejectionReason,
+          failedGates: [StandardFailedGate.RR],
+          finalDecision: 'REJECTED',
+          stage: 'GATE_9',
+          entryPrice: finalEntry,
+          stopLoss: finalSL,
+          takeProfit: safeTakeProfit,
+          tp1: safeTp1,
+          tp2: safeTp2,
+          tp3: safeTp3,
+          grossRR: finalPublishedRR,
+          primaryRR: finalPublishedRR,
+          tp1RR: tp1Rr,
+          tp2RR: tp2Rr,
+          tp3RR: tp3Rr,
+          atr,
+          timeframeAlignmentRatio: scoring.timeframeAlignmentRatio,
+          timestamp: now,
+          factors: gate8Eval.factors,
+        });
+        Gate35SignalFunnelAnalytics.recordCandidate({
+          symbol: asset,
+          direction: scoring.direction,
+          stage: 'GATE_9',
+          score: gate8Eval.finalScore,
+          regime: scoring.marketRegime,
+          strategy: primaryStrategyName,
+          rejectionReason,
+          ...commonTelemetry,
+          grossRR: finalPublishedRR,
+          finalDecision: 'REJECTED',
+          rejectionStage: 'GATE_9',
+        });
+        logAuditHelper(asset, scoring, primaryStrategyName, crossCheck, fp, rejectionReason);
+        continue;
+      }
 
       const tqResult = TargetQualityEvaluator.evaluate({
         direction: scoring.direction, entryPrice: finalEntry, stopLoss: finalSL,

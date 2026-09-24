@@ -211,36 +211,10 @@ export class HardGatesEvaluator {
     // 5. Mathematical Expectancy & Win Rate Analytics (Soft modifier / Ranking analytics, not hard vetoes per Gate 6 & 7)
     // Recorded for opportunity ranking and calibration without independent rejection
 
+    // 6. R:R & Friction Hurdle Analytics (Consolidated authoritative R:R rejection occurs after final Entry, SL and TP are finalized)
+    // Net R:R/friction may affect ranking or confidence, and may only hard-block when execution cost is genuinely unsafe.
 
-    // 6. HARD GATE 6: Gross & Net Risk/Reward Hurdle Checks
-    // 6a: Gross R:R check
-    if (params.riskRewardRatio < thresholds.minimumRR) {
-      return {
-        passed: false,
-        failedGate: 'GROSS_RR_BELOW_THRESHOLD',
-        rejectionReason: `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${params.riskRewardRatio.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum acceptable GROSS R:R`,
-      };
-    }
-
-    // 6b: Net R:R check
-    if (params.netRiskRewardRatio !== undefined && params.netRiskRewardRatio < thresholds.minimumNetRR) {
-      return {
-        passed: false,
-        failedGate: 'NET_RR_BELOW_THRESHOLD',
-        rejectionReason: `REJECTED: NET_RR_BELOW_THRESHOLD. Net Risk/Reward ratio (${params.netRiskRewardRatio.toFixed(2)}:1) is below ${thresholds.minimumNetRR}:1 minimum acceptable NET R:R (Gross R:R: ${params.riskRewardRatio.toFixed(2)}:1)`,
-      };
-    }
-
-    // 6c: Optional Adverse Net R:R hard gate
-    if (thresholds.enforceAdverseNetRRHardGate && params.adverseNetRiskRewardRatio !== undefined && params.adverseNetRiskRewardRatio < (thresholds.minimumAdverseNetRR ?? 1.0)) {
-      return {
-        passed: false,
-        failedGate: 'ADVERSE_NET_RR_BELOW_THRESHOLD',
-        rejectionReason: `REJECTED: ADVERSE_NET_RR_BELOW_THRESHOLD. Adverse Net Risk/Reward ratio (${params.adverseNetRiskRewardRatio.toFixed(2)}:1) is below ${(thresholds.minimumAdverseNetRR ?? 1.0)}:1 stress floor`,
-      };
-    }
-
-    // 7. HARD GATE 7: Severe Spread & Slippage Friction
+    // 7. HARD GATE 7: Severe Spread & Slippage Friction (Execution cost genuinely unsafe)
     if (params.estimatedFrictionRatio !== undefined && params.estimatedFrictionRatio > 0.25) {
       return {
         passed: false,

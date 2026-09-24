@@ -11,7 +11,6 @@ import { MarketStatusResponse } from '../types/index.js';
 import { api } from '../api/client.js';
 import { StatusBadge } from './StatusBadge.js';
 import { MarketDiagnostics } from './MarketDiagnostics.js';
-import { SignalSensitivitySelector } from './SignalSensitivitySelector.js';
 import { NotificationService, NotificationPermissionStatus } from '../utils/notification.js';
 import {
   ShieldCheck,
@@ -170,9 +169,6 @@ export function SettingsPage({}: SettingsPageProps) {
           </div>
         </div>
       </div>
-
-      {/* Signal Sensitivity & Strictness Selector */}
-      <SignalSensitivitySelector />
 
       {/* Market Data Provider Status Card */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">

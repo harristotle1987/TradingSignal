@@ -38,8 +38,11 @@ import { serverConfig } from '../config.js';
 
 export type Gate8ScoreClassification =
   | 'REJECT'
+  | 'WATCH'
   | 'NEAR_MISS_WATCHLIST'
+  | 'QUALIFIED_SIGNAL'
   | 'VALID_SIGNAL'
+  | 'HIGH_CONFLUENCE'
   | 'STRONG_SIGNAL'
   | 'VERY_STRONG_SIGNAL'
   | 'EXCEPTIONAL';
@@ -210,17 +213,24 @@ export class Gate8TradeabilityThreshold {
     const finalThreshold = this.FINAL_TRADEABILITY_THRESHOLD;
     const watchingThreshold = serverConfig.getConfig().thresholds.watchingThreshold;
 
-    // Assign Classification based on Final Score
+    // Assign Classification based on Final Score:
+    // < 60 = REJECT
+    // 60–64 = WATCH (NEAR_MISS_WATCHLIST)
+    // 65–69 = QUALIFIED SIGNAL
+    // 70–79 = VALID SIGNAL
+    // 80+ = HIGH-CONFLUENCE (STRONG_SIGNAL / VERY_STRONG_SIGNAL / EXCEPTIONAL)
     let classification: Gate8ScoreClassification;
     if (finalScore >= 90) {
       classification = 'EXCEPTIONAL';
     } else if (finalScore >= 85) {
       classification = 'VERY_STRONG_SIGNAL';
     } else if (finalScore >= 80) {
-      classification = 'STRONG_SIGNAL';
-    } else if (finalScore >= finalThreshold) {
+      classification = 'HIGH_CONFLUENCE';
+    } else if (finalScore >= 70) {
       classification = 'VALID_SIGNAL';
-    } else if (finalScore >= watchingThreshold) {
+    } else if (finalScore >= 65) {
+      classification = 'QUALIFIED_SIGNAL';
+    } else if (finalScore >= 60) {
       classification = 'NEAR_MISS_WATCHLIST';
     } else {
       classification = 'REJECT';

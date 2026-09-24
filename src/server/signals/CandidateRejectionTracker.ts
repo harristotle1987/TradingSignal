@@ -125,7 +125,7 @@ export class CandidateRejectionTracker {
     }
 
     if (clean.includes('SCORE_BELOW_THRESHOLD') || clean.includes('Composite signal score')) {
-      const minThreshold = serverConfig?.getConfig?.()?.thresholds?.signalThreshold ?? 70;
+      const minThreshold = serverConfig?.getConfig?.()?.thresholds?.signalThreshold ?? 65;
       return `Signal score (${score}/100) is below the minimum tradeability threshold of ${minThreshold}.`;
     }
 
@@ -152,7 +152,7 @@ export class CandidateRejectionTracker {
    * Records or updates a candidate's evaluation and rejection audit.
    */
   public recordCandidate(audit: CandidateRejectionAudit): void {
-    const minThreshold = serverConfig?.getConfig?.()?.thresholds?.signalThreshold ?? 70;
+    const minThreshold = serverConfig?.getConfig?.()?.thresholds?.signalThreshold ?? 65;
     const cleanAudit = { ...audit };
     const effectiveScore = cleanAudit.finalScore ?? cleanAudit.score ?? cleanAudit.scoreBeforeGate6 ?? 0;
     const isThresholdPlusRejected = (effectiveScore >= minThreshold || (cleanAudit.scoreBeforeGate6 ?? 0) >= minThreshold || cleanAudit.isQualifiedRejected === true) && cleanAudit.finalDecision === 'REJECTED';
@@ -496,7 +496,8 @@ export class CandidateRejectionTracker {
     }
 
     if (failedGates.size === 0) {
-      if (score < 70) {
+      const minScoreThreshold = serverConfig?.getConfig?.()?.thresholds?.signalThreshold ?? 65;
+      if (score < minScoreThreshold) {
         failedGates.add(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
       } else {
         failedGates.add(StandardFailedGate.DATA_INTEGRITY);

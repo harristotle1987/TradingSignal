@@ -1978,7 +1978,7 @@ router.get('/signals/gate7/validate/:symbol', async (req: Request, res: Response
       primaryStrategy: 'Multi-Timeframe Trend Confluence',
       marketRegime: 'TRENDING_UP',
       activeSignals: signalEngine.activeSignals,
-      minimumRRThreshold: 1.5,
+      minimumRRThreshold: serverConfig.getConfig().thresholds.minimumRR,
       minimumScoreThreshold: serverConfig.getConfig().thresholds.signalThreshold,
     });
 

@@ -38,6 +38,9 @@ import { serverConfig } from '../config.js';
 import { ScannerPersistence } from './ScannerPersistence.js';
 import { logger } from '../logger.js';
 
+export const FINAL_SCORE_FLOOR = 65;
+export const FINAL_EXECUTABLE_RR_FLOOR = 1.8;
+
 export const CANONICAL_SENSITIVITY_PROFILES: Record<
   Exclude<SensitivityProfileName, 'CUSTOM'>,
   SensitivityProfileConfig
@@ -47,10 +50,10 @@ export const CANONICAL_SENSITIVITY_PROFILES: Record<
     label: 'Balanced (Recommended)',
     badge: 'Optimal Quality & Frequency',
     description:
-      'Calibrated to eliminate signal starvation while preserving structural safety. Unlocks pristine swing and intraday momentum setups that narrowly missed arbitrary 70+ cutoffs.',
+      'Calibrated to eliminate signal starvation while preserving structural safety. Unlocks pristine swing and intraday momentum setups with strict >=1.8:1 gross R:R preservation.',
     signalThreshold: 65,
     minimumScore: 65,
-    minimumRR: 1.5,
+    minimumRR: 1.8,
     minimumNetRR: 1.10,
     watchingThreshold: 60,
     qualifiedCandidateThreshold: 63,
@@ -81,10 +84,10 @@ export const CANONICAL_SENSITIVITY_PROFILES: Record<
     label: 'Active Trader',
     badge: 'High Frequency',
     description:
-      'Optimized for intraday market participants. Lowers friction hurdles to catch fast 15m and 1h momentum breakouts without waiting for multi-day setups.',
-    signalThreshold: 62,
-    minimumScore: 62,
-    minimumRR: 1.3,
+      'Optimized for intraday market participants. Lowers score hurdles to catch fast 15m and 1h momentum breakouts while maintaining strict >=1.8:1 gross R:R and score floor >=65.',
+    signalThreshold: 65,
+    minimumScore: 65,
+    minimumRR: 1.8,
     minimumNetRR: 1.05,
     watchingThreshold: 58,
     qualifiedCandidateThreshold: 60,
@@ -104,7 +107,7 @@ export class SignalSensitivityManager {
     description: 'Customized threshold bounds and risk parameters.',
     signalThreshold: 65,
     minimumScore: 65,
-    minimumRR: 1.5,
+    minimumRR: 1.8,
     minimumNetRR: 1.10,
     watchingThreshold: 60,
     qualifiedCandidateThreshold: 63,
@@ -198,8 +201,8 @@ export class SignalSensitivityManager {
     if (profileName === 'CUSTOM') {
       if (customOverrides) {
         // Enforce safe bounds on custom overrides to prevent invalid parameters
-        const score = Math.max(50, Math.min(85, customOverrides.signalThreshold ?? customOverrides.minimumScore ?? this.customConfig.signalThreshold));
-        const rr = Math.max(1.1, Math.min(3.5, customOverrides.minimumRR ?? this.customConfig.minimumRR));
+        const score = Math.max(FINAL_SCORE_FLOOR, Math.min(85, customOverrides.signalThreshold ?? customOverrides.minimumScore ?? this.customConfig.signalThreshold));
+        const rr = Math.max(FINAL_EXECUTABLE_RR_FLOOR, Math.min(3.5, customOverrides.minimumRR ?? this.customConfig.minimumRR));
         const netRR = Math.max(1.0, Math.min(2.5, customOverrides.minimumNetRR ?? this.customConfig.minimumNetRR));
         const winProb = Math.max(35, Math.min(75, customOverrides.minimumWinProbability ?? this.customConfig.minimumWinProbability));
 
@@ -247,9 +250,9 @@ export class SignalSensitivityManager {
     const config = this.getActiveConfig();
 
     serverConfig.updateThresholds({
-      signalThreshold: config.signalThreshold,
-      minimumScore: config.minimumScore,
-      minimumRR: config.minimumRR,
+      signalThreshold: Math.max(FINAL_SCORE_FLOOR, config.signalThreshold),
+      minimumScore: Math.max(FINAL_SCORE_FLOOR, config.minimumScore),
+      minimumRR: Math.max(FINAL_EXECUTABLE_RR_FLOOR, config.minimumRR),
       minimumNetRR: config.minimumNetRR,
       watchingThreshold: config.watchingThreshold,
       qualifiedCandidateThreshold: config.qualifiedCandidateThreshold,

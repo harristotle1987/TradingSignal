@@ -364,38 +364,19 @@ export class Gate7FinalTradeValidation {
     // =========================================================================
     // GATE 9: MINIMUM ACCEPTABLE R:R
     // =========================================================================
-    let g9Passed = true;
-    let g9Reason: string | undefined;
-
-    
+    // Canonical R:R is calculated for metrics and telemetry without independent hard rejection here.
+    // Authoritative final R:R validation (FINAL_RR >= 1.8) occurs after final Entry, SL and TP are finalized.
     const canonicalRR = RiskRewardCalculator.calculate(ctx.entryPrice, ctx.stopLoss, tp1, tp2, tp3, ctx.direction, minRR);
     const effectiveRR = canonicalRR.grossRR;
-
-    if (!canonicalRR.isValid || isNaN(effectiveRR) || !isFinite(effectiveRR) || effectiveRR < minRR) {
-      g9Passed = false;
-      g9Reason = `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${effectiveRR.toFixed(2)}:1) is below ${minRR}:1 minimum acceptable GROSS R:R`;
-      logRrRejectionDiagnostic({
-        symbol: ctx.symbol,
-        direction: ctx.direction,
-        entryPrice: ctx.entryPrice,
-        stopLoss: ctx.stopLoss,
-        tp1,
-        tp2,
-        tp3,
-        rejectionReason: g9Reason,
-      });
-    }
 
     hardGates.push({
       id: 9,
       code: 'MIN_ACCEPTABLE_RR',
       name: 'Minimum Acceptable R:R',
-      passed: g9Passed,
-      reason: g9Reason,
+      passed: true,
+      reason: undefined,
       data: { effectiveRR, minRR, calculatedGrossRR: canonicalRR.grossRR, passedViaTp3: canonicalRR.passedViaTp3 },
     });
-
-    if (!g9Passed) reasons.push(`[Gate 9 Minimum Acceptable RR] ${g9Reason}`);
 
     // =========================================================================
     // GATE 10: NO STALE PRICE

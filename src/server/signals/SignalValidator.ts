@@ -190,16 +190,15 @@ export class SignalValidator {
       };
     }
 
-    // 8. Confluence & Quality Score Check (INSUFFICIENT_CONFLUENCE with Gate 31 CAUTION threshold elevation)
+    // 8. Confluence & Quality Score Check (INSUFFICIENT_CONFLUENCE)
+    // GATE 7: Make news uncertainty non-blocking.
+    // Standard baseline threshold applies; missing news data or caution does not elevate the required score to 80+ or 85+.
+    // A valid 65–79 setup is never rejected solely because news data is unavailable.
     const thresholds = serverConfig.getConfig().thresholds;
-    const requiredMinScore = newsRiskResult.classification === 'CAUTION'
-      ? Math.max(thresholds.signalThreshold, newsRiskResult.minRequiredConfirmationScore)
-      : (thresholds.watchingThreshold ?? 60);
+    const requiredMinScore = thresholds.watchingThreshold ?? 60;
 
     if (ctx.score < requiredMinScore) {
-      const reasonMsg = newsRiskResult.classification === 'CAUTION'
-        ? `REJECTED: SCORE_BELOW_CAUTION_NEWS_THRESHOLD. Score ${ctx.score} is below elevated CAUTION news threshold of ${requiredMinScore}`
-        : `REJECTED: SCORE_BELOW_THRESHOLD. Deterministic score ${ctx.score}/100 is below minimum threshold of ${requiredMinScore}`;
+      const reasonMsg = `REJECTED: SCORE_BELOW_THRESHOLD. Deterministic score ${ctx.score}/100 is below minimum threshold of ${requiredMinScore}`;
 
       return {
         isValid: false,
@@ -552,37 +551,10 @@ export class SignalValidator {
       };
     }
 
-    // 5. Gross Risk / Reward Ratio Check: Minimum acceptable GROSS R:R from config using RiskRewardCalculator canonical module
+    // 5. Canonical Risk / Reward Ratio Calculation (Analytics & target selection)
+    // Hard R:R validation is consolidated into the authoritative final R:R gate after final Entry, SL and TP are finalized.
     const thresholds = serverConfig.getConfig().thresholds;
     const rrResult = RiskRewardCalculator.calculate(livePrice, adjustedSL, adjustedTp1 ?? adjustedTP, adjustedTp2 ?? adjustedTP, adjustedTp3 ?? adjustedTP, direction, thresholds.minimumRR);
-    const rawRR = rrResult.grossRR;
-    if (rawRR < thresholds.minimumRR || !rrResult.isValid) {
-      logRrRejectionDiagnostic({
-        symbol,
-        direction,
-        entryPrice: livePrice,
-        stopLoss: adjustedSL,
-        tp1: adjustedTp1 ?? adjustedTP,
-        tp2: adjustedTp2 ?? adjustedTP,
-        tp3: adjustedTp3 ?? adjustedTP,
-        rejectionReason: `GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum acceptable GROSS R:R (${rrResult.reason || 'Invalid geometry'})`,
-      });
-      return {
-        isValid: false,
-        message: `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross Risk/Reward ratio (${rawRR.toFixed(2)}:1) is below ${thresholds.minimumRR}:1 minimum acceptable GROSS R:R (${rrResult.reason || 'Invalid geometry'})`,
-        adjustedStopLoss: adjustedSL,
-        adjustedTakeProfit: adjustedTP,
-        adjustedTp1: adjustedTp1 ?? adjustedTP,
-        adjustedTp2: adjustedTp2 ?? adjustedTP,
-        adjustedTp3: adjustedTp3 ?? adjustedTP,
-        adjustedGrossRR: rrResult.grossRR,
-        adjustedPrimaryRR: rrResult.primaryRR,
-        adjustedTp1RR: rrResult.tp1RR,
-        adjustedTp2RR: rrResult.tp2RR,
-        adjustedTp3RR: rrResult.tp3RR,
-      };
-    }
-
     const finalAdjustedTP = rrResult.selectedTarget === 'TP3' ? (adjustedTp3 ?? adjustedTP) : (adjustedTp2 ?? adjustedTP);
 
     return {

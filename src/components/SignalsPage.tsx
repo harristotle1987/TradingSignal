@@ -15,7 +15,6 @@ import { NotificationService, NotificationPermissionStatus } from '../utils/noti
 import { SignalHistoryPanel } from './SignalHistoryPanel.js';
 import { AssetClassScanner } from './AssetClassScanner.js';
 import { AiMarketScannerWidget } from './AiMarketScannerWidget.js';
-import { SignalSensitivitySelector } from './SignalSensitivitySelector.js';
 import {
   formatLabel,
   formatStrategy,
@@ -589,9 +588,6 @@ export function SignalsPage({ health }: SignalsPageProps) {
           </div>
         </div>
       </div>
-
-      {/* Signal Strictness & Sensitivity Profiles */}
-      <SignalSensitivitySelector compact={true} />
 
       {/* Dedicated Asset Class Signal Scanner (CRYPTO | FOREX | STOCKS) */}
       <AssetClassScanner

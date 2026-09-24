@@ -126,26 +126,7 @@ export class Gate34ExecutionFrictionStressTest {
     let isPassed = true;
     let rejectionReason: string | undefined = undefined;
 
-    // 1. GROSS R:R Check (Do NOT compare NET R:R against minimumRR, only GROSS R:R)
-    if (!rrResult.isValid || grossRR < minGrossRR) {
-      isPassed = false;
-      rejectionReason = 'GROSS_RR_BELOW_THRESHOLD';
-      reasons.push(
-        `REJECTED: GROSS_RR_BELOW_THRESHOLD. Gross R:R (${grossRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${minGrossRR}:1).`
-      );
-      logRrRejectionDiagnostic({
-        symbol: cleanSymbol,
-        direction,
-        entryPrice,
-        stopLoss,
-        tp1,
-        tp2,
-        tp3,
-        assetClass,
-        rejectionReason: `GROSS_RR_BELOW_THRESHOLD. Gross R:R (${grossRR.toFixed(2)}:1) is below minimum acceptable GROSS R:R (${minGrossRR}:1).`,
-      });
-    }
-
+    // 1. GROSS R:R Calculation (Analytics and reporting; authoritative R:R rejection occurs after final Entry, SL and TP are finalized)
     // 2. Safety Buffer Check (Reward must be at least minSafetyBufferMult x normal friction)
     if (isPassed && rawReward < normalFriction.totalFrictionPrice * minSafetyBufferMult) {
       isPassed = false;
@@ -164,23 +145,7 @@ export class Gate34ExecutionFrictionStressTest {
       );
     }
 
-    // 4. Normal NET R:R Check (Do NOT compare GROSS R:R against minimumNetRR, only normal NET R:R)
-    if (isPassed && normalNetRR < minNetRR) {
-      isPassed = false;
-      rejectionReason = 'NET_RR_BELOW_THRESHOLD';
-      reasons.push(
-        `REJECTED: NET_RR_BELOW_THRESHOLD. Normal Net R:R (${normalNetRR.toFixed(2)}:1) is below minimum acceptable NET R:R (${minNetRR}:1) (Gross R:R: ${grossRR.toFixed(2)}:1).`
-      );
-    }
-
-    // 5. Adverse Net R:R Stress Test Check (Hard gate ONLY if explicitly configured)
-    if (enforceAdverseHardGate && isPassed && adverseNetRR < minAdverseNetRR) {
-      isPassed = false;
-      rejectionReason = 'ADVERSE_NET_RR_BELOW_THRESHOLD';
-      reasons.push(
-        `REJECTED: ADVERSE_NET_RR_BELOW_THRESHOLD. Under adverse market stress (slippage/wide spread), Net R:R drops to ${adverseNetRR.toFixed(2)}:1, falling below required ${minAdverseNetRR}:1 stress floor.`
-      );
-    }
+    // 4. Normal NET R:R & Adverse Net R:R are calculated for ranking and confidence; hard Net R:R rejection is removed per Gate 6.
 
     // 6. Calculate risk-quality modifier from adverse stress test
     let adverseRiskModifier = 0;

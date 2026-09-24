@@ -36,6 +36,8 @@ import { serverConfig } from '../config.js';
 
 export type MarketRegime = Gate1Regime | 'TRENDING' | 'UPTREND' | 'DOWNTREND' | 'RANGING' | 'HIGH-VOLATILITY' | 'LOW-VOLATILITY';
 
+export type VolatilityCondition = 'NORMAL' | 'CAUTION' | 'UNSAFE';
+
 export interface StrategyResult {
   id: string;
   name: string;
@@ -44,6 +46,7 @@ export interface StrategyResult {
   passed: boolean;
   weight: number;
   reasons: string[];
+  volatilityCondition?: VolatilityCondition;
 }
 
 export interface MultiStrategyAgreement {
@@ -63,6 +66,7 @@ export interface MultiStrategyAgreement {
   evaluatedTimeframes: string[];
   reasons: string[];
   rejectionReason?: string;
+  volatilityCondition?: VolatilityCondition;
 }
 
 export class StrategyEngine {
@@ -143,38 +147,73 @@ export class StrategyEngine {
 
     const strategyResults: StrategyResult[] = [s1, s2, s3, s4, s5, s6];
 
-    // Mandatory Volatility Gate check: Strategy 6 MUST pass with clean volatility conditions
-    if (!s6.passed || s6.score < 50) {
-      return this.createRejection(`REJECTED: VOLATILITY_GATE. Volatility gate rejected setup: ${s6.reasons.join('; ')}`, regime, regimeDetails);
-    }
+    // 4b. Volatility Protection Check (Gate 4: Evidence Provider)
+    // NORMAL -> no penalty
+    // CAUTION -> modest score/ranking penalty
+    // UNSAFE/EXTREME -> HARD SAFETY BLOCK
+    // Do NOT require Strategy 6 to pass before other valid setup pathways can qualify unless condition is genuinely UNSAFE.
+    const volatilityCondition: VolatilityCondition =
+      s6.volatilityCondition || (s6.score < 30 ? 'UNSAFE' : s6.score < 70 ? 'CAUTION' : 'NORMAL');
 
-    // 5. Directional Determination according to Regime
-    let dominantDirection: SignalDirection | null = null;
-    if (StrategyEngine.isTrending(regime)) {
-      if (s1.passed && s1.direction !== 'NEUTRAL') dominantDirection = s1.direction;
-      else if (s2.passed && s2.direction !== 'NEUTRAL') dominantDirection = s2.direction;
-      else if (s3.passed && s3.direction !== 'NEUTRAL') dominantDirection = s3.direction;
-    } else if (StrategyEngine.isBreakout(regime) && s3.passed && s3.direction !== 'NEUTRAL') {
-      dominantDirection = s3.direction;
-    } else if (StrategyEngine.isRanging(regime) && s4.passed && s4.direction !== 'NEUTRAL') {
-      dominantDirection = s4.direction;
-    } else if (s1.passed && s1.direction !== 'NEUTRAL') {
-      dominantDirection = s1.direction;
-    } else if (s2.passed && s2.direction !== 'NEUTRAL') {
-      dominantDirection = s2.direction;
-    } else if (s3.passed && s3.direction !== 'NEUTRAL') {
-      dominantDirection = s3.direction;
-    }
-
-    if (!dominantDirection) {
+    if (volatilityCondition === 'UNSAFE') {
       return this.createRejection(
-        'REJECTED: NO_DIRECTION. No directional trend or validated breakout established by primary strategies',
+        `REJECTED: EXTREME_VOLATILITY. Genuine extreme volatility spike or flash breakdown detected: ${s6.reasons.join('; ')}`,
         regime,
         regimeDetails
       );
     }
 
-    // 6. Evaluate Strategy Agreement and Confluence
+    // 5. Directional Determination according to Valid Setup Pathways:
+    // Core Pathways: TREND (s1), MOMENTUM (s2), BREAKOUT (s3), REVERSAL (s4)
+    const validPathways = [
+      { id: 'TREND', strat: s1, weight: s1.weight },
+      { id: 'MOMENTUM', strat: s2, weight: s2.weight },
+      { id: 'BREAKOUT', strat: s3, weight: s3.weight },
+      { id: 'REVERSAL', strat: s4, weight: s4.weight },
+    ].filter(
+      (p): p is { id: string; strat: StrategyResult & { direction: SignalDirection }; weight: number } =>
+        p.strat.passed && p.strat.direction !== 'NEUTRAL'
+    );
+
+    // Genuine Contradictory Market-Structure Safety Check:
+    // Check if distinct active strategies present strong mutually conflicting structural directions.
+    const buyPathways = validPathways.filter((p) => p.strat.direction === 'BUY');
+    const sellPathways = validPathways.filter((p) => p.strat.direction === 'SELL');
+
+    if (buyPathways.length > 0 && sellPathways.length > 0) {
+      const maxBuyScore = Math.max(...buyPathways.map((p) => p.strat.score));
+      const maxSellScore = Math.max(...sellPathways.map((p) => p.strat.score));
+      if (maxBuyScore >= 70 && maxSellScore >= 70) {
+        return this.createRejection(
+          `REJECTED: CONTRADICTORY_MARKET_STRUCTURE. Conflicting high-conviction structural signals detected between active strategies (BUY: ${maxBuyScore}, SELL: ${maxSellScore})`,
+          regime,
+          regimeDetails
+        );
+      }
+    }
+
+    let dominantDirection: SignalDirection | null = null;
+    if (validPathways.length > 0) {
+      // Sort by regime-weighted score descending
+      validPathways.sort((a, b) => b.strat.score * b.weight - a.strat.score * a.weight);
+      dominantDirection = validPathways[0].strat.direction;
+    } else {
+      // Fallback inspection if any strategy has directional bias
+      if (s1.passed && s1.direction !== 'NEUTRAL') dominantDirection = s1.direction;
+      else if (s2.passed && s2.direction !== 'NEUTRAL') dominantDirection = s2.direction;
+      else if (s3.passed && s3.direction !== 'NEUTRAL') dominantDirection = s3.direction;
+      else if (s4.passed && s4.direction !== 'NEUTRAL') dominantDirection = s4.direction;
+    }
+
+    if (!dominantDirection) {
+      return this.createRejection(
+        'REJECTED: NO_DIRECTION. No validated setup pathway (Trend, Momentum, Breakout, Reversal) established by primary strategies',
+        regime,
+        regimeDetails
+      );
+    }
+
+    // 6. Evaluate Strategy Agreement and Confluence (Soft Evidence Provider)
     let agreeingStrategiesCount = 0;
     let weightedScoreSum = 0;
     let totalWeight = 0;
@@ -198,40 +237,36 @@ export class StrategyEngine {
     const rawWeightedScore = totalWeight > 0 ? weightedScoreSum / totalWeight : 0;
     const weightedAgreementRatio = totalWeight > 0 ? (weightedScoreSum / totalWeight) / 100 : agreementRatio;
 
-    // GATE 3 & GATE 13: Setup-Specific Qualification Pathways
-    // Allow a candidate to qualify through a valid setup pathway:
-    // - TREND: Trend Following (s1) passed in dominant direction
-    // - BREAKOUT: Breakout (s3) passed in dominant direction
-    // - REVERSAL: Mean Reversion / Reversal (s4) passed in dominant direction
-    // - MOMENTUM: Momentum Continuation (s2) passed in dominant direction
+    // GATE 3: Setup-Specific Qualification Pathways (Evidence Provider Model)
+    // A single qualified setup pathway with sufficient supporting evidence is valid.
+    // Strategy disagreement modulates confluence score, confidence, and ranking, but DOES NOT independently reject.
     const isCoreTrendCombo = s1.passed && s1.direction === dominantDirection;
     const isCoreBreakoutCombo = s3.passed && s3.direction === dominantDirection;
     const isCoreRangeCombo = s4.passed && s4.direction === dominantDirection;
     const isCoreMomentumCombo = s2.passed && s2.direction === dominantDirection;
+    const hasValidPathway = isCoreTrendCombo || isCoreBreakoutCombo || isCoreRangeCombo || isCoreMomentumCombo;
 
-    const agreementScore = Math.round(
+    let agreementScore = Math.round(
       Math.max(agreementRatio, weightedAgreementRatio) * 40 +
         (tfScores.alignedCount / Math.max(1, tfScores.totalEvaluated)) * 30 +
         (rawWeightedScore / 100) * 30
     );
 
-    // Require configurable minimum strategies agreeing ratio (or qualified core setup pathway)
+    // Gate 4: Modest score penalty for CAUTION volatility conditions
+    if (volatilityCondition === 'CAUTION') {
+      agreementScore = Math.max(0, agreementScore - 3);
+    }
+
     const thresholds = serverConfig.getConfig().thresholds;
     const minimumRequiredAgreement = thresholds.minimumStrategyAgreement;
-    const passed =
-      agreementRatio >= minimumRequiredAgreement ||
-      weightedAgreementRatio >= (minimumRequiredAgreement * 0.8) ||
-      isCoreTrendCombo ||
-      isCoreBreakoutCombo ||
-      isCoreRangeCombo ||
-      isCoreMomentumCombo;
+    const passed = hasValidPathway || agreementRatio > 0;
     const timeframeAlignmentRatio = tfScores.totalEvaluated > 0 ? tfScores.alignedCount / tfScores.totalEvaluated : 0;
 
     const hasStrongConfluence = passed;
 
     if (!hasStrongConfluence) {
       return this.createRejection(
-        `REJECTED: INSUFFICIENT_CONFLUENCE. Strategy agreement ratio ${(agreementRatio * 100).toFixed(1)}% (${agreeingStrategiesCount}/${totalStrategiesEvaluated}, min ${minimumRequiredAgreement * 100}%). Agreement Score: ${agreementScore}/100`,
+        `REJECTED: NO_VALID_SETUP_PATHWAY. No passing strategy pathway established for ${dominantDirection}.`,
         regime,
         regimeDetails
       );
@@ -239,6 +274,9 @@ export class StrategyEngine {
 
     const reasons: string[] = [];
     reasons.push(`Market Regime: ${regime} — ${regimeDetails}`);
+    if (volatilityCondition === 'CAUTION') {
+      reasons.push(`Volatility Protection: CAUTION (${s6.reasons[0] || 'caution conditions detected'})`);
+    }
     reasons.push(`Strategy Confluence: ${agreeingStrategiesCount}/${totalStrategiesEvaluated} backend strategies aligned for ${dominantDirection} (Ratio: ${(agreementRatio * 100).toFixed(1)}%)`);
     reasons.push(
       `Timeframe Hierarchy: ${tfScores.alignedCount}/${tfScores.totalEvaluated} evaluated timeframes (${availableTfs.join(
@@ -259,7 +297,7 @@ export class StrategyEngine {
       agreementRatio,
       minimumRequiredAgreement,
       passed,
-      agreementScore: Math.min(100, agreementScore),
+      agreementScore: Math.min(100, Math.max(0, agreementScore)),
       hasStrongConfluence: true,
       marketRegime: regime,
       regimeDetails,
@@ -268,6 +306,7 @@ export class StrategyEngine {
       timeframeAlignmentRatio,
       evaluatedTimeframes: availableTfs,
       reasons,
+      volatilityCondition,
     };
   }
 
@@ -511,7 +550,7 @@ export class StrategyEngine {
       name: 'Trend Following (EMA Stack Rider & Trend-Pullback)',
       direction,
       score: Math.min(100, score),
-      passed: direction !== 'NEUTRAL' && score >= 70,
+      passed: direction !== 'NEUTRAL' && score >= 65,
       weight: 1.5,
       reasons,
     };
@@ -612,7 +651,7 @@ export class StrategyEngine {
       name: 'Momentum (Zero-Lag MACD + RSI)',
       direction,
       score: Math.min(100, score),
-      passed: direction !== 'NEUTRAL' && score >= 70,
+      passed: direction !== 'NEUTRAL' && score >= 65,
       weight: 1.35,
       reasons,
     };
@@ -704,7 +743,7 @@ export class StrategyEngine {
       if (entryPrice >= channels1h.upper) score += 8;
       if (hasVolumeExpansion) score += 6;
       if (hasVolatilityExpansion) score += 4;
-      passed = score >= 70;
+      passed = score >= 65;
       reasons.push(
         `Genuine Breakout: Price (${entryPrice}) breaking 1H resistance with volume and HTF trend expansion`
       );
@@ -726,7 +765,7 @@ export class StrategyEngine {
       if (entryPrice <= channels1h.lower) score += 8;
       if (hasVolumeExpansion) score += 6;
       if (hasVolatilityExpansion) score += 4;
-      passed = score >= 70;
+      passed = score >= 65;
       reasons.push(
         `Genuine Breakdown: Price (${entryPrice}) breaking 1H support with volume and HTF trend expansion`
       );
@@ -976,9 +1015,11 @@ export class StrategyEngine {
   }
 
   // =========================================================================
-  // Strategy 6: VOLATILITY FILTER (Mandatory Gate)
-  // Rejects dead/flat markets (< 0.45 ATR ratio) and abnormal unstable conditions (> 2.80 ATR ratio).
-  // Allows and rewards valid high-volatility trend expansion (1.10x - 2.50x).
+  // Strategy 6: VOLATILITY FILTER & PROTECTION (Gate 4: Evidence Provider)
+  // Classifies conditions into: NORMAL, CAUTION, or UNSAFE.
+  // NORMAL: healthy volatility, expansion, or standard ranges -> score 85-95, passed = true, no penalty
+  // CAUTION: mild compression, pre-breakout squeeze, or elevated ATR -> score 60-75, passed = true, modest penalty
+  // UNSAFE: genuine extreme volatility spike / flash breakdown (> 3.2x ATR or erratic explosion) -> score 15, passed = false, HARD BLOCK
   // =========================================================================
   private static evalVolatilityProtection(
     symbol: string,
@@ -993,28 +1034,64 @@ export class StrategyEngine {
     const vm1h = TechnicalIndicators.calculateVolatilityMetrics(s1h, 14);
 
     const reasons: string[] = [];
-    let score = 85;
+    let score = 88;
     let passed = true;
+    let volatilityCondition: VolatilityCondition = 'NORMAL';
 
-    if (vm1h.isErratic || vm15m.isErratic || vm1h.atrRatio > 2.8) {
+    // 1. Genuine Extreme / Flash Breakdown (UNSAFE: Hard Safety Block)
+    // Only triggered on genuine catastrophic or uncontrolled volatility spikes
+    const isExtremeErratic = (vm1h.isErratic && vm1h.atrRatio > 2.8) || vm1h.atrRatio > 3.2;
+    const isDualErraticExplosion = vm1h.isErratic && vm15m.isErratic && (vm1h.atrRatio > 2.5 || vm15m.atrRatio > 2.5);
+    const isInvalidAtr = vm1h.currentAtr <= 0;
+
+    if (isExtremeErratic || isDualErraticExplosion || isInvalidAtr) {
+      volatilityCondition = 'UNSAFE';
       passed = false;
       score = 15;
-      reasons.push('Abnormal erratic volatility spike / flash breakdown detected: high risk of erratic slippage');
-    } else if (vm1h.isDeadMarket || vm15m.isDeadMarket || vm1h.atrRatio < 0.45) {
-      passed = false;
-      score = 20;
-      reasons.push('Dead/flat market conditions: ATR compression below minimum executable threshold');
-    } else if (vm1h.isValidExpansion || (vm1h.atrRatio >= 1.10 && vm1h.atrRatio <= 2.50)) {
+      reasons.push(
+        `Abnormal erratic volatility spike / flash breakdown detected (${vm1h.atrRatio}x baseline ATR): severe slippage and execution risk`
+      );
+    }
+    // 2. Cautionary Conditions (CAUTION: Modest penalty, NOT a hard block)
+    // - Dead / flat market: ATR compression < 0.45
+    // - Volatility Squeeze: ATR compressed < 0.65 on both 15m and 1h
+    // - Approaching elevated bounds: 2.5 < atrRatio <= 3.2
+    // - 15m isolated erratic spike with 1h stable
+    else if (vm1h.isDeadMarket || vm15m.isDeadMarket || vm1h.atrRatio < 0.45) {
+      volatilityCondition = 'CAUTION';
+      passed = true;
+      score = 60;
+      reasons.push(
+        `Volatility Caution: Low ATR compression (${vm1h.atrRatio}x baseline) — modest scoring penalty applied`
+      );
+    } else if (vm15m.isSqueeze && vm1h.isSqueeze) {
+      volatilityCondition = 'CAUTION';
+      passed = true;
+      score = 75;
+      reasons.push('Volatility Squeeze: Pre-breakout compression detected');
+    } else if (vm1h.atrRatio > 2.5 && vm1h.atrRatio <= 3.2) {
+      volatilityCondition = 'CAUTION';
+      passed = true;
+      score = 65;
+      reasons.push(
+        `Volatility Caution: Elevated ATR expansion (${vm1h.atrRatio}x baseline) approaching upper volatility envelope`
+      );
+    } else if (vm15m.isErratic && !vm1h.isErratic) {
+      volatilityCondition = 'CAUTION';
+      passed = true;
+      score = 70;
+      reasons.push('Volatility Caution: Lower-timeframe micro-volatility spike with stable 1h structure');
+    }
+    // 3. Normal / Healthy Expansion (NORMAL: No penalty)
+    else if (vm1h.isValidExpansion || (vm1h.atrRatio >= 1.10 && vm1h.atrRatio <= 2.50)) {
+      volatilityCondition = 'NORMAL';
       score = 95;
       passed = true;
       reasons.push(
         `Valid High-Volatility Trend Expansion: Strong executable ATR expansion (${vm1h.atrRatio}x baseline) supporting trend follow-through`
       );
-    } else if (vm15m.isSqueeze && vm1h.isSqueeze) {
-      score = 75;
-      passed = true;
-      reasons.push('Volatility squeeze detected: Potential explosive breakout buildup');
     } else {
+      volatilityCondition = 'NORMAL';
       score = 88;
       passed = true;
       reasons.push(`Optimal volatility structure confirmed (ATR ratio: ${vm1h.atrRatio}x within healthy executable bounds)`);
@@ -1028,6 +1105,7 @@ export class StrategyEngine {
       passed,
       weight: 1.0,
       reasons,
+      volatilityCondition,
     };
   }
 
@@ -1090,6 +1168,7 @@ export class StrategyEngine {
       evaluatedTimeframes: [],
       reasons: [],
       rejectionReason,
+      volatilityCondition: rejectionReason.includes('EXTREME_VOLATILITY') ? 'UNSAFE' : 'NORMAL',
     };
   }
 }

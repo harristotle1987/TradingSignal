@@ -6,7 +6,7 @@
  * CRITICAL SAFETY DIRECTIVE:
  * - "No automatic lowering of safety gates based on a small sample."
  * - Minimum R:R (1.8R) is a HARD IMMUTABLE FLOOR and will NEVER be lowered.
- * - Minimum signal score threshold (70/100) is an IMMUTABLE FLOOR.
+ * - Minimum signal score threshold (65/100) is an IMMUTABLE FLOOR.
  * - Structural SL and live spread/drift validation are IMMUTABLE SAFETY CHECKS.
  * - Minimum sample size threshold: at least 20 live completed production trades
  *   are strictly required before adaptive weight calibration takes effect.
@@ -68,7 +68,7 @@ export class AdaptiveCalibrationEngine {
     const hardSafetyFloors = {
       minimumGrossRR: 1.8,
       minimumNetRR: thresholds.minimumNetRR ?? 1.1,
-      minimumSignalScore: thresholds.signalThreshold ?? 70,
+      minimumSignalScore: thresholds.signalThreshold ?? 65,
       isSafetyLocked: true,
     };
 

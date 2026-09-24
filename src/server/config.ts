@@ -105,7 +105,7 @@ class ConfigService {
     );
     const twelvedataConfigured = Boolean(process.env.TWELVE_DATA_API_KEY && process.env.TWELVE_DATA_API_KEY.trim().length > 0);
 
-    const authoritativeMinScore = parseInt(process.env.THRESHOLD_MIN_SCORE || process.env.THRESHOLD_SIGNAL_SCORE || '70', 10);
+    const authoritativeMinScore = parseInt(process.env.THRESHOLD_MIN_SCORE || process.env.THRESHOLD_SIGNAL_SCORE || '65', 10);
     const rawWinProb = parseFloat(process.env.THRESHOLD_MIN_WIN_PROB || '55');
     const rawAiConf = parseFloat(process.env.THRESHOLD_MIN_AI_CONFIDENCE || '55');
 
@@ -183,9 +183,15 @@ class ConfigService {
   }
 
   updateThresholds(partial: Partial<SignalThresholds>): SignalThresholds {
+    const minScore = Math.max(65, partial.signalThreshold ?? partial.minimumScore ?? this.config.thresholds.signalThreshold);
+    const minRR = Math.max(1.8, partial.minimumRR ?? this.config.thresholds.minimumRR);
+
     this.config.thresholds = {
       ...this.config.thresholds,
       ...partial,
+      signalThreshold: minScore,
+      minimumScore: minScore,
+      minimumRR: minRR,
     };
     logger.info('Signal thresholds updated', { updatedThresholds: this.config.thresholds });
     return this.config.thresholds;

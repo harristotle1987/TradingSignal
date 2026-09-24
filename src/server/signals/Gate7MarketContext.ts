@@ -81,18 +81,26 @@ export class Gate7MarketContext {
     let newsRisk: 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
 
     if (newsClassification === 'BLOCK') {
+       // MAJOR ACTIVE HIGH-IMPACT EVENT → HARD BLOCK
        newsRisk = 'HIGH';
        tradingAllowed = 'NO';
        marketContextScore = 0;
        reasons.push(...gate31.reasons);
     } else if (newsClassification === 'CAUTION') {
+       // NEWS CAUTION → modest penalty
        newsRisk = 'MEDIUM';
        if (tradingAllowed === 'YES') {
           tradingAllowed = 'CAUTION';
        }
-       marketContextScore -= 20;
+       marketContextScore -= 8;
+       reasons.push(...gate31.reasons);
+    } else if (newsClassification === 'UNAVAILABLE') {
+       // NEWS DATA UNAVAILABLE → uncertainty penalty only (do not treat as dangerous news)
+       newsRisk = 'LOW';
+       marketContextScore -= 4;
        reasons.push(...gate31.reasons);
     } else {
+       // NO SIGNIFICANT NEWS → normal
        newsRisk = 'LOW';
     }
 

@@ -28,6 +28,7 @@
  */
 
 import { logger } from '../logger.js';
+import { serverConfig } from '../config.js';
 
 export interface Gate10CandidateScoreRecord {
   symbol: string;
@@ -135,7 +136,7 @@ export class Gate10ScannerTelemetry {
       `↓`,
       `${data.executionChecks} execution validations (Gate 7 Hard Gates) [Failures: ${data.hardGateFailures}]`,
       `↓`,
-      `${data.finalScores.filter((s) => s.passed).length} score >= 70 (Gate 8 Final Threshold)`,
+      `${data.finalScores.filter((s) => s.passed).length} score >= ${serverConfig.getConfig().thresholds.signalThreshold} (Gate 8 Final Threshold)`,
       `↓`,
       `${data.signalsGenerated} signal(s) published (Gate 9 Signal Cap: ${data.signalsGenerated}/3)`,
       `----------------------------------------------------------------`,

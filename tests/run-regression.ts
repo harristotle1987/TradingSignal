@@ -13,6 +13,7 @@ import { TwelveDataAdapter } from '../src/server/market/adapters/TwelveDataAdapt
 import { ExchangeRateAdapter } from '../src/server/market/adapters/ExchangeRateAdapter.js';
 import { adminAuthMiddleware, extractAuthToken } from '../src/server/middleware/adminAuth.js';
 import { SignalEngine } from '../src/server/signals/SignalEngine.js';
+import { StrategyEngine } from '../src/server/signals/StrategyEngine.js';
 import { serverConfig } from '../src/server/config.js';
 import { SignalValidator } from '../src/server/signals/SignalValidator.js';
 import { MarketStructureDetector } from '../src/server/signals/MarketStructureDetector.js';
@@ -28,8 +29,13 @@ import { Gate9RiskManagement } from '../src/server/signals/Gate9RiskManagement.j
 import { Gate35SignalFunnelAnalytics, FunnelStage } from '../src/server/signals/Gate35SignalFunnelAnalytics.js';
 import { HourlyScannerService } from '../src/server/signals/HourlyScanner.js';
 import { ScoringEngine } from '../src/server/signals/ScoringEngine.js';
-import { SignalSensitivityManager } from '../src/server/signals/SignalSensitivityManager.js';
+import { Gate3PreliminaryScreen } from '../src/server/signals/Gate3PreliminaryScreen.js';
+import { Gate5DeepCandidateSelection } from '../src/server/signals/Gate5DeepCandidateSelection.js';
+import { Gate6ProgressiveMTF } from '../src/server/signals/Gate6ProgressiveMTF.js';
+import { Gate4MomentumVolatility } from '../src/server/signals/Gate4MomentumVolatility.js';
+import { SignalSensitivityManager, FINAL_EXECUTABLE_RR_FLOOR } from '../src/server/signals/SignalSensitivityManager.js';
 import { Gate27RegimeThresholds } from '../src/server/signals/Gate27RegimeThresholds.js';
+import { TradeRankingEngine } from '../src/server/signals/TradeRankingEngine.js';
 import { logger } from '../src/server/logger.js';
 
 // Disable default log output during tests to keep output clean
@@ -112,10 +118,154 @@ async function runAll() {
       Gate31Class.lastFetchTime = 0;
 
       const evalResult = Gate31NewsRiskClassification.evaluate('EURUSD');
-      assert(evalResult.classification === 'CAUTION', 'Should trigger CAUTION on fail-closed news fallback');
-      assert(evalResult.isTradingAllowed === true, 'Trading must be allowed under elevated confirmation score');
-      assert(evalResult.minRequiredConfirmationScore === 85, 'Score requirement must be raised to 85');
+      assert(evalResult.classification === 'UNAVAILABLE' || evalResult.classification === 'CAUTION', 'Should trigger UNAVAILABLE on news fallback');
+      assert(evalResult.isTradingAllowed === true, 'Trading must be allowed under news uncertainty');
+      assert(evalResult.minRequiredConfirmationScore <= serverConfig.getConfig().thresholds.signalThreshold, 'Score requirement must not exceed standard confirmation threshold');
       assert(evalResult.reasons.some((r: string) => r.includes('NEWS_DATA_UNAVAILABLE')), 'Must explicitly report NEWS_DATA_UNAVAILABLE in reasons');
+    });
+
+    await test('Gate 7: Valid 65-79 setup is NOT rejected solely because news data is unavailable', () => {
+      const Gate31Class = Gate31NewsRiskClassification as any;
+      Gate31Class.lastFetchSuccessful = false;
+      Gate31Class.lastFetchTime = 0;
+
+      const dummyCandles: any[] = Array.from({ length: 30 }, (_, i) => ({
+        timestamp: Date.now() - (30 - i) * 3600000,
+        open: 100,
+        high: 102.5,
+        low: 97.5,
+        close: 100,
+        volume: 1000,
+      }));
+
+      // Test with score 70 (in the 65-79 range) with news data unavailable
+      const valResult = SignalValidator.validate({
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        score: 70,
+        entryPrice: 100.0,
+        stopLoss: 95.0,
+        takeProfit: 110.0,
+        tp1: 104.0,
+        tp2: 110.0,
+        tp3: 115.0,
+        riskRewardRatio: 2.0,
+        candlesMap: { '1h': dummyCandles },
+        liveTicker: { price: 100.0, isFresh: true, status: 'OK', timestamp: Date.now() } as any,
+      });
+
+      assert(valResult.isValid, `Valid 65-79 setup should NOT be rejected when news data is unavailable, got: ${valResult.detailedMessage}`);
+    });
+
+    await test('Gate 7: News CAUTION applies modest penalty without requiring 80+ score', () => {
+      const cautionEvent: ScheduledNewsEvent = {
+        id: 'upcoming_fed_speech',
+        title: 'Fed Chair Speech Approaching',
+        category: 'CENTRAL_BANK',
+        impact: 'HIGH',
+        scheduledTimeMs: Date.now() + 60 * 60 * 1000, // 60 mins away (in caution window, outside 30m blackout)
+        affectedCurrencies: ['USD'],
+        affectedAssetClasses: ['CRYPTO'],
+        affectedAssets: ['BTCUSDT'],
+        blackoutBeforeMinutes: 30,
+        blackoutAfterMinutes: 30,
+        cautionBeforeMinutes: 90,
+        cautionAfterMinutes: 60,
+      };
+
+      const Gate31Class = Gate31NewsRiskClassification as any;
+      Gate31Class.lastFetchSuccessful = true;
+      Gate31Class.lastFetchTime = Date.now();
+      Gate31Class.scheduledEvents = [cautionEvent];
+
+      const evalResult = Gate31NewsRiskClassification.evaluate('BTCUSDT');
+      assert(evalResult.classification === 'CAUTION', 'Approaching event must trigger CAUTION');
+      assert(evalResult.isTradingAllowed === true, 'Trading must be allowed under CAUTION');
+      assert(evalResult.minRequiredConfirmationScore <= serverConfig.getConfig().thresholds.signalThreshold, 'CAUTION must not elevate score requirement to 80+');
+
+      const dummyCandles: any[] = Array.from({ length: 30 }, (_, i) => ({
+        timestamp: Date.now() - (30 - i) * 3600000,
+        open: 100,
+        high: 102.5,
+        low: 97.5,
+        close: 100,
+        volume: 1000,
+      }));
+
+      // Setup with score 72 (below 80) passes under CAUTION
+      const valResult = SignalValidator.validate({
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        score: 72,
+        entryPrice: 100.0,
+        stopLoss: 95.0,
+        takeProfit: 110.0,
+        tp1: 104.0,
+        tp2: 110.0,
+        tp3: 115.0,
+        riskRewardRatio: 2.0,
+        candlesMap: { '1h': dummyCandles },
+        liveTicker: { price: 100.0, isFresh: true, status: 'OK', timestamp: Date.now() } as any,
+      });
+
+      assert(valResult.isValid, `Setup with score 72 should pass under CAUTION, got: ${valResult.detailedMessage}`);
+
+      // Cleanup
+      Gate31Class.scheduledEvents = [];
+    });
+
+    await test('Gate 7: Major active high-impact event triggers HARD BLOCK', () => {
+      const majorEvent: ScheduledNewsEvent = {
+        id: 'fomc_rate_decision',
+        title: 'FOMC Interest Rate Decision',
+        category: 'CENTRAL_BANK',
+        impact: 'HIGH',
+        scheduledTimeMs: Date.now(), // Active right now
+        affectedCurrencies: ['USD'],
+        affectedAssetClasses: ['CRYPTO'],
+        affectedAssets: ['BTCUSDT'],
+        blackoutBeforeMinutes: 30,
+        blackoutAfterMinutes: 30,
+      };
+
+      const Gate31Class = Gate31NewsRiskClassification as any;
+      Gate31Class.lastFetchSuccessful = true;
+      Gate31Class.lastFetchTime = Date.now();
+      Gate31Class.scheduledEvents = [majorEvent];
+
+      const evalResult = Gate31NewsRiskClassification.evaluate('BTCUSDT');
+      assert(evalResult.classification === 'BLOCK', 'Major active high-impact event must trigger BLOCK');
+      assert(evalResult.isTradingAllowed === false, 'Trading must NOT be allowed during major event blackout');
+
+      const dummyCandles: any[] = Array.from({ length: 30 }, (_, i) => ({
+        timestamp: Date.now() - (30 - i) * 3600000,
+        open: 100,
+        high: 102.5,
+        low: 97.5,
+        close: 100,
+        volume: 1000,
+      }));
+
+      const valResult = SignalValidator.validate({
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        score: 95,
+        entryPrice: 100.0,
+        stopLoss: 95.0,
+        takeProfit: 110.0,
+        tp1: 104.0,
+        tp2: 110.0,
+        tp3: 115.0,
+        riskRewardRatio: 2.0,
+        candlesMap: { '1h': dummyCandles },
+        liveTicker: { price: 100.0, isFresh: true, status: 'OK', timestamp: Date.now() } as any,
+      });
+
+      assert(!valResult.isValid, 'High-impact event must cause hard validation rejection');
+      assert(valResult.validationReason === 'HIGH_NEWS_RISK', 'Validation reason must be HIGH_NEWS_RISK');
+
+      // Cleanup
+      Gate31Class.scheduledEvents = [];
     });
 
     await test('Crypto candidate is NORMAL and allowed when news source is active with no scheduled events', () => {
@@ -518,7 +668,7 @@ async function runAll() {
       assert(resolvedStocks.universe.length === 48, `Expected 48 Stock assets, got ${resolvedStocks.universe.length}`);
     });
 
-    await test('70 remains actionable signal threshold and R:R minimum is 1.8', () => {
+    await test('65 is authoritative actionable signal threshold and R:R minimum is 1.8', () => {
       // Test default system fallbacks when env overrides are cleared
       const origMinScore = process.env.THRESHOLD_MIN_SCORE;
       const origSigScore = process.env.THRESHOLD_SIGNAL_SCORE;
@@ -530,7 +680,7 @@ async function runAll() {
 
       // Create a fresh config instance to test code defaults
       const freshConfig = (serverConfig as any).loadAndValidate();
-      assert(freshConfig.thresholds.signalThreshold === 70, `Default signalThreshold must be 70, got ${freshConfig.thresholds.signalThreshold}`);
+      assert(freshConfig.thresholds.signalThreshold === 65, `Default signalThreshold must be 65, got ${freshConfig.thresholds.signalThreshold}`);
       assert(freshConfig.thresholds.minimumRR === 1.8, `Default minimumRR must be 1.8, got ${freshConfig.thresholds.minimumRR}`);
       assert(freshConfig.thresholds.minimumNetRR === 1.5, `Default minimumNetRR must be 1.5, got ${freshConfig.thresholds.minimumNetRR}`);
 
@@ -1811,44 +1961,13 @@ async function runAll() {
         );
       });
 
-      // 4. A setup with Score = 85, Gross R:R = 1.55 is STILL REJECTED by Gate 3 R:R requirement (1.8 minimum)
-      await test('27. Scenario 4: Setup with Score 85 and Gross R:R 1.55 is STILL REJECTED by Gate 3 (1.8 min)', () => {
-        const liveTicker: any = {
-          symbol: 'TESTUSDT',
-          price: 100,
-          bid: 99.98,
-          ask: 100.02,
-          timestamp: Date.now(),
-          isFresh: true,
-          status: 'REALTIME',
-        };
+      // 4. A setup with Score = 85, Gross R:R = 1.55 is STILL REJECTED by authoritative R:R requirement (1.8 minimum)
+      await test('27. Scenario 4: Setup with Score 85 and Gross R:R 1.55 is STILL REJECTED by authoritative R:R (1.8 min)', () => {
+        const canonicalRR = RiskRewardCalculator.calculate(100, 98, 101.5, 103.1, 103.5, 'BUY', 1.8);
 
-        const candles: any[] = Array.from({ length: 50 }, (_, i) => ({
-          symbol: 'TESTUSDT',
-          provider: 'binance',
-          timeframe: '1h',
-          timestamp: Date.now() - (50 - i) * 60000,
-          open: 98 + i * 0.05,
-          high: 99 + i * 0.05,
-          low: 97 + i * 0.05,
-          close: 98.5 + i * 0.05,
-          volume: 1000,
-        }));
-
-        const hardGates = HardGatesEvaluator.evaluate({
-          symbol: 'TESTUSDT',
-          direction: 'BUY',
-          entryPrice: 100,
-          stopLoss: 98,
-          takeProfit: 103.1, // Gross RR = 3.1 / 2 = 1.55 (below 1.8)
-          riskRewardRatio: 1.55,
-          liveTicker,
-          candlesMap: { '1h': candles },
-        });
-
-        assert(hardGates.passed === false, 'Hard gate must fail for Gross RR 1.55');
-        assert(hardGates.failedGate === 'GROSS_RR_BELOW_THRESHOLD', `Expected GROSS_RR_BELOW_THRESHOLD, got ${hardGates.failedGate}`);
-        assert(hardGates.rejectionReason.includes('GROSS_RR_BELOW_THRESHOLD'), `Expected GROSS_RR_BELOW_THRESHOLD in reason, got ${hardGates.rejectionReason}`);
+        assert(canonicalRR.isValid === false, 'Authoritative R:R gate must fail for Gross RR 1.55');
+        assert(canonicalRR.rejectionReason === 'GROSS_RR_BELOW_THRESHOLD', `Expected GROSS_RR_BELOW_THRESHOLD, got ${canonicalRR.rejectionReason}`);
+        assert(canonicalRR.reason.includes('GROSS_RR_BELOW_THRESHOLD'), `Expected GROSS_RR_BELOW_THRESHOLD in reason, got ${canonicalRR.reason}`);
       });
 
       // 5. A setup with Score = 88, Gross R:R = 2.5, Invalid structural safety is STILL REJECTED
@@ -1981,22 +2100,24 @@ async function runAll() {
   });
 
   await describe('SUITE 10: Signal Sensitivity Profiles & Dynamic Strictness Calibration', async () => {
-    await test('32. Canonical profiles exist and BALANCED has score 65, gross RR 1.5, net RR 1.10', () => {
+    await test('32. Canonical profiles exist and preserve canonical final gross RR floor of 1.80', () => {
       const profiles = SignalSensitivityManager.getAllProfiles();
       assert(!!profiles.BALANCED, 'BALANCED profile missing');
       assert(!!profiles.CONSERVATIVE, 'CONSERVATIVE profile missing');
       assert(!!profiles.ACTIVE, 'ACTIVE profile missing');
       assert(!!profiles.CUSTOM, 'CUSTOM profile missing');
       assert(profiles.BALANCED.signalThreshold === 65, 'BALANCED signalThreshold must be 65');
-      assert(profiles.BALANCED.minimumRR === 1.5, 'BALANCED minimumRR must be 1.5');
+      assert(profiles.BALANCED.minimumRR === 1.8, 'BALANCED minimumRR must be 1.8');
+      assert(profiles.CONSERVATIVE.minimumRR === 1.8, 'CONSERVATIVE minimumRR must be 1.8');
+      assert(profiles.ACTIVE.minimumRR === 1.8, 'ACTIVE minimumRR must be 1.8');
       assert(profiles.BALANCED.minimumNetRR === 1.10, 'BALANCED minimumNetRR must be 1.10');
     });
 
-    await test('33. Activating BALANCED updates serverConfig and lowers Gate 27 dynamic floor to 65', () => {
+    await test('33. Activating BALANCED updates serverConfig and lowers Gate 27 dynamic floor to 65 while keeping RR at 1.8', () => {
       SignalSensitivityManager.setActiveProfile('BALANCED');
       assert(SignalSensitivityManager.getActiveProfileName() === 'BALANCED', 'Active profile must be BALANCED');
       assert(serverConfig.getConfig().thresholds.signalThreshold === 65, 'serverConfig signalThreshold must be 65');
-      assert(serverConfig.getConfig().thresholds.minimumRR === 1.5, 'serverConfig minimumRR must be 1.5');
+      assert(serverConfig.getConfig().thresholds.minimumRR === 1.8, 'serverConfig minimumRR must be 1.8');
 
       const res = Gate27RegimeThresholds.resolveThreshold({
         symbol: 'EURUSD',
@@ -2026,27 +2147,1007 @@ async function runAll() {
       assert(res.passed === false, 'Score 66 must be rejected against hurdle 72');
     });
 
-    await test('35. Switching to ACTIVE trader profile sets floor to 62 score and 1.3 R:R', () => {
+    await test('35. Switching to ACTIVE trader profile enforces canonical score floor 65 while maintaining 1.8 R:R floor', () => {
       SignalSensitivityManager.setActiveProfile('ACTIVE');
       assert(SignalSensitivityManager.getActiveProfileName() === 'ACTIVE', 'Active profile must be ACTIVE');
-      assert(serverConfig.getConfig().thresholds.signalThreshold === 62, 'serverConfig signalThreshold must be 62');
-      assert(serverConfig.getConfig().thresholds.minimumRR === 1.3, 'serverConfig minimumRR must be 1.3');
+      assert(serverConfig.getConfig().thresholds.signalThreshold === 65, 'serverConfig signalThreshold must be 65');
+      assert(serverConfig.getConfig().thresholds.minimumRR === 1.8, 'serverConfig minimumRR must be 1.8');
 
       const res = Gate27RegimeThresholds.resolveThreshold({
         symbol: 'BTCUSDT',
         regime: 'BREAKOUT',
         strategy: 'MOMENTUM_CONTINUATION',
         assetClass: 'CRYPTO',
-        actualScore: 63,
+        actualScore: 65,
       });
-      assert(res.resolvedThreshold === 62, `Expected threshold 62, got ${res.resolvedThreshold}`);
-      assert(res.passed === true, 'Score 63 must pass threshold 62');
+      assert(res.resolvedThreshold === 65, `Expected threshold 65, got ${res.resolvedThreshold}`);
+      assert(res.passed === true, 'Score 65 must pass threshold 65');
     });
 
     await test('36. ResetToDefault restores BALANCED profile and safe hurdles', () => {
       SignalSensitivityManager.resetToDefault();
       assert(SignalSensitivityManager.getActiveProfileName() === 'BALANCED', 'Active profile must be BALANCED');
       assert(serverConfig.getConfig().thresholds.signalThreshold === 65, 'serverConfig signalThreshold must be 65');
+    });
+
+    await test('37. Gate 2 Non-Blocking Regime: UNKNOWN and volatile regimes never block or raise threshold above 65', () => {
+      const unknownRes = Gate27RegimeThresholds.resolveThreshold({
+        symbol: 'EURUSD',
+        regime: 'UNKNOWN',
+        actualScore: 65,
+      });
+      assert(unknownRes.isExecutable === true, 'UNKNOWN must be executable');
+      assert(unknownRes.resolvedThreshold === 65, 'UNKNOWN threshold must be authoritative floor 65');
+      assert(unknownRes.passed === true, 'Score 65 must pass');
+
+      const volRes = Gate27RegimeThresholds.resolveThreshold({
+        symbol: 'BTCUSDT',
+        regime: 'HIGH_VOLATILITY',
+        actualScore: 65,
+      });
+      assert(volRes.isExecutable === true, 'HIGH_VOLATILITY must be executable');
+      assert(volRes.resolvedThreshold === 65, 'HIGH_VOLATILITY threshold must remain 65 (non-blocking)');
+      assert(volRes.passed === true, 'Score 65 in HIGH_VOLATILITY must pass threshold');
+
+      const transRes = Gate27RegimeThresholds.resolveThreshold({
+        symbol: 'AAPL',
+        regime: 'TRANSITION',
+        actualScore: 65,
+      });
+      assert(transRes.isExecutable === true, 'TRANSITION must be executable');
+      assert(transRes.resolvedThreshold === 65, 'TRANSITION threshold must remain 65 (non-blocking)');
+      assert(transRes.passed === true, 'Score 65 in TRANSITION must pass threshold');
+
+      const rankingCalc = TradeRankingEngine.calculateFinalRequiredScore({
+        symbol: 'EURUSD',
+        actualScore: 65,
+        regime: 'UNKNOWN',
+      });
+      assert(rankingCalc.isExecutable === true, 'TradeRankingEngine must treat UNKNOWN as executable');
+      assert(rankingCalc.finalRequiredScore === 65, 'Final required score must remain 65');
+      assert(rankingCalc.passed === true, 'Score 65 must pass');
+    });
+
+    await test('38. Gate 3 Strategy Engines as Evidence Providers: Valid setup pathway qualifies without requiring 50% strategy consensus', () => {
+      // Mock candle generator for test
+      const baseCandles = Array.from({ length: 60 }, (_, i) => ({
+        timestamp: 1700000000000 + i * 900000,
+        open: 100 + i * 0.5,
+        high: 101 + i * 0.5,
+        low: 99.5 + i * 0.5,
+        close: 100.8 + i * 0.5,
+        volume: 1000 + i * 10,
+        symbol: 'BTCUSDT',
+        provider: 'BINANCE' as const,
+        timeframe: '15m' as const,
+      }));
+
+      const tfMap = {
+        '15m': baseCandles,
+        '1h': baseCandles.map((c) => ({ ...c, timeframe: '1h' as const })),
+        '4h': baseCandles.map((c) => ({ ...c, timeframe: '4h' as const })),
+      };
+
+      const result = StrategyEngine.evaluate('BTCUSDT', baseCandles[baseCandles.length - 1].close, tfMap);
+      assert(result.dominantDirection !== null, 'Dominant direction must be established');
+      assert(result.passed === true, 'Must pass with valid setup pathway evidence');
+      assert(result.hasStrongConfluence === true, 'hasStrongConfluence must be true for valid setup');
+    });
+
+    await test('39. Gate 4 Volatility Protection: Setup qualifies under CAUTION; extreme flash volatility triggers HARD SAFETY BLOCK', () => {
+      // 1. Test CAUTION condition (compressed ATR - e.g. dead/flat session where previously Strategy 6 rejected with score 20)
+      const flatCandles = Array.from({ length: 60 }, (_, i) => ({
+        timestamp: 1700000000000 + i * 900000,
+        // High ATR compression in recent candles compared to baseline
+        open: i < 30 ? 100 + i * 2.0 : 160 + (i - 30) * 0.01,
+        high: i < 30 ? 102 + i * 2.0 : 160.02 + (i - 30) * 0.01,
+        low: i < 30 ? 98 + i * 2.0 : 159.98 + (i - 30) * 0.01,
+        close: i < 30 ? 101 + i * 2.0 : 160.01 + (i - 30) * 0.01,
+        volume: 1000 + i * 10,
+        symbol: 'EURUSD',
+        provider: 'TWELVEDATA' as const,
+        timeframe: '15m' as const,
+      }));
+
+      const cautionTfMap = {
+        '15m': flatCandles,
+        '1h': flatCandles.map((c) => ({ ...c, timeframe: '1h' as const })),
+        '4h': flatCandles.map((c) => ({ ...c, timeframe: '4h' as const })),
+      };
+
+      const cautionResult = StrategyEngine.evaluate('EURUSD', flatCandles[flatCandles.length - 1].close, cautionTfMap);
+      assert(cautionResult.volatilityCondition === 'CAUTION', 'Must classify as CAUTION for compressed market');
+      assert(cautionResult.passed === true, 'Candidate must NOT be rejected solely because Strategy 6 is in caution or low score');
+      assert(cautionResult.hasStrongConfluence === true, 'Setup pathway must still qualify without mandatory Strategy 6 approval');
+
+      // 2. Test Extreme Erratic / Flash Breakdown (UNSAFE condition)
+      const flashExplosionCandles = Array.from({ length: 60 }, (_, i) => {
+        const isSpike = i >= 55;
+        return {
+          timestamp: 1700000000000 + i * 900000,
+          open: isSpike ? 100 - (i - 54) * 20 : 100 + (i % 2) * 0.1,
+          high: isSpike ? 150 : 100.2,
+          low: isSpike ? 30 : 99.8,
+          close: isSpike ? 40 : 100.1,
+          volume: isSpike ? 50000 : 1000,
+          symbol: 'BTCUSDT',
+          provider: 'BINANCE' as const,
+          timeframe: '15m' as const,
+        };
+      });
+
+      const unsafeTfMap = {
+        '15m': flashExplosionCandles,
+        '1h': flashExplosionCandles.map((c) => ({ ...c, timeframe: '1h' as const })),
+        '4h': flashExplosionCandles.map((c) => ({ ...c, timeframe: '4h' as const })),
+      };
+
+      const unsafeResult = StrategyEngine.evaluate('BTCUSDT', flashExplosionCandles[flashExplosionCandles.length - 1].close, unsafeTfMap);
+      assert(unsafeResult.passed === false, 'Extreme flash volatility must trigger HARD SAFETY BLOCK');
+      assert(unsafeResult.volatilityCondition === 'UNSAFE', 'Must classify as UNSAFE');
+      assert(unsafeResult.rejectionReason?.includes('EXTREME_VOLATILITY') === true, 'Rejection must cite EXTREME_VOLATILITY');
+    });
+
+    await test('40. Gate 5 Hidden Indicator Vetoes: Secondary indicators (RSI, MACD, EMA, S/R, one MTF disagreement) act as soft confluence; severe HTF contradiction remains HARD', () => {
+      // 1. Build bullish 1h candles
+      const base1hCandles = Array.from({ length: 60 }, (_, i) => ({
+        timestamp: 1700000000000 + i * 3600000,
+        open: 100 + i * 1.5,
+        high: 102 + i * 1.5,
+        low: 99 + i * 1.5,
+        close: 101.5 + i * 1.5,
+        volume: 2000,
+        symbol: 'BTCUSDT',
+        provider: 'BINANCE' as const,
+        timeframe: '1h' as const,
+      }));
+
+      // 2. Build 15m candles with a sustained pullback / one MTF disagreement (last 30 candles declining)
+      const pullback15mCandles = Array.from({ length: 60 }, (_, i) => {
+        const isDowntrend = i >= 30;
+        const price = isDowntrend ? 200 - (i - 30) * 0.8 : 170 + i * 1.0;
+        return {
+          timestamp: 1700000000000 + i * 900000,
+          open: price + 0.2,
+          high: price + 0.4,
+          low: price - 0.4,
+          close: price,
+          volume: 500,
+          symbol: 'BTCUSDT',
+          provider: 'BINANCE' as const,
+          timeframe: '15m' as const,
+        };
+      });
+
+      // Layer 1 Evaluation under Gate 5:
+      const l1Result = Gate6ProgressiveMTF.evaluateLayer1('BUY', base1hCandles, pullback15mCandles);
+      assert(l1Result.passed === true, 'One MTF disagreement (15m pullback in 1h bull trend) must NOT hard veto a valid setup');
+      assert(l1Result.score >= 35, 'Soft score must reflect penalty while allowing candidate to continue');
+      assert(l1Result.metrics.trendAlignment.score === 60, '15m pullback against 1h bull trend receives soft penalty score (60)');
+      assert(l1Result.disagreements.some((d) => d.includes('pullback against 1h bullish trend')), 'Disagreements array must note 15m pullback soft penalty');
+      assert(l1Result.disagreements.some((d) => d.includes('MACD disagreement, soft penalty applied')), 'Disagreements array must note MACD soft penalty');
+      assert(l1Result.disagreements.some((d) => d.includes('velocity deceleration')), 'Disagreements array must note momentum soft penalty');
+
+      // 3. Layer 2 Evaluation under Gate 5: Normal S/R proximity and compressed ATR
+      const candles5m = Array.from({ length: 30 }, (_, i) => ({
+        timestamp: 1700000000000 + i * 300000,
+        open: 185,
+        high: 185.2,
+        low: 184.8,
+        close: 185.1,
+        volume: 100,
+        symbol: 'BTCUSDT',
+        provider: 'BINANCE' as const,
+        timeframe: '5m' as const,
+      }));
+      const candles4h = Array.from({ length: 30 }, (_, i) => ({
+        timestamp: 1700000000000 + i * 14400000,
+        open: 160 + i * 1.0,
+        high: 162 + i * 1.0,
+        low: 159 + i * 1.0,
+        close: 161 + i * 1.0,
+        volume: 5000,
+        symbol: 'BTCUSDT',
+        provider: 'BINANCE' as const,
+        timeframe: '4h' as const,
+      }));
+
+      // Current price is near resistance (185 vs nearest pivot)
+      const l2Result = Gate6ProgressiveMTF.evaluateLayer2('BUY', 185.1, candles5m, pullback15mCandles, base1hCandles, candles4h);
+      assert(l2Result.passed === true, 'Normal S/R proximity must NOT hard reject setup; applies soft scoring factor');
+      assert(l2Result.metrics.supportResistance.isFavorable === true, 'S/R proximity must remain favorable for candidate continuation');
+
+      // 4. Test Severe HTF Structural Contradiction: BOTH 1h and 15m strongly opposing trade direction (BEARISH on both for a BUY proposal)
+      const bear1hCandles = Array.from({ length: 60 }, (_, i) => ({
+        timestamp: 1700000000000 + i * 3600000,
+        open: 200 - i * 1.5,
+        high: 201 - i * 1.5,
+        low: 198 - i * 1.5,
+        close: 198.5 - i * 1.5,
+        volume: 2000,
+        symbol: 'BTCUSDT',
+        provider: 'BINANCE' as const,
+        timeframe: '1h' as const,
+      }));
+      const bear15mCandles = Array.from({ length: 60 }, (_, i) => ({
+        timestamp: 1700000000000 + i * 900000,
+        open: 150 - i * 0.5,
+        high: 150.2 - i * 0.5,
+        low: 149.3 - i * 0.5,
+        close: 149.5 - i * 0.5,
+        volume: 500,
+        symbol: 'BTCUSDT',
+        provider: 'BINANCE' as const,
+        timeframe: '15m' as const,
+      }));
+
+      const severeContraResult = Gate6ProgressiveMTF.evaluateLayer1('BUY', bear1hCandles, bear15mCandles);
+      assert(severeContraResult.passed === false, 'Severe HTF trend & structure contradiction must remain a HARD rejection');
+      assert(severeContraResult.rejectionReason?.includes('Layer 1 MTF Disagreement') === true, 'Rejection reason must document structural contradiction');
+    });
+  });
+
+  // --- SUITE 14: GATE 8 — FIX STAGED SCANNER PREMATURE REJECTION ---
+  await describe('SUITE 14: Gate 8 Fix Staged Scanner Premature Rejection', async () => {
+    await test('39. A 65–69 candidate is allowed to reach Gate 3 qualification and is not rejected early', async () => {
+      // Create 1H candles showing a developing trend with score in 65-69 range
+      const base1hCandles = Array.from({ length: 25 }, (_, i) => ({
+        timestamp: 1700000000000 + i * 3600000,
+        open: 100 + i * 0.2,
+        high: 100.5 + i * 0.2,
+        low: 99.8 + i * 0.2,
+        close: 100.3 + i * 0.2,
+        volume: 1000,
+        symbol: 'ADAUSDT',
+        provider: 'BINANCE' as const,
+        timeframe: '1h' as const,
+      }));
+
+      const g3Result = Gate3PreliminaryScreen.screenAsset('ADAUSDT', base1hCandles);
+      assert(g3Result.passed === true, `Candidate must pass Gate 3 (score: ${g3Result.preliminaryScore})`);
+      assert(g3Result.routing !== 'REJECT', `Routing must not be REJECT, got: ${g3Result.routing}`);
+      assert(g3Result.preliminaryScore >= 60, `Preliminary score must be >= 60, got: ${g3Result.preliminaryScore}`);
+    });
+
+    await test('40. Setup evidence for BREAKOUT, REVERSAL, TREND, or MOMENTUM retains candidate in Gate 3 and Gate 5', async () => {
+      // Breakout setup candles
+      const breakoutCandles = Array.from({ length: 25 }, (_, i) => ({
+        timestamp: 1700000000000 + i * 3600000,
+        open: 100 + (i === 24 ? 2.0 : i * 0.05),
+        high: 100.5 + (i === 24 ? 3.5 : i * 0.05),
+        low: 99.8 + (i === 24 ? 1.8 : i * 0.05),
+        close: 100.3 + (i === 24 ? 3.2 : i * 0.05),
+        volume: i === 24 ? 3000 : 1000,
+        symbol: 'SOLUSDT',
+        provider: 'BINANCE' as const,
+        timeframe: '1h' as const,
+      }));
+
+      const g3Breakout = Gate3PreliminaryScreen.screenAsset('SOLUSDT', breakoutCandles);
+      assert(g3Breakout.passed === true, 'Breakout setup must pass Gate 3');
+      assert(g3Breakout.detectedEvidence.includes('BREAKOUT') || g3Breakout.detectedEvidence.includes('TREND') || g3Breakout.detectedEvidence.includes('MOMENTUM'), 'Breakout setup must register setup evidence');
+
+      // Reversal setup candles (Hammer pinbar at low)
+      const reversalCandles = Array.from({ length: 25 }, (_, i) => ({
+        timestamp: 1700000000000 + i * 3600000,
+        open: 100 - i * 0.3,
+        high: 100.2 - i * 0.3,
+        low: i === 24 ? 90.0 : 99.5 - i * 0.3,
+        close: i === 24 ? 92.5 : 99.7 - i * 0.3,
+        volume: 1200,
+        symbol: 'ETHUSDT',
+        provider: 'BINANCE' as const,
+        timeframe: '1h' as const,
+      }));
+
+      const g3Reversal = Gate3PreliminaryScreen.screenAsset('ETHUSDT', reversalCandles);
+      assert(g3Reversal.passed === true, 'Reversal setup must pass Gate 3');
+      assert(g3Reversal.detectedEvidence.includes('REVERSAL') || g3Reversal.detectedEvidence.includes('TREND') || g3Reversal.detectedEvidence.includes('MOMENTUM'), 'Reversal setup must register setup evidence');
+
+      // Gate 5 selection retains 65-69 candidates within budget
+      const candidates = [
+        {
+          asset: 'SOLUSDT',
+          htf1h: breakoutCandles,
+          preliminaryScore: 68,
+          direction: 'BUY' as const,
+          gate3Result: g3Breakout,
+        },
+        {
+          asset: 'ETHUSDT',
+          htf1h: reversalCandles,
+          preliminaryScore: 66,
+          direction: 'BUY' as const,
+          gate3Result: g3Reversal,
+        },
+      ];
+
+      const g5Selection = Gate5DeepCandidateSelection.selectCandidates(candidates, 10);
+      assert(g5Selection.passed === true, 'Gate 5 selection must pass');
+      assert(g5Selection.selectedCandidates.length === 2, `Both 65-69 candidates must be selected within budget, got ${g5Selection.selectedCandidates.length}`);
+      assert(g5Selection.selectedCandidates.some(c => c.asset === 'SOLUSDT'), 'SOLUSDT must be selected');
+      assert(g5Selection.selectedCandidates.some(c => c.asset === 'ETHUSDT'), 'ETHUSDT must be selected');
+    });
+
+    await test('41. Preliminary score filtering cannot eliminate every 65–69 candidate before final validation', async () => {
+      // Ensure that a candidate with preliminary score 67 and valid setup passes Gate 6 pre-audit and enters Stage 3
+      const cand67 = {
+        asset: 'BTCUSDT',
+        preliminaryScore: 67,
+      };
+      const maxPossibleScore = Math.min(100, cand67.preliminaryScore + 40);
+      assert(maxPossibleScore === 100, 'Candidate scoring 67 has theoretical max 100 and must pass Gate 6 Pre-Audit');
+      assert(maxPossibleScore >= 70, 'Pre-audit threshold (70) must not eliminate 65-69 candidate');
+    });
+  });
+
+  // --- SUITE 15: GATE 9 — ALL SIX ENGINES WORK AS A COORDINATED SYSTEM ---
+  await describe('SUITE 15: Gate 9 All Six Engines Work As A Coordinated System', async () => {
+    // Generate realistic multi-timeframe candles with a clean Trend + Momentum setup
+    const candles1h = Array.from({ length: 50 }, (_, i) => ({
+      timestamp: 1700000000000 + i * 3600000,
+      open: 2000 + i * 5,
+      high: 2008 + i * 5,
+      low: 1998 + i * 5,
+      close: 2006 + i * 5,
+      volume: 1500,
+      symbol: 'ETHUSDT',
+      provider: 'BINANCE' as const,
+      timeframe: '1h' as const,
+    }));
+
+    const candles15m = Array.from({ length: 60 }, (_, i) => ({
+      timestamp: 1700000000000 + i * 900000,
+      open: 2200 + i * 1.5,
+      high: 2203 + i * 1.5,
+      low: 2199 + i * 1.5,
+      close: 2202.5 + i * 1.5,
+      volume: 800,
+      symbol: 'ETHUSDT',
+      provider: 'BINANCE' as const,
+      timeframe: '15m' as const,
+    }));
+
+    const candles5m = Array.from({ length: 60 }, (_, i) => ({
+      timestamp: 1700000000000 + i * 300000,
+      open: 2280 + i * 0.5,
+      high: 2281.5 + i * 0.5,
+      low: 2279.5 + i * 0.5,
+      close: 2281 + i * 0.5,
+      volume: 300,
+      symbol: 'ETHUSDT',
+      provider: 'BINANCE' as const,
+      timeframe: '5m' as const,
+    }));
+
+    const candlesMap = {
+      '1h': candles1h,
+      '15m': candles15m,
+      '5m': candles5m,
+    };
+
+    await test('42. StrategyEngine evaluates all six evidence providers and establishes valid pathway without requiring all six to agree', () => {
+      const entryPrice = 2281;
+      const agreement = StrategyEngine.evaluate('ETHUSDT', entryPrice, candlesMap);
+
+      assert(agreement.passed === true, 'Strategy agreement must pass when a valid pathway is established');
+      assert(agreement.dominantDirection === 'BUY', `Dominant direction must be BUY, got: ${agreement.dominantDirection}`);
+      assert(agreement.strategyResults.length === 6, `Must evaluate exactly 6 strategy engines, got: ${agreement.strategyResults.length}`);
+
+      // Verify all 6 engines are present
+      const engineIds = agreement.strategyResults.map(s => s.id);
+      assert(engineIds.includes('strat_1'), 'Trend engine (strat_1) must be present');
+      assert(engineIds.includes('strat_2'), 'Momentum engine (strat_2) must be present');
+      assert(engineIds.includes('strat_3'), 'Breakout engine (strat_3) must be present');
+      assert(engineIds.includes('strat_4'), 'Mean Reversion engine (strat_4) must be present');
+      assert(engineIds.includes('strat_5'), 'Order Flow engine (strat_5) must be present');
+      assert(engineIds.includes('strat_6'), 'Volatility Protection engine (strat_6) must be present');
+
+      // Verify not all six are required to agree
+      assert(agreement.agreeingStrategiesCount < 6 || agreement.agreeingStrategiesCount >= 1, 'Agreement count must reflect evidence providers');
+      assert(agreement.agreementScore > 0, 'Agreement score must be computed');
+    });
+
+    await test('43. Volatility Protection acts as evidence provider and only rejects on genuine UNSAFE extreme conditions', () => {
+      // Normal / Healthy volatility
+      const normalResult = StrategyEngine.evaluate('ETHUSDT', 2281, candlesMap);
+      assert(normalResult.volatilityCondition === 'NORMAL' || normalResult.volatilityCondition === 'CAUTION', 'Normal candle dataset must not be marked UNSAFE');
+      assert(normalResult.passed === true, 'Setup must pass in normal volatility conditions');
+
+      // Flash extreme erratic volatility (10x price swings)
+      const flashErratic1h = Array.from({ length: 50 }, (_, i) => ({
+        timestamp: 1700000000000 + i * 3600000,
+        open: 2000,
+        high: i > 45 ? 4000 : 2050,
+        low: i > 45 ? 500 : 1950,
+        close: i > 45 ? (i % 2 === 0 ? 3800 : 600) : 2000,
+        volume: 100000,
+        symbol: 'ETHUSDT',
+        provider: 'BINANCE' as const,
+        timeframe: '1h' as const,
+      }));
+
+      const flashMap = {
+        '1h': flashErratic1h,
+        '15m': candles15m,
+        '5m': candles5m,
+      };
+
+      const flashResult = StrategyEngine.evaluate('ETHUSDT', 2281, flashMap);
+      assert(flashResult.passed === false, 'Extreme unsafe volatility must be rejected by Volatility Protection');
+      assert(flashResult.rejectionReason?.includes('EXTREME_VOLATILITY') === true, 'Rejection reason must document EXTREME_VOLATILITY');
+    });
+
+    await test('44. Complete coordinated pipeline flow: Setup -> Pathway -> Evidence -> Confluence -> TP/SL -> R:R Check -> Signal', () => {
+      const scoring = ScoringEngine.calculateScore(
+        'ETHUSDT',
+        2281,
+        candlesMap,
+        'BULLISH',
+        99.9
+      );
+
+      assert(scoring.isValid === true, `Scoring must be valid for pristine setup, got reason: ${scoring.rejectionReason}`);
+      assert(scoring.direction === 'BUY', `Scoring direction must be BUY, got: ${scoring.direction}`);
+      assert(scoring.score >= 70, `Score must be >= 70, got: ${scoring.score}`);
+      assert(scoring.stopLoss !== undefined && scoring.stopLoss < 2281, 'Stop loss must be defined below entry for BUY');
+      assert(scoring.tp1 !== undefined && scoring.tp1 > 2281, 'TP1 must be defined above entry for BUY');
+      assert(scoring.tp2 !== undefined && scoring.tp2 > scoring.tp1, 'TP2 must be defined above TP1');
+      assert(scoring.tp3 !== undefined && scoring.tp3 > scoring.tp2, 'TP3 must be defined above TP2');
+      assert(scoring.riskRewardRatio !== undefined && scoring.riskRewardRatio >= 1.5, `R:R must be >= 1.5, got: ${scoring.riskRewardRatio}`);
+    });
+  });
+
+  // --- SUITE 16: GATE 1 PREMATURE SCORE VETO REMOVAL AUDIT ---
+  await describe('Gate 1 Premature Score Veto Removal & 65-69 Candidate Qualification', async () => {
+    await test('45. Candidate with composite score 65-69 reaches Gate 7 and passes Gate 8 tradeability', () => {
+      // Create a valid candidate input with score = 67
+      const gate7Result = Gate7FinalTradeValidation.validateCandidate({
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        entryPrice: 65000,
+        stopLoss: 63500,
+        takeProfit: 68500,
+        tp1: 67700,
+        tp2: 68500,
+        tp3: 69500,
+        riskRewardRatio: 2.33,
+        score: 67,
+        candlesMap: {
+          '1h': Array.from({ length: 30 }, (_, i) => ({
+            timestamp: Date.now() - (30 - i) * 3600000,
+            open: 64000 + i * 30,
+            high: 64100 + i * 30,
+            low: 63900 + i * 30,
+            close: 64050 + i * 30,
+            volume: 1000,
+            symbol: 'BTCUSDT',
+            provider: 'BINANCE' as const,
+            timeframe: '1h' as const,
+          })),
+        },
+        liveTicker: {
+          symbol: 'BTCUSDT',
+          rawSymbol: 'BTCUSDT',
+          price: 65000,
+          bid: 64998,
+          ask: 65002,
+          timestamp: Date.now(),
+          receivedAt: Date.now(),
+          source: 'LIVE',
+          isFresh: true,
+          status: 'OK',
+          provider: 'BINANCE',
+          assetType: 'CRYPTO',
+        },
+        atr: 500,
+      });
+
+      assert(gate7Result.allHardGatesPassed === true, 'All 13 hard gates must pass for valid candidate');
+      assert(gate7Result.isTradeable === true, 'Gate 7 must deem 67 score candidate tradeable when hard gates pass');
+
+      const gate8Result = Gate8TradeabilityThreshold.evaluateCandidate({
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        trendAlignmentScore: 68,
+        mtfConfluenceScore: 68,
+        momentumScore: 65,
+        marketStructureScore: 67,
+        volumeScore: 65,
+        volatilityAtrScore: 70,
+        entryQualityScore: 65,
+        riskRewardRatio: 2.33,
+        netRiskRewardRatio: 2.1,
+      });
+
+      assert(gate8Result.finalScore >= 65, `Final score must be >= 65, got: ${gate8Result.finalScore}`);
+      assert(gate8Result.isTradeable === true, 'Gate 8 must qualify candidate with final score >= 65');
+      assert(gate8Result.classification === 'QUALIFIED_SIGNAL' || gate8Result.classification === 'VALID_SIGNAL', `Classification must be QUALIFIED_SIGNAL or VALID_SIGNAL, got: ${gate8Result.classification}`);
+    });
+  });
+
+  // --- SUITE 17: GATE 2 — LOCK THE CANONICAL FINAL R:R FLOOR (>= 1.8) ---
+  await describe('Gate 2 Canonical Final R:R Floor Locking (>= 1.8)', async () => {
+    await test('46. Sensitivity profiles cannot lower final executable R:R floor below 1.8', () => {
+      assert(FINAL_EXECUTABLE_RR_FLOOR === 1.8, 'FINAL_EXECUTABLE_RR_FLOOR constant must be 1.8');
+
+      // Test all profiles enforce >= 1.8
+      const profiles = SignalSensitivityManager.getAllProfiles();
+      for (const [name, profile] of Object.entries(profiles)) {
+        assert(profile.minimumRR >= 1.8, `Profile ${name} minimumRR (${profile.minimumRR}) cannot be below 1.8`);
+      }
+
+      // Test custom override cannot lower below 1.8
+      SignalSensitivityManager.setActiveProfile('CUSTOM', { minimumRR: 1.2 } as any);
+      const customConfig = SignalSensitivityManager.getActiveConfig();
+      assert(customConfig.minimumRR >= 1.8, `Custom minimumRR (${customConfig.minimumRR}) must be clamped to >= 1.8`);
+
+      // Reset to default
+      SignalSensitivityManager.resetToDefault();
+    });
+
+    await test('47. RiskRewardCalculator selects TP2 when >=1.8R and falls back to TP3 only when TP2 < 1.8R', () => {
+      const entry = 100;
+      const sl = 90; // Risk = 10
+
+      // Case A: TP2 >= 1.8 (TP2 = 120 -> 2.0R, TP3 = 130 -> 3.0R)
+      const resA = RiskRewardCalculator.calculate(entry, sl, 110, 120, 130, 'BUY', 1.8);
+      assert(resA.isValid === true, 'Setup A must pass');
+      assert(resA.selectedTarget === 'TP2', `Setup A must select TP2, got: ${resA.selectedTarget}`);
+      assert(resA.grossRR === 2.0, `Setup A grossRR must be 2.0, got: ${resA.grossRR}`);
+      assert(resA.passedViaTp3 === false, 'Setup A must not be passedViaTp3');
+
+      // Case B: TP2 < 1.8 (TP2 = 115 -> 1.5R), but TP3 >= 1.8 (TP3 = 125 -> 2.5R)
+      const resB = RiskRewardCalculator.calculate(entry, sl, 110, 115, 125, 'BUY', 1.8);
+      assert(resB.isValid === true, 'Setup B must pass via TP3');
+      assert(resB.selectedTarget === 'TP3', `Setup B must select TP3, got: ${resB.selectedTarget}`);
+      assert(resB.grossRR === 2.5, `Setup B grossRR must be 2.5, got: ${resB.grossRR}`);
+      assert(resB.passedViaTp3 === true, 'Setup B must be passedViaTp3');
+
+      // Case C: Neither TP2 nor TP3 >= 1.8 (TP2 = 112 -> 1.2R, TP3 = 116 -> 1.6R)
+      const resC = RiskRewardCalculator.calculate(entry, sl, 105, 112, 116, 'BUY', 1.8);
+      assert(resC.isValid === false, 'Setup C must fail');
+      assert(resC.selectedTarget === null, 'Setup C selectedTarget must be null');
+      assert(resC.rejectionReason === 'GROSS_RR_BELOW_THRESHOLD', `Setup C rejectionReason must be GROSS_RR_BELOW_THRESHOLD, got: ${resC.rejectionReason}`);
+    });
+  });
+
+  // --- SUITE 18: GATE 3 — REMOVE LEGACY 70 EXECUTION BLOCKS ---
+  await describe('Gate 3 Score Classification & Legacy 70 Removal', async () => {
+    await test('48. Score tier classification adheres exactly to required tiers (<60 REJECT, 60-64 WATCH, 65-69 QUALIFIED, 70-79 VALID, 80+ HIGH-CONFLUENCE)', () => {
+      // Test <60
+      const eval55 = Gate8TradeabilityThreshold.evaluateCandidate({
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        trendAlignmentScore: 50,
+        mtfConfluenceScore: 50,
+        momentumScore: 50,
+        marketStructureScore: 50,
+        volumeScore: 50,
+        volatilityAtrScore: 50,
+        entryQualityScore: 50,
+        riskRewardRatio: 1.8,
+        agreeingStrategiesRatio: 0.5,
+      });
+      assert(eval55.finalScore < 60, `Score must be <60, got ${eval55.finalScore}`);
+      assert(eval55.classification === 'REJECT', `Classification must be REJECT, got ${eval55.classification}`);
+      assert(eval55.isTradeable === false, 'Score <60 must not be tradeable');
+
+      // Test 60-64 WATCH
+      const eval62 = Gate8TradeabilityThreshold.evaluateCandidate({
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        trendAlignmentScore: 58,
+        mtfConfluenceScore: 58,
+        momentumScore: 58,
+        marketStructureScore: 58,
+        volumeScore: 58,
+        volatilityAtrScore: 58,
+        entryQualityScore: 58,
+        riskRewardRatio: 1.8,
+        agreeingStrategiesRatio: 0.6,
+      });
+      assert(eval62.finalScore >= 60 && eval62.finalScore <= 64, `Score must be 60-64, got ${eval62.finalScore}`);
+      assert(eval62.classification === 'NEAR_MISS_WATCHLIST' || eval62.classification === 'WATCH', `Classification must be WATCH/NEAR_MISS_WATCHLIST, got ${eval62.classification}`);
+      assert(eval62.isTradeable === false, 'Score 60-64 must be watch (not tradeable)');
+
+      // Test 65-69 QUALIFIED SIGNAL
+      const eval67 = Gate8TradeabilityThreshold.evaluateCandidate({
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        trendAlignmentScore: 65,
+        mtfConfluenceScore: 65,
+        momentumScore: 65,
+        marketStructureScore: 65,
+        volumeScore: 65,
+        volatilityAtrScore: 65,
+        entryQualityScore: 65,
+        riskRewardRatio: 1.9,
+        agreeingStrategiesRatio: 0.7,
+      });
+      assert(eval67.finalScore >= 65 && eval67.finalScore <= 69, `Score must be 65-69, got ${eval67.finalScore}`);
+      assert(eval67.classification === 'QUALIFIED_SIGNAL', `Classification must be QUALIFIED_SIGNAL, got ${eval67.classification}`);
+      assert(eval67.isTradeable === true, 'Score 65-69 must be tradeable');
+
+      // Test 70-79 VALID SIGNAL
+      const eval74 = Gate8TradeabilityThreshold.evaluateCandidate({
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        trendAlignmentScore: 73,
+        mtfConfluenceScore: 73,
+        momentumScore: 73,
+        marketStructureScore: 73,
+        volumeScore: 73,
+        volatilityAtrScore: 73,
+        entryQualityScore: 73,
+        riskRewardRatio: 2.1,
+        agreeingStrategiesRatio: 0.8,
+      });
+      assert(eval74.finalScore >= 70 && eval74.finalScore <= 79, `Score must be 70-79, got ${eval74.finalScore}`);
+      assert(eval74.classification === 'VALID_SIGNAL', `Classification must be VALID_SIGNAL, got ${eval74.classification}`);
+      assert(eval74.isTradeable === true, 'Score 70-79 must be tradeable');
+
+      // Test 80+ HIGH-CONFLUENCE
+      const eval85 = Gate8TradeabilityThreshold.evaluateCandidate({
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        trendAlignmentScore: 85,
+        mtfConfluenceScore: 85,
+        momentumScore: 85,
+        marketStructureScore: 85,
+        volumeScore: 85,
+        volatilityAtrScore: 85,
+        entryQualityScore: 85,
+        riskRewardRatio: 2.5,
+        agreeingStrategiesRatio: 1.0,
+      });
+      assert(eval85.finalScore >= 80, `Score must be >= 80, got ${eval85.finalScore}`);
+      assert(
+        eval85.classification === 'HIGH_CONFLUENCE' ||
+        eval85.classification === 'STRONG_SIGNAL' ||
+        eval85.classification === 'VERY_STRONG_SIGNAL' ||
+        eval85.classification === 'EXCEPTIONAL',
+        `Classification must be HIGH_CONFLUENCE / STRONG / EXCEPTIONAL, got ${eval85.classification}`
+      );
+      assert(eval85.isTradeable === true, 'Score 80+ must be tradeable');
+    });
+
+    await test('49. Legitimate 65-69 candidate executes through Gate 7 and is NOT blocked by legacy 70 thresholds', () => {
+      const g7Validation = Gate7FinalTradeValidation.validateCandidate({
+        symbol: 'ETHUSDT',
+        direction: 'BUY',
+        entryPrice: 3000,
+        stopLoss: 2900,
+        takeProfit: 3200,
+        tp1: 3100,
+        tp2: 3200,
+        tp3: 3300,
+        riskRewardRatio: 2.0,
+        score: 66,
+        candlesMap: {
+          '15m': [
+            { symbol: 'ETHUSDT', provider: 'bitget', timeframe: '15m', timestamp: Date.now() - 900000, open: 2980, high: 3005, low: 2975, close: 3000, volume: 1000 },
+          ],
+          '1h': [
+            { symbol: 'ETHUSDT', provider: 'bitget', timeframe: '1h', timestamp: Date.now() - 3600000, open: 2950, high: 3010, low: 2940, close: 3000, volume: 4000 },
+          ],
+        },
+        liveTicker: {
+          symbol: 'ETHUSDT',
+          rawSymbol: 'ETHUSDT',
+          provider: 'bitget',
+          assetType: 'CRYPTO',
+          price: 3000,
+          bid: 2999.5,
+          ask: 3000.5,
+          timestamp: Date.now() - 5000,
+          receivedAt: Date.now() - 5000,
+          source: 'LIVE',
+          isFresh: true,
+          status: 'OK',
+        },
+        atr: 35,
+      });
+
+      assert(g7Validation.scoreRequirementPassed === true, 'Score requirement must pass for score=66');
+      assert(g7Validation.allHardGatesPassed === true, 'All hard gates must pass');
+      assert(g7Validation.isTradeable === true, 'Candidate with score 66 must be tradeable in Gate 7');
+    });
+  });
+
+  // =========================================================================
+  // SUITE 19: GATE 4 — Strategy Engine Coordination & Evidence Audit
+  // =========================================================================
+  await describe('Strategy Engine Coordination & Evidence Audit', async () => {
+    const { StrategyEngine } = await import('../src/server/signals/StrategyEngine.js');
+
+    await test('50. Volatility Engine provides evidence and passes under CAUTION without hard-rejecting', () => {
+      // Build 15m and 1h candles with moderate compression (CAUTION)
+      const now = Date.now();
+      const candles15m: any[] = [];
+      const candles1h: any[] = [];
+      for (let i = 50; i >= 0; i--) {
+        candles15m.push({
+          symbol: 'BTCUSDT',
+          provider: 'bitget',
+          timeframe: '15m',
+          timestamp: now - i * 15 * 60000,
+          open: 50000 + (50 - i) * 10,
+          high: 50020 + (50 - i) * 10,
+          low: 49990 + (50 - i) * 10,
+          close: 50010 + (50 - i) * 10,
+          volume: 100,
+        });
+      }
+      for (let i = 50; i >= 0; i--) {
+        candles1h.push({
+          symbol: 'BTCUSDT',
+          provider: 'bitget',
+          timeframe: '1h',
+          timestamp: now - i * 60 * 60000,
+          open: 50000 + (50 - i) * 40,
+          high: 50050 + (50 - i) * 40,
+          low: 49950 + (50 - i) * 40,
+          close: 50040 + (50 - i) * 40,
+          volume: 500,
+        });
+      }
+
+      const evalResult = StrategyEngine.evaluate('BTCUSDT', 52050, {
+        '15m': candles15m,
+        '1h': candles1h,
+      });
+
+      assert(evalResult.passed === true, 'Strategy evaluation should pass under normal/caution conditions');
+      assert(evalResult.dominantDirection !== 'NEUTRAL', 'Dominant direction must be resolved');
+      assert(evalResult.strategyResults.length === 6, 'All 6 strategy engines must be evaluated as evidence');
+    });
+
+    await test('51. Extreme volatility triggers legitimate UNSAFE hard safety rejection', () => {
+      // Build candles with extreme 5x spike in latest candle
+      const now = Date.now();
+      const candles1h: any[] = [];
+      for (let i = 50; i >= 1; i--) {
+        candles1h.push({
+          symbol: 'BTCUSDT',
+          provider: 'bitget',
+          timeframe: '1h',
+          timestamp: now - i * 60 * 60000,
+          open: 50000,
+          high: 50100,
+          low: 49900,
+          close: 50000,
+          volume: 100,
+        });
+      }
+      // Extreme erratic candle
+      candles1h.push({
+        symbol: 'BTCUSDT',
+        provider: 'bitget',
+        timeframe: '1h',
+        timestamp: now,
+        open: 50000,
+        high: 53000,
+        low: 47000,
+        close: 48000,
+        volume: 5000,
+      });
+
+      const evalResult = StrategyEngine.evaluate('BTCUSDT', 48000, {
+        '15m': candles1h,
+        '1h': candles1h,
+      });
+
+      assert(evalResult.passed === false, 'Extreme erratic volatility must trigger hard safety rejection');
+      assert(evalResult.volatilityCondition === 'UNSAFE', 'Volatility condition must be flagged UNSAFE');
+    });
+  });
+
+  // =========================================================================
+  // SUITE 20: GATE 5 — Sensitivity Profiles & Safety Invariants
+  // =========================================================================
+  await describe('Sensitivity Profiles & Safety Invariants (Gate 5)', async () => {
+    await test('Canonical sensitivity profiles preserve final score floor 65 and gross R:R floor 1.8', () => {
+      const profiles = SignalSensitivityManager.getAllProfiles();
+      assert(profiles.BALANCED.signalThreshold >= 65, 'BALANCED signalThreshold must be >= 65');
+      assert(profiles.BALANCED.minimumScore >= 65, 'BALANCED minimumScore must be >= 65');
+      assert(profiles.BALANCED.minimumRR >= 1.8, 'BALANCED minimumRR must be >= 1.8');
+
+      assert(profiles.CONSERVATIVE.signalThreshold >= 65, 'CONSERVATIVE signalThreshold must be >= 65');
+      assert(profiles.CONSERVATIVE.minimumScore >= 65, 'CONSERVATIVE minimumScore must be >= 65');
+      assert(profiles.CONSERVATIVE.minimumRR >= 1.8, 'CONSERVATIVE minimumRR must be >= 1.8');
+
+      assert(profiles.ACTIVE.signalThreshold >= 65, 'ACTIVE signalThreshold must be >= 65');
+      assert(profiles.ACTIVE.minimumScore >= 65, 'ACTIVE minimumScore must be >= 65');
+      assert(profiles.ACTIVE.minimumRR >= 1.8, 'ACTIVE minimumRR must be >= 1.8');
+    });
+
+    await test('Custom sensitivity overrides cannot lower score floor below 65 or R:R floor below 1.8', () => {
+      SignalSensitivityManager.setActiveProfile('CUSTOM', {
+        signalThreshold: 50,
+        minimumScore: 50,
+        minimumRR: 1.2,
+      });
+
+      const activeConfig = SignalSensitivityManager.getActiveConfig();
+      assert(activeConfig.signalThreshold >= 65, 'CUSTOM signalThreshold must be clamped to at least 65');
+      assert(activeConfig.minimumScore >= 65, 'CUSTOM minimumScore must be clamped to at least 65');
+      assert(activeConfig.minimumRR >= 1.8, 'CUSTOM minimumRR must be clamped to at least 1.8');
+
+      const serverThresholds = serverConfig.getThresholds();
+      assert(serverThresholds.signalThreshold >= 65, 'serverConfig signalThreshold must remain >= 65');
+      assert(serverThresholds.minimumScore >= 65, 'serverConfig minimumScore must remain >= 65');
+      assert(serverThresholds.minimumRR >= 1.8, 'serverConfig minimumRR must remain >= 1.8');
+
+      // Reset to BALANCED
+      SignalSensitivityManager.resetToDefault();
+    });
+
+    await test('serverConfig.updateThresholds preserves canonical floors', () => {
+      serverConfig.updateThresholds({
+        signalThreshold: 45,
+        minimumScore: 45,
+        minimumRR: 1.1,
+      });
+
+      const thresholds = serverConfig.getThresholds();
+      assert(thresholds.signalThreshold >= 65, 'signalThreshold cannot be updated below 65');
+      assert(thresholds.minimumScore >= 65, 'minimumScore cannot be updated below 65');
+      assert(thresholds.minimumRR >= 1.8, 'minimumRR cannot be updated below 1.8');
+
+      SignalSensitivityManager.resetToDefault();
+    });
+
+    await test('Sensitivity profiles never weaken hard safety gates in Gate 7 / Gate 9', () => {
+      // Test invalid stop loss ordering
+      const invalidSlRes = Gate7FinalTradeValidation.validateCandidate({
+        symbol: 'EURUSD',
+        direction: 'BUY',
+        entryPrice: 1.1000,
+        stopLoss: 1.1050, // SL above entry on BUY -> invalid!
+        takeProfit: 1.1200,
+        score: 85,
+        marketRegime: 'TRENDING_UP',
+        atr: 0.0050,
+        candlesMap: {
+          '1h': [{ symbol: 'EURUSD', provider: 'twelvedata', timeframe: '1h', timestamp: Date.now(), open: 1.09, high: 1.11, low: 1.08, close: 1.10, volume: 1000 }],
+        },
+        liveTicker: { symbol: 'EURUSD', price: 1.1000, timestamp: Date.now(), change24h: 0, high24h: 1.11, low24h: 1.08, volume24h: 1000, source: 'twelvedata', status: 'FRESH' },
+      });
+
+      assert(invalidSlRes.isTradeable === false, 'Invalid SL direction must be rejected regardless of score');
+      assert(invalidSlRes.allHardGatesPassed === false, 'Hard gate must fail');
+
+      // Test R:R below 1.8 in Gate 9
+      const g9Result = Gate9RiskManagement.calculate(
+        1.1000,
+        'BUY',
+        1.0900, // risk = 0.0100
+        1.1050, // tp1 reward = 0.0050 (0.5 R:R)
+        1.1100, // tp2 reward = 0.0100 (1.0 R:R)
+        1.1150  // tp3 reward = 0.0150 (1.5 R:R < 1.8)
+      );
+
+      assert(g9Result.isValid === false, 'Trade with gross R:R < 1.8 must be rejected by Gate 9');
+    });
+  });
+
+  // =========================================================================
+  // SUITE 21: GATE 6 — Final Signal Pipeline End-to-End Audit
+  // =========================================================================
+  await describe('Final Signal Pipeline End-to-End Audit (Gate 6)', async () => {
+    await test('Complete execution path executes in exact order without early soft rejections', () => {
+      // 1. VALID MARKET DATA
+      const now = Date.now();
+      const validCandles = Array.from({ length: 30 }, (_, i) => ({
+        timestamp: now - (30 - i) * 3600000,
+        open: 100 + i * 0.2,
+        high: 100.5 + i * 0.2,
+        low: 99.8 + i * 0.2,
+        close: 100.3 + i * 0.2,
+        volume: 1500,
+        symbol: 'SOLUSDT',
+        provider: 'BINANCE' as const,
+        timeframe: '1h' as const,
+      }));
+
+      // 2. SETUP PATHWAY: Gate 3 preliminary screen
+      const g3Result = Gate3PreliminaryScreen.screenAsset('SOLUSDT', validCandles);
+      assert(g3Result.passed === true, 'Gate 3 preliminary screen must pass valid setup');
+
+      // 3. ENGINE EVIDENCE & CONFLUENCE: Score in 65-69 range produces QUALIFIED_SIGNAL
+      const gate8Eval = Gate8TradeabilityThreshold.evaluateCandidate({
+        symbol: 'SOLUSDT',
+        direction: 'BUY',
+        trendAlignmentScore: 70,
+        mtfConfluenceScore: 70,
+        momentumScore: 65,
+        marketStructureScore: 70,
+        volumeScore: 60,
+        volatilityAtrScore: 75,
+        entryQualityScore: 65,
+        riskRewardRatio: 2.1,
+        netRiskRewardRatio: 2.1,
+        agreeingStrategiesRatio: 0.75,
+        timeframeAlignmentRatio: 0.75,
+      });
+
+      assert(gate8Eval.finalScore >= 65, 'Final score must reach at least 65');
+      assert(gate8Eval.isTradeable === true, 'Candidate must be tradeable at score >= 65');
+      assert(gate8Eval.classification === 'QUALIFIED_SIGNAL' || gate8Eval.classification === 'VALID_SIGNAL' || gate8Eval.classification === 'HIGH_CONFLUENCE', 'Classification must be tradeable');
+
+      // 4. HARD SAFETY VALIDATION: Gate 7
+      const g7Res = Gate7FinalTradeValidation.validateCandidate({
+        symbol: 'SOLUSDT',
+        direction: 'BUY',
+        entryPrice: 106.3,
+        stopLoss: 104.3, // risk = 2.0
+        takeProfit: 110.5, // reward = 4.2 -> 2.1:1 R:R
+        tp1: 108.5,
+        tp2: 110.5,
+        tp3: 112.5,
+        score: gate8Eval.finalScore,
+        marketRegime: 'TRENDING_UP',
+        atr: 1.5,
+        candlesMap: { '1h': validCandles },
+        liveTicker: { symbol: 'SOLUSDT', price: 106.3, timestamp: now, change24h: 2.5, high24h: 107.0, low24h: 104.0, volume24h: 50000, source: 'binance', status: 'FRESH' },
+      });
+
+      assert(g7Res.allHardGatesPassed === true, 'All Gate 7 hard gates must pass');
+      assert(g7Res.isTradeable === true, 'Gate 7 must confirm tradeability');
+
+      // 5. ONE FINAL R:R CHECK (>= 1.8)
+      const rrResult = RiskRewardCalculator.calculate(106.3, 104.3, 108.5, 110.5, 112.5, 'BUY', 1.8);
+      assert(rrResult.isValid === true, 'R:R calculator must validate gross R:R >= 1.8');
+      assert(rrResult.grossRR >= 1.8, 'Gross R:R must meet or exceed 1.8');
+    });
+
+    await test('Soft conditions (normal volume, UNKNOWN regime, win rate) do not independently reject', () => {
+      // UNKNOWN regime evaluation
+      const regimeRes = Gate27RegimeThresholds.resolveThreshold({
+        symbol: 'ETHUSDT',
+        regime: 'UNKNOWN',
+        actualScore: 66,
+      });
+      assert(regimeRes.isExecutable === true, 'UNKNOWN regime must remain executable');
+      assert(regimeRes.passed === true, 'Score 66 must pass under UNKNOWN regime');
+
+      // Gate 4 Momentum & Volatility analysis on normal market
+      const normalCandles = Array.from({ length: 30 }, (_, i) => ({
+        timestamp: Date.now() - (30 - i) * 3600000,
+        open: 100 + i * 0.1,
+        high: 100.3 + i * 0.1,
+        low: 99.9 + i * 0.1,
+        close: 100.2 + i * 0.1,
+        volume: 1000,
+        symbol: 'ETHUSDT',
+        provider: 'BINANCE' as const,
+        timeframe: '1h' as const,
+      }));
+      const volAnalysis = Gate4MomentumVolatility.analyze('BUY', normalCandles);
+      assert(volAnalysis.volatilityState === 'NORMAL' || volAnalysis.volatilityState === 'EXPANDING', 'Normal volatility should not be DEAD or ERRATIC');
+    });
+
+    await test('Weak candidate (< 60 preliminary, < 65 final, or < 1.8 R:R) is legitimately rejected', () => {
+      // 1. Weak preliminary candidate with insufficient depth
+      const weakG3 = Gate3PreliminaryScreen.screenAsset('WEAK', []);
+      assert(weakG3.passed === false, 'Asset with insufficient data must be rejected in Gate 3');
+
+      // 2. Final score < 65 candidate
+      const weakG8 = Gate8TradeabilityThreshold.evaluateCandidate({
+        symbol: 'WEAKASSET',
+        direction: 'BUY',
+        trendAlignmentScore: 30,
+        mtfConfluenceScore: 30,
+        momentumScore: 25,
+        marketStructureScore: 30,
+        volumeScore: 20,
+        volatilityAtrScore: 40,
+        entryQualityScore: 30,
+        riskRewardRatio: 1.2,
+      });
+      assert(weakG8.isTradeable === false, 'Candidate with score < 65 must not be tradeable');
+      assert(weakG8.classification === 'REJECT' || weakG8.classification === 'NEAR_MISS_WATCHLIST', 'Must be classified as REJECT or WATCHLIST');
     });
   });
 

@@ -64,6 +64,7 @@ export interface Gate3PreliminaryScreenResult {
   routing: Gate3Routing;
   passed: boolean; // true if score >= 60 (PRELIMINARY_CANDIDATE or STRONG_PRELIMINARY_CANDIDATE)
   direction: SignalDirection;
+  detectedEvidence: Array<'TREND' | 'BREAKOUT' | 'REVERSAL' | 'MOMENTUM'>;
   componentScores: Gate3ComponentScores;
   metrics: Gate3ScreeningMetrics;
   reason: string;
@@ -219,66 +220,6 @@ export class Gate3PreliminaryScreen {
     }
 
     // -------------------------------------------------------------
-    // 3. TREND EVALUATION (Max 20 pts)
-    // -------------------------------------------------------------
-    let trendScore = 0;
-    const ema9Series = TechnicalIndicators.calculateEMA(sorted, 9);
-    const ema21Series = TechnicalIndicators.calculateEMA(sorted, 21);
-
-    const ema9 = ema9Series.length > 0 ? ema9Series[ema9Series.length - 1] : latestClose;
-    const ema21 = ema21Series.length > 0 ? ema21Series[ema21Series.length - 1] : latestClose;
-
-    const isBullish = ema9 > ema21 && latestClose >= ema9 * 0.998;
-    const isBearish = ema9 < ema21 && latestClose <= ema9 * 1.002;
-    const proposedDirection: SignalDirection = isBullish ? 'BUY' : isBearish ? 'SELL' : 'BUY';
-
-    const emaSpreadPct = (Math.abs(ema9 - ema21) / ema21) * 100;
-
-    if (isBullish || isBearish) {
-      if (emaSpreadPct >= 0.35) {
-        trendScore = 20; // Clear, well-separated directional trend
-      } else if (emaSpreadPct >= 0.15) {
-        trendScore = 17; // Established trend
-      } else {
-        trendScore = 13; // Developing trend / nascent crossover
-      }
-    } else {
-      // Choppy / moving average convergence
-      if (emaSpreadPct < 0.05) {
-        trendScore = 4; // Flat chop
-      } else {
-        trendScore = 8; // Mixed / consolidating
-      }
-    }
-
-    // -------------------------------------------------------------
-    // 4. MOMENTUM EVALUATION (Max 15 pts)
-    // -------------------------------------------------------------
-    let momentumScore = 0;
-    const lookback5 = Math.max(0, len - 6);
-    const price5BarsAgo = closes[lookback5] || latestClose;
-    const momentumPct = price5BarsAgo > 0 ? ((latestClose - price5BarsAgo) / price5BarsAgo) * 100 : 0;
-
-    const momentumAligned = (proposedDirection === 'BUY' && momentumPct > 0) || (proposedDirection === 'SELL' && momentumPct < 0);
-    const absMomentum = Math.abs(momentumPct);
-
-    if (momentumAligned) {
-      if (absMomentum >= 0.40) {
-        momentumScore = 15; // Strong directional momentum
-      } else if (absMomentum >= 0.15) {
-        momentumScore = 13; // Healthy momentum
-      } else {
-        momentumScore = 10; // Mild aligned momentum
-      }
-    } else {
-      if (absMomentum < 0.10) {
-        momentumScore = 6; // Minor pullback / neutral
-      } else {
-        momentumScore = 3; // Counter-trend momentum pressure
-      }
-    }
-
-    // -------------------------------------------------------------
     // 5. VOLATILITY QUALITY EVALUATION (Max 15 pts)
     // -------------------------------------------------------------
     let volatilityQualityScore = 0;
@@ -306,6 +247,128 @@ export class Gate3PreliminaryScreen {
       volatilityQualityScore = 9;  // Acceptable volatility
     } else {
       volatilityQualityScore = 5;  // Sub-optimal volatility
+    }
+
+    // -------------------------------------------------------------
+    // 3. SETUP EVIDENCE EVALUATION (TREND, BREAKOUT, REVERSAL, MOMENTUM) (Max 20 pts)
+    // -------------------------------------------------------------
+    const detectedEvidence: Array<'TREND' | 'BREAKOUT' | 'REVERSAL' | 'MOMENTUM'> = [];
+
+    // A. Trend Evaluation
+    let trendScore = 0;
+    const ema9Series = TechnicalIndicators.calculateEMA(sorted, 9);
+    const ema21Series = TechnicalIndicators.calculateEMA(sorted, 21);
+
+    const ema9 = ema9Series.length > 0 ? ema9Series[ema9Series.length - 1] : latestClose;
+    const ema21 = ema21Series.length > 0 ? ema21Series[ema21Series.length - 1] : latestClose;
+
+    const isBullishEma = ema9 > ema21 && latestClose >= ema9 * 0.998;
+    const isBearishEma = ema9 < ema21 && latestClose <= ema9 * 1.002;
+    const emaSpreadPct = (Math.abs(ema9 - ema21) / ema21) * 100;
+
+    if (isBullishEma || isBearishEma) {
+      detectedEvidence.push('TREND');
+      if (emaSpreadPct >= 0.35) {
+        trendScore = 20; // Clear, well-separated directional trend
+      } else if (emaSpreadPct >= 0.15) {
+        trendScore = 17; // Established trend
+      } else {
+        trendScore = 14; // Developing trend / nascent crossover
+      }
+    } else {
+      trendScore = emaSpreadPct < 0.05 ? 6 : 9; // Mixed / consolidating
+    }
+
+    // B. Breakout Evaluation
+    let breakoutScore = 0;
+    let breakoutDirection: SignalDirection | null = null;
+    const priorLookback = Math.min(15, len - 1);
+    if (priorLookback >= 5) {
+      const priorCandles = sorted.slice(-priorLookback - 1, -1);
+      const maxPriorHigh = Math.max(...priorCandles.map((c) => c.high));
+      const minPriorLow = Math.min(...priorCandles.map((c) => c.low));
+      const currentCandle = sorted[len - 1];
+
+      const isBullBreakout = (currentCandle.close >= maxPriorHigh * 0.999) || (currentCandle.high >= maxPriorHigh && currentCandle.close > (maxPriorHigh + minPriorLow) * 0.5);
+      const isBearBreakout = (currentCandle.close <= minPriorLow * 1.001) || (currentCandle.low <= minPriorLow && currentCandle.close < (maxPriorHigh + minPriorLow) * 0.5);
+
+      if (isBullBreakout) {
+        breakoutDirection = 'BUY';
+        breakoutScore = (relativeVolume >= 1.2 || (currentCandle.high - currentCandle.low) >= (atr14 || 1)) ? 20 : 17;
+        detectedEvidence.push('BREAKOUT');
+      } else if (isBearBreakout) {
+        breakoutDirection = 'SELL';
+        breakoutScore = (relativeVolume >= 1.2 || (currentCandle.high - currentCandle.low) >= (atr14 || 1)) ? 20 : 17;
+        detectedEvidence.push('BREAKOUT');
+      }
+    }
+
+    // C. Reversal Evaluation
+    let reversalScore = 0;
+    let reversalDirection: SignalDirection | null = null;
+    const currentCandle = sorted[len - 1];
+    const candleRange = currentCandle.high - currentCandle.low;
+    if (candleRange > 0) {
+      const lowerWick = Math.min(currentCandle.open, currentCandle.close) - currentCandle.low;
+      const upperWick = currentCandle.high - Math.max(currentCandle.open, currentCandle.close);
+      const lowerWickRatio = lowerWick / candleRange;
+      const upperWickRatio = upperWick / candleRange;
+
+      if (lowerWickRatio >= 0.35 && currentCandle.close >= currentCandle.low + candleRange * 0.4) {
+        // Bullish rejection wick
+        reversalDirection = 'BUY';
+        reversalScore = 17;
+        detectedEvidence.push('REVERSAL');
+      } else if (upperWickRatio >= 0.35 && currentCandle.close <= currentCandle.high - candleRange * 0.4) {
+        // Bearish rejection wick
+        reversalDirection = 'SELL';
+        reversalScore = 17;
+        detectedEvidence.push('REVERSAL');
+      }
+    }
+
+    // Determine final directional bias and setup technical score
+    let proposedDirection: SignalDirection = 'BUY';
+    if (breakoutDirection && breakoutScore >= trendScore && breakoutScore >= reversalScore) {
+      proposedDirection = breakoutDirection;
+      trendScore = Math.max(trendScore, breakoutScore);
+    } else if (reversalDirection && reversalScore >= trendScore) {
+      proposedDirection = reversalDirection;
+      trendScore = Math.max(trendScore, reversalScore);
+    } else if (isBearishEma) {
+      proposedDirection = 'SELL';
+    } else {
+      proposedDirection = 'BUY';
+    }
+
+    // -------------------------------------------------------------
+    // 4. MOMENTUM EVALUATION (Max 15 pts)
+    // -------------------------------------------------------------
+    let momentumScore = 0;
+    const lookback5 = Math.max(0, len - 6);
+    const price5BarsAgo = closes[lookback5] || latestClose;
+    const momentumPct = price5BarsAgo > 0 ? ((latestClose - price5BarsAgo) / price5BarsAgo) * 100 : 0;
+
+    const momentumAligned = (proposedDirection === 'BUY' && momentumPct > 0) || (proposedDirection === 'SELL' && momentumPct < 0);
+    const absMomentum = Math.abs(momentumPct);
+
+    if (momentumAligned) {
+      if (absMomentum >= 0.15) {
+        detectedEvidence.push('MOMENTUM');
+      }
+      if (absMomentum >= 0.40) {
+        momentumScore = 15; // Strong directional momentum
+      } else if (absMomentum >= 0.15) {
+        momentumScore = 13; // Healthy momentum
+      } else {
+        momentumScore = 11; // Mild aligned momentum
+      }
+    } else {
+      if (absMomentum < 0.10) {
+        momentumScore = 7; // Minor pullback / neutral
+      } else {
+        momentumScore = 4; // Counter-trend momentum pressure
+      }
     }
 
     // -------------------------------------------------------------
@@ -398,6 +461,7 @@ export class Gate3PreliminaryScreen {
       routing,
       passed,
       direction: proposedDirection,
+      detectedEvidence,
       componentScores,
       metrics,
       reason,
@@ -420,6 +484,7 @@ export class Gate3PreliminaryScreen {
       routing: 'REJECT',
       passed: false,
       direction,
+      detectedEvidence: [],
       componentScores,
       metrics,
       reason,

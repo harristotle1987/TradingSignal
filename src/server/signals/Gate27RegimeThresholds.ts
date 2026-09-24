@@ -75,23 +75,23 @@ export interface RegimeThresholdEvaluationLog {
 export class Gate27RegimeThresholds {
   private static policy: RegimeThresholdPolicyConfig = {
     regimeThresholds: {
-      STRONG_TREND: 70,
-      NORMAL_TREND: 70,
-      RANGE_REVERSAL: 70,
-      BREAKOUT: 70,
-      HIGH_VOLATILITY: 74,
-      TRANSITION: 76,
-      UNKNOWN: null, // NO SIGNAL
+      STRONG_TREND: 65,
+      NORMAL_TREND: 65,
+      RANGE_REVERSAL: 65,
+      BREAKOUT: 65,
+      HIGH_VOLATILITY: 65,
+      TRANSITION: 65,
+      UNKNOWN: 65,
     },
     strategyModifiers: {
       TREND_CONTINUATION: 0,
-      TREND_PULLBACK: -1,
+      TREND_PULLBACK: 0,
       BREAKOUT: 0,
       RANGE_REVERSAL: 0,
-      FALSE_BREAKOUT: +2, // Higher threshold required for counter-trend traps
-      MOMENTUM_CONTINUATION: -1,
+      FALSE_BREAKOUT: 0,
+      MOMENTUM_CONTINUATION: 0,
       ORDER_BLOCK: 0,
-      MEAN_REVERSION: +1,
+      MEAN_REVERSION: 0,
     },
     assetClassModifiers: {
       CRYPTO: 0,
@@ -212,72 +212,16 @@ export class Gate27RegimeThresholds {
     const strategy = params.strategy || 'DEFAULT';
     const assetClass = (params.assetClass || this.detectAssetClass(symbol)).toUpperCase();
 
-    // 1. Base Regime Threshold dynamically calibrated to active sensitivity signal floor
+    // 1. Base Regime Threshold dynamically calibrated to active authoritative signal floor (65)
+    // Under Gate 2, regime does not raise the executable score threshold above the authoritative floor.
     const currentFloor = serverConfig.getConfig().thresholds.signalThreshold;
-    let baseRegimeThreshold: number | null = null;
-
-    if (normalizedRegime === 'UNKNOWN') {
-      baseRegimeThreshold = null;
-    } else if (normalizedRegime === 'HIGH_VOLATILITY') {
-      baseRegimeThreshold = Math.min(90, currentFloor + 4);
-    } else if (normalizedRegime === 'TRANSITION') {
-      baseRegimeThreshold = Math.min(92, currentFloor + 5);
-    } else {
-      baseRegimeThreshold = currentFloor;
-    }
-
-    // Check UNKNOWN / No Signal Policy
-    if (baseRegimeThreshold === null || normalizedRegime === 'UNKNOWN') {
-      const result: AdaptiveThresholdResult = {
-        isExecutable: false,
-        passed: false,
-        resolvedThreshold: 999,
-        actualScore: params.actualScore,
-        marginAboveThreshold: params.actualScore - 999,
-        regime: rawRegime,
-        normalizedRegime,
-        strategy,
-        assetClass,
-        symbol,
-        explanation: `Regime '${rawRegime}' (normalized: ${normalizedRegime}) is UNKNOWN or untradeable: NO SIGNAL permitted under Gate 27 policy`,
-      };
-
-      this.logEvaluation({
-        symbol,
-        regime: rawRegime,
-        strategy,
-        threshold: 999,
-        actualScore: params.actualScore,
-        marginAboveThreshold: result.marginAboveThreshold,
-        isExecutable: false,
-        passed: false,
-      });
-
-      return result;
-    }
-
-    // 2. Strategy-Specific Adjustment
-    let strategyModifier = 0;
-    const cleanStrat = strategy.trim().toUpperCase();
-    for (const [key, mod] of Object.entries(this.policy.strategyModifiers)) {
-      if (cleanStrat.includes(key) || key.includes(cleanStrat)) {
-        strategyModifier = mod;
-        break;
-      }
-    }
-
-    // 3. Asset-Class Specific Adjustment
-    const assetModifier = this.policy.assetClassModifiers[assetClass] || 0;
-
-    // 4. Calculate Final Composite Threshold
-    const rawResolved = baseRegimeThreshold + strategyModifier + assetModifier;
-    // Hard boundary clamps: never below current authoritative floor and never above 92 (ceiling for executable)
-    const resolvedThreshold = Math.min(92, Math.max(currentFloor, Math.round(rawResolved)));
+    const baseRegimeThreshold = currentFloor;
+    const resolvedThreshold = currentFloor;
 
     const marginAboveThreshold = Math.round((params.actualScore - resolvedThreshold) * 10) / 10;
     const passed = marginAboveThreshold >= 0;
 
-    const explanation = `Regime ${normalizedRegime} (base: ${baseRegimeThreshold}) + Strategy '${strategy}' (${strategyModifier >= 0 ? '+' : ''}${strategyModifier}) + Asset ${assetClass} (${assetModifier >= 0 ? '+' : ''}${assetModifier}) => Adaptive Threshold: ${resolvedThreshold} (Actual Score: ${params.actualScore}, Margin: ${marginAboveThreshold >= 0 ? '+' : ''}${marginAboveThreshold})`;
+    const explanation = `Regime: ${normalizedRegime} (Authoritative Floor: ${currentFloor}) | Actual Score: ${params.actualScore} (Margin: ${marginAboveThreshold >= 0 ? '+' : ''}${marginAboveThreshold})`;
 
     const result: AdaptiveThresholdResult = {
       isExecutable: true,
