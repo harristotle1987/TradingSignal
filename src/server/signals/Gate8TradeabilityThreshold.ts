@@ -1,7 +1,7 @@
 /**
  * GATE 8 — FINAL TRADEABILITY THRESHOLD
  *
- * `thresholds.signalThreshold` is the centralized authoritative final tradeability threshold.
+ * `thresholds.signalThreshold` is the centralized authoritative final tradeability threshold (canonical floor: 65).
  *
  * Final Score 10-Factor Weighted Breakdown:
  * - Trend alignment:        20  (Higher timeframe alignment & EMA stack)
@@ -11,25 +11,29 @@
  * - Volume/liquidity:       10  (Volume delta pressure, volume surge, absorption wicks)
  * - Volatility/ATR quality: 10  (ATR ratio in healthy executable bounds, not dead/erratic)
  * - Entry quality:           5  (Precise entry trigger proximity to dynamic EMA / structure)
- * - R:R quality:             5  (Effective R:R ratio and target reachability)
+ * - R:R quality:             5  (Effective R:R ratio and target reachability; min executable R:R >= 1.8)
  * - Execution quality:       5  (Low spread/fee friction, clean execution conditions)
  * - Direction confidence:    5  (Strategy agreement ratio, no conflicting signals)
  *
  * TOTAL = 100
  *
- * Classification:
- * - < watchingThreshold:                     REJECT
- * - watchingThreshold – (signalThreshold - 1): NEAR MISS / WATCHLIST
- * - signalThreshold – 79:                    VALID SIGNAL
- * - 80–84:                                   STRONG SIGNAL
- * - 85–89:                                   VERY STRONG SIGNAL
- * - 90–100:                                  EXCEPTIONAL
+ * Classification & Tradeability:
+ * - < watchingThreshold (< 60):                     REJECT (not tradeable)
+ * - watchingThreshold – (signalThreshold - 1) (60–64): NEAR MISS / WATCHLIST (not tradeable)
+ * - signalThreshold – 69 (65–69):                   QUALIFIED SIGNAL (tradeable, eligible for pipeline)
+ * - 70–79:                                          VALID SIGNAL (tradeable, eligible for pipeline)
+ * - 80–84:                                          HIGH CONFLUENCE / STRONG SIGNAL (tradeable)
+ * - 85–89:                                          VERY STRONG SIGNAL (tradeable)
+ * - 90–100:                                         EXCEPTIONAL (tradeable)
  *
- * Acceptance criteria:
- * - `thresholds.signalThreshold` is the centralized authoritative final tradeability threshold (never applied to preliminary screening).
- * - No candidate below `thresholds.signalThreshold` becomes tradeable.
- * - No score manipulation or automatic lowering to manufacture signals.
- * - If zero candidates reach `thresholds.signalThreshold` -> produce zero signals.
+ * Acceptance Criteria & Architecture:
+ * - Authoritative canonical threshold: 65 (below 65 is not tradeable; 65+ is eligible for the existing qualification pipeline).
+ * - Gate 8 qualifies score readiness using the authoritative threshold source without creating new thresholds.
+ * - Gate 8 does NOT bypass MTF, structure, invalid-price, or TP/SL validation.
+ * - Final publication strictly requires passing all existing hard gates, including executable R:R >= 1.8:1.
+ * - Ranking and analytics remain separate from qualification.
+ * - No score manipulation or automatic lowering to manufacture signals below 65.
+ * - If zero candidates reach thresholds.signalThreshold -> produce zero signals.
  */
 
 import { SignalDirection } from '../../types/index.js';
@@ -94,11 +98,12 @@ export interface Gate8EvaluationResult {
 
 export class Gate8TradeabilityThreshold {
   public static get FINAL_TRADEABILITY_THRESHOLD(): number {
-    const threshold = serverConfig.getConfig().thresholds.signalThreshold;
+    const threshold = serverConfig.getConfig().thresholds?.signalThreshold;
     if (typeof threshold !== 'number' || isNaN(threshold)) {
       throw new Error(`[Gate8TradeabilityThreshold] Authoritative signalThreshold is missing or invalid in serverConfig`);
     }
-    return threshold;
+    // Canonical floor is 65: Below 65 is never tradeable
+    return Math.max(65, threshold);
   }
 
   /**
@@ -150,7 +155,8 @@ export class Gate8TradeabilityThreshold {
     if (entryQuality >= 4) highlights.push(`High-Precision Dynamic Entry Location (${entryQuality}/5)`);
 
     // Factor 8: R:R Quality (Weight: 5)
-    const activeMinRR = serverConfig.getConfig().thresholds.minimumRR || 1.5;
+    // Canonical minimum executable R:R floor is 1.8:1
+    const activeMinRR = Math.max(1.8, serverConfig.getConfig().thresholds?.minimumRR ?? 1.8);
     const effRr = input.netRiskRewardRatio ?? input.riskRewardRatio ?? 0;
     let rrScore = 1.0;
     if (effRr >= 3.0) rrScore = 5.0;
@@ -211,29 +217,35 @@ export class Gate8TradeabilityThreshold {
     const finalScore = Math.round(Math.max(0, Math.min(100, rawTotal)));
 
     const finalThreshold = this.FINAL_TRADEABILITY_THRESHOLD;
-    const watchingThreshold = serverConfig.getConfig().thresholds.watchingThreshold;
+    const watchingThreshold = serverConfig.getConfig().thresholds?.watchingThreshold ?? 60;
 
-    // Assign Classification based on Final Score:
-    // < 60 = REJECT
-    // 60–64 = WATCH (NEAR_MISS_WATCHLIST)
-    // 65–69 = QUALIFIED SIGNAL
-    // 70–79 = VALID SIGNAL
-    // 80+ = HIGH-CONFLUENCE (STRONG_SIGNAL / VERY_STRONG_SIGNAL / EXCEPTIONAL)
+    // Assign Classification based on Final Score using authoritative threshold:
+    // Below finalThreshold (canonical floor 65) -> Not tradeable (REJECT or NEAR_MISS_WATCHLIST)
+    // At or above finalThreshold (65+) -> Eligible for qualification pipeline:
+    //   - 65–69: QUALIFIED SIGNAL
+    //   - 70–79: VALID SIGNAL
+    //   - 80–84: HIGH_CONFLUENCE
+    //   - 85–89: VERY_STRONG_SIGNAL
+    //   - 90–100: EXCEPTIONAL
     let classification: Gate8ScoreClassification;
-    if (finalScore >= 90) {
-      classification = 'EXCEPTIONAL';
-    } else if (finalScore >= 85) {
-      classification = 'VERY_STRONG_SIGNAL';
-    } else if (finalScore >= 80) {
-      classification = 'HIGH_CONFLUENCE';
-    } else if (finalScore >= 70) {
-      classification = 'VALID_SIGNAL';
-    } else if (finalScore >= 65) {
-      classification = 'QUALIFIED_SIGNAL';
-    } else if (finalScore >= 60) {
-      classification = 'NEAR_MISS_WATCHLIST';
+    if (finalScore < finalThreshold) {
+      if (finalScore >= watchingThreshold) {
+        classification = 'NEAR_MISS_WATCHLIST';
+      } else {
+        classification = 'REJECT';
+      }
     } else {
-      classification = 'REJECT';
+      if (finalScore >= 90) {
+        classification = 'EXCEPTIONAL';
+      } else if (finalScore >= 85) {
+        classification = 'VERY_STRONG_SIGNAL';
+      } else if (finalScore >= 80) {
+        classification = 'HIGH_CONFLUENCE';
+      } else if (finalScore >= 70) {
+        classification = 'VALID_SIGNAL';
+      } else {
+        classification = 'QUALIFIED_SIGNAL';
+      }
     }
 
     const isTradeable = finalScore >= finalThreshold;

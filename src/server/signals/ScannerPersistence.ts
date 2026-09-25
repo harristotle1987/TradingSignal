@@ -136,6 +136,14 @@ export interface PersistedSentSignal {
   lastLifecycleCheckStatus?: LifecycleCheckStatus;
   lastLifecycleCheckPrice?: number;
   lastLifecycleCheckSource?: string;
+  runnerStatus?: 'PENDING' | 'ACTIVE' | 'EXITED' | 'INELIGIBLE';
+  runnerAllocationPct?: number;
+  runnerActivatedAt?: string;
+  runnerPeakPrice?: number;
+  runnerTrailingStop?: number;
+  runnerExitPrice?: number;
+  runnerExitAt?: string;
+  runnerExitReason?: string;
 }
 
 export interface PersistedRejectedCandidate {
@@ -202,7 +210,7 @@ export class ScannerPersistence {
     capState: {
       date: new Date().toISOString().split('T')[0],
       dailySignalCount: 0,
-      dailySignalCap: 5,
+      dailySignalCap: 10,
       lastScanTime: 0,
       lastCronExecution: 0,
       lastAutomatedScan: 0,
@@ -342,7 +350,7 @@ export class ScannerPersistence {
   /**
    * Retrieves current Daily Cap State (with Firestore sync if available).
    */
-  static async getCapState(defaultCap = 5): Promise<DailyCapState> {
+  static async getCapState(defaultCap = 10): Promise<DailyCapState> {
     this.init();
     this.checkDailyRollover();
 
@@ -451,7 +459,7 @@ export class ScannerPersistence {
   /**
    * Atomically verifies daily cap and increments counter if allowed, returning a reservationId.
    */
-  static async tryIncrementCap(defaultCap = 5): Promise<{ allowed: boolean; count: number; cap: number; reservationId?: string }> {
+  static async tryIncrementCap(defaultCap = 10): Promise<{ allowed: boolean; count: number; cap: number; reservationId?: string }> {
     this.init();
     this.checkDailyRollover();
 

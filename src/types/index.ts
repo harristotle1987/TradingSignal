@@ -250,6 +250,14 @@ export interface TradingSignal {
   lastLifecycleCheckSource?: string;
   displayPrice?: number;
   factors?: any;
+  runnerStatus?: 'PENDING' | 'ACTIVE' | 'EXITED' | 'INELIGIBLE';
+  runnerAllocationPct?: number;
+  runnerActivatedAt?: string;
+  runnerPeakPrice?: number;
+  runnerTrailingStop?: number;
+  runnerExitPrice?: number;
+  runnerExitAt?: string;
+  runnerExitReason?: string;
 }
 
 export interface ScannerFunnelCounters {

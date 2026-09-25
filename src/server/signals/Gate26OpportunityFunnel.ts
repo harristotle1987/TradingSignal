@@ -26,9 +26,9 @@
  *    - Secondary Timeframe Confirmation (Multi-TF trend & structure alignment)
  *
  * 3. OPPORTUNITY FUNNEL STAGES:
- *    - 70–74: WATCHING (Passes hard gates, monitored for missing soft confirmations; NEVER sent as trade signal)
- *    - 75–81: QUALIFIED CANDIDATE (Strong setup, monitored for final trigger / AI confirmation)
- *    - 82+:   SIGNAL / WAITING_ENTRY / ACTIVE (Full actionable trading signal)
+ *    - watchingThreshold–(qualifiedCandidateThreshold-1): WATCHING (Passes hard gates, monitored for missing soft confirmations; NEVER sent as trade signal)
+ *    - qualifiedCandidateThreshold–(signalThreshold-1): QUALIFIED CANDIDATE (Strong setup, monitored for final trigger / AI confirmation)
+ *    - >= signalThreshold (canonical floor 65): SIGNAL / WAITING_ENTRY / ACTIVE (Full actionable trading signal)
  *
  * 4. ADAPTIVE MONITORING:
  *    - Promotes to SIGNAL if missing confirmations improve.
@@ -423,9 +423,9 @@ export class SoftConditionsEvaluator {
 export class OpportunityFunnelEngine {
   /**
    * Classifies a setup into the Opportunity Funnel:
-   * - WATCHING: 70–74 (Passes all Hard Gates, missing some Soft Confirmations; NOT sent as trade signal)
-   * - QUALIFIED CANDIDATE (CONFIRMED): 75–81 (Passes all Hard Gates, strong soft confluence; monitored closely)
-   * - SIGNAL / WAITING_ENTRY: 82+ (Passes Hard Gates + fully confirmed; actionable trade signal)
+   * - WATCHING: watchingThreshold to qualifiedCandidateThreshold - 1 (Passes all Hard Gates, missing some Soft Confirmations; NOT sent as trade signal)
+   * - QUALIFIED CANDIDATE (CONFIRMED): qualifiedCandidateThreshold to signalThreshold - 1 (Passes all Hard Gates, strong soft confluence; monitored closely)
+   * - SIGNAL / WAITING_ENTRY: >= signalThreshold (canonical floor 65; Passes Hard Gates + fully confirmed; actionable trade signal)
    */
   static classifyOpportunity(params: {
     symbol: string;

@@ -794,8 +794,8 @@ export class ScoringEngine {
 
     // Score Classification using Centralized Configuration (GATE 5):
     // score >= 80 → HIGH_CONFLUENCE_SIGNAL
-    // score >= signalThreshold (70) → ACTIONABLE SIGNAL (HIGH_QUALITY)
-    // score >= qualifiedCandidateThreshold (65) → QUALIFIED CANDIDATE (VALID)
+    // score >= signalThreshold (65) → ACTIONABLE SIGNAL (HIGH_QUALITY)
+    // score >= qualifiedCandidateThreshold (63) → QUALIFIED CANDIDATE (VALID)
     // score >= watchingThreshold (60) → WATCHING (VALID)
     // Below watchingThreshold (60) → REJECT
     let qualityTier: QualityTier = 'REJECT';

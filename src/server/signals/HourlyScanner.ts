@@ -554,7 +554,7 @@ export class HourlyScannerService {
 
         // GATE 65 / GATE 82: Condition 1 - Centralized Final Tradeability Resolution on coreScore
         // finalRequiredScore = Math.max(thresholds.signalThreshold, regimeAdaptiveThreshold)
-        // Gate 27 can make the system MORE selective, but NEVER less selective than signalThreshold.
+        // Gate 27 operates on canonical 65 floor; regime analysis is preserved for classification and analytics.
         const tradeabilityCheck = TradeRankingEngine.calculateFinalRequiredScore({
           symbol: sig.symbol,
           actualScore: coreScore,
@@ -1248,6 +1248,7 @@ export class HourlyScannerService {
   async getSettingsAsync(): Promise<
     ScannerSettings & {
       limit: number;
+      dailySignalCap: number;
       dailySignalCount: number;
       sentSignalsToday: PersistedSentSignal[];
       recentNotifications: PersistedNotification[];
@@ -1315,6 +1316,7 @@ export class HourlyScannerService {
       scannerStatus,
       isScanning: this.isScanning,
       limit: capState.dailySignalCap,
+      dailySignalCap: capState.dailySignalCap,
       dailySignalCount: capState.dailySignalCount,
       sentSignalsToday,
       recentNotifications,
@@ -1326,8 +1328,9 @@ export class HourlyScannerService {
   /**
    * Synchronous settings view.
    */
-  getSettings(): ScannerSettings & { limit: number } {
+  getSettings(): ScannerSettings & { limit: number; dailySignalCap: number } {
     const settings = ScannerPersistence.getSettings();
+    const cap = ScannerPersistence.localData?.capState?.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap || 10;
     return {
       enabled: settings.enabled,
       notificationsEnabled: settings.notificationsEnabled,
@@ -1337,7 +1340,8 @@ export class HourlyScannerService {
         : 15,
       signalsSentTimestamps: [],
       lastScanTime: 0,
-      limit: 5,
+      limit: cap,
+      dailySignalCap: cap,
     };
   }
 

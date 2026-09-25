@@ -16,34 +16,34 @@ export interface AssetClassGuardrails {
 
 export const ASSET_CLASS_GUARDRAILS: Record<string, AssetClassGuardrails> = {
   CRYPTO: {
-    tp1: { minPct: 0.50, maxPct: 2.00 },
-    tp2: { minPct: 1.00, maxPct: 4.00 },
-    tp3: { minPct: 1.50, maxPct: 6.00 },
+    tp1: { minPct: 0.50, maxPct: 3.00 },
+    tp2: { minPct: 1.00, maxPct: 7.50 },
+    tp3: { minPct: 1.50, maxPct: 12.00 },
   },
   FOREX: {
-    tp1: { minPct: 0.15, maxPct: 0.80 },
-    tp2: { minPct: 0.30, maxPct: 1.50 },
-    tp3: { minPct: 0.50, maxPct: 2.50 },
+    tp1: { minPct: 0.15, maxPct: 1.00 },
+    tp2: { minPct: 0.30, maxPct: 2.00 },
+    tp3: { minPct: 0.50, maxPct: 4.00 },
   },
   STOCKS: {
-    tp1: { minPct: 0.30, maxPct: 1.20 },
-    tp2: { minPct: 0.60, maxPct: 2.50 },
-    tp3: { minPct: 1.00, maxPct: 4.00 },
+    tp1: { minPct: 0.30, maxPct: 2.00 },
+    tp2: { minPct: 0.60, maxPct: 4.00 },
+    tp3: { minPct: 1.00, maxPct: 7.00 },
   },
   COMMODITIES: {
-    tp1: { minPct: 0.30, maxPct: 1.20 },
-    tp2: { minPct: 0.60, maxPct: 2.50 },
-    tp3: { minPct: 1.00, maxPct: 4.00 },
+    tp1: { minPct: 0.30, maxPct: 2.00 },
+    tp2: { minPct: 0.60, maxPct: 4.00 },
+    tp3: { minPct: 1.00, maxPct: 7.00 },
   },
   INDICES: {
-    tp1: { minPct: 0.30, maxPct: 1.20 },
-    tp2: { minPct: 0.60, maxPct: 2.50 },
-    tp3: { minPct: 1.00, maxPct: 4.00 },
+    tp1: { minPct: 0.30, maxPct: 2.00 },
+    tp2: { minPct: 0.60, maxPct: 4.00 },
+    tp3: { minPct: 1.00, maxPct: 7.00 },
   },
   DEFAULT: {
-    tp1: { minPct: 0.20, maxPct: 2.50 },
-    tp2: { minPct: 0.50, maxPct: 5.00 },
-    tp3: { minPct: 0.80, maxPct: 8.00 },
+    tp1: { minPct: 0.20, maxPct: 3.00 },
+    tp2: { minPct: 0.50, maxPct: 7.50 },
+    tp3: { minPct: 0.80, maxPct: 12.00 },
   },
 };
 

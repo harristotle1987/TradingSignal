@@ -14,7 +14,7 @@
  * 4. A candidate/watchlist item MUST NOT consume a signal slot. Only final confirmed signals consume signal quota.
  * 5. Prevent correlated signals from consuming the entire daily allocation (Cluster allocation cap).
  * 6. Maintain portfolio exposure protection.
- * 7. Do not increase default cap automatically (Default remains 5).
+ * 7. Canonical default daily automated signal cap is 10.
  */
 
 import { serverConfig } from '../config.js';
@@ -46,8 +46,8 @@ export interface FrequencyMetrics {
 
 export class Gate36ConfigurableSignalFrequency {
   private static config: FrequencyConfig = {
-    dailySignalCap: 5, // Default remains 5 (not automatically increased)
-    preset: '5',
+    dailySignalCap: 10, // Canonical default daily automated signal cap is 10
+    preset: '10',
     maxClusterAllocationPct: 0.40, // Max 40% of daily cap per correlation cluster
   };
 
@@ -72,7 +72,7 @@ export class Gate36ConfigurableSignalFrequency {
    * Returns current signal frequency configuration
    */
   public static getConfig(): FrequencyConfig {
-    const currentCap = serverConfig.getConfig().thresholds.dailySignalCap || this.config.dailySignalCap;
+    const currentCap = serverConfig.getConfig().thresholds.dailySignalCap || this.config.dailySignalCap || 10;
     return {
       dailySignalCap: currentCap,
       preset: this.config.preset,
@@ -88,14 +88,14 @@ export class Gate36ConfigurableSignalFrequency {
     customCap?: number;
     maxClusterAllocationPct?: number;
   }): FrequencyConfig {
-    let newCap = 5;
-    let preset: SignalCapPreset = params.preset || '5';
+    let newCap = 10;
+    let preset: SignalCapPreset = params.preset || '10';
 
     if (preset === '5') newCap = 5;
     else if (preset === '10') newCap = 10;
     else if (preset === '15') newCap = 15;
     else if (preset === 'CUSTOM') {
-      const customVal = typeof params.customCap === 'number' ? params.customCap : 5;
+      const customVal = typeof params.customCap === 'number' ? params.customCap : 10;
       newCap = Math.max(1, Math.min(100, Math.floor(customVal)));
     } else if (typeof params.customCap === 'number') {
       preset = 'CUSTOM';

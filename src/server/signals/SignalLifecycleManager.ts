@@ -25,7 +25,7 @@ import { getDynamicPrecision } from '../../utils/formatters.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
 import { ScannerPersistence, PersistedSentSignal, LifecycleCheckStatus } from './ScannerPersistence.js';
 import { StrategyPerformanceTracker } from './StrategyPerformanceTracker.js';
-import { serverConfig, TP1_ALLOCATION, TP2_ALLOCATION, TP3_ALLOCATION, HISTORICAL_ENTRY_POLICY } from '../config.js';
+import { serverConfig, TP1_ALLOCATION, TP2_ALLOCATION, TP3_ALLOCATION, RUNNER_ALLOCATION, HISTORICAL_ENTRY_POLICY } from '../config.js';
 import { SignalLogger, SignalLogStatus } from './SignalLogger.js';
 import { SignalOutcomeLogger, SignalOutcomeRecord } from './SignalOutcomeLogger.js';
 import { Gate29ExecutableEntryValidation } from './Gate29ExecutableEntryValidation.js';
@@ -112,6 +112,14 @@ export interface PriceEvaluationResult {
   tp2HitPrice?: number;
   tp3HitPrice?: number;
   stopLossHitPrice?: number;
+  runnerStatus?: 'PENDING' | 'ACTIVE' | 'EXITED' | 'INELIGIBLE';
+  runnerAllocationPct?: number;
+  runnerActivatedAt?: string;
+  runnerPeakPrice?: number;
+  runnerTrailingStop?: number;
+  runnerExitPrice?: number;
+  runnerExitAt?: string;
+  runnerExitReason?: string;
   transitions: ProgressiveTransitionStep[];
 }
 
@@ -224,6 +232,15 @@ export class SignalLifecycleManager {
     let spread = sig.spread;
     let entryTriggerTimestamp = sig.entryTriggerTimestamp;
 
+    let runnerStatus = sig.runnerStatus || 'PENDING';
+    let runnerAllocationPct = sig.runnerAllocationPct ?? RUNNER_ALLOCATION;
+    let runnerActivatedAt = sig.runnerActivatedAt;
+    let runnerPeakPrice = sig.runnerPeakPrice;
+    let runnerTrailingStop = sig.runnerTrailingStop;
+    let runnerExitPrice = sig.runnerExitPrice;
+    let runnerExitAt = sig.runnerExitAt;
+    let runnerExitReason = sig.runnerExitReason;
+
     if (currentStatus === 'WAITING_ENTRY') {
       const validationRes = Gate29ExecutableEntryValidation.validateEntry(
         sig.direction,
@@ -302,6 +319,14 @@ export class SignalLifecycleManager {
           tp2HitPrice,
           tp3HitPrice,
           stopLossHitPrice,
+          runnerStatus,
+          runnerAllocationPct,
+          runnerActivatedAt,
+          runnerPeakPrice,
+          runnerTrailingStop,
+          runnerExitPrice,
+          runnerExitAt,
+          runnerExitReason,
           transitions: [],
         };
       }
@@ -312,7 +337,7 @@ export class SignalLifecycleManager {
       currentStatus === 'STOPPED_OUT' ||
       currentStatus === 'SL_HIT' ||
       currentStatus === 'COMPLETED' ||
-      currentStatus === 'TP3_HIT' ||
+      (currentStatus === 'TP3_HIT' && sig.runnerStatus !== 'ACTIVE') ||
       currentStatus === 'EXPIRED' ||
       currentStatus === 'SUPERSEDED' ||
       currentStatus === 'AMBIGUOUS' ||
@@ -334,6 +359,14 @@ export class SignalLifecycleManager {
         tp2HitPrice: sig.tp2HitPrice,
         tp3HitPrice: sig.tp3HitPrice,
         stopLossHitPrice: sig.stopLossHitPrice,
+        runnerStatus,
+        runnerAllocationPct,
+        runnerActivatedAt,
+        runnerPeakPrice,
+        runnerTrailingStop,
+        runnerExitPrice,
+        runnerExitAt,
+        runnerExitReason,
         transitions: [],
       };
     }
@@ -343,6 +376,8 @@ export class SignalLifecycleManager {
     const tp1 = sig.tp1 ?? sig.takeProfit;
     const tp2 = sig.tp2 ?? sig.takeProfit;
     const tp3 = sig.tp3 ?? sig.takeProfit;
+    const precision = getDynamicPrecision(sig.entryPrice, symbol);
+    const atrBasis = (sig as any).atr || Math.abs(tp3 - tp2) || (sig.entryPrice * 0.01);
 
     if (isBuy) {
       // 1. Check Stop Loss
@@ -405,17 +440,66 @@ export class SignalLifecycleManager {
           tp3Status = 'HIT';
           tp3HitAt = tp3HitAt || hitAtIso;
           tp3HitPrice = tp3HitPrice ?? price;
-          currentStatus = 'COMPLETED';
 
-          logger.info(`[TP_HIT] symbol=${symbol} direction=BUY currentPrice=${price} target=TP3 targetPrice=${tp3} hitPrice=${price} previousStatus=${prevStatus} newStatus=COMPLETED timestamp=${hitAtIso}`);
+          // Expansion Runner Activation Check
+          const qualifiesForRunner = price >= tp3 - EPSILON && tp3 > tp2;
+          if (qualifiesForRunner) {
+            runnerStatus = 'ACTIVE';
+            runnerAllocationPct = RUNNER_ALLOCATION;
+            runnerActivatedAt = hitAtIso;
+            runnerPeakPrice = price;
+            runnerTrailingStop = Number(Math.max(tp2, price - 1.5 * atrBasis).toFixed(precision));
+            currentStatus = 'TP3_HIT';
 
-          transitions.push({
-            nextState: 'TP3_HIT',
-            eventTime: timestampMs,
-            eventSource: 'LIVE_STREAM',
-            timeframeUsed: 'tick',
-            isRecovered: false,
-          });
+            logger.info(`[EXPANSION_RUNNER_ACTIVATED] symbol=${symbol} direction=BUY tp3=${tp3} currentPrice=${price} peakPrice=${price} trailingStop=${runnerTrailingStop} runnerAllocation=20% timestamp=${hitAtIso}`);
+
+            transitions.push({
+              nextState: 'TP3_HIT',
+              eventTime: timestampMs,
+              eventSource: 'LIVE_STREAM',
+              timeframeUsed: 'tick',
+              isRecovered: false,
+            });
+          } else {
+            runnerStatus = 'INELIGIBLE';
+            runnerExitPrice = tp3;
+            currentStatus = 'COMPLETED';
+
+            logger.info(`[TP_HIT] symbol=${symbol} direction=BUY currentPrice=${price} target=TP3 targetPrice=${tp3} hitPrice=${price} previousStatus=${prevStatus} newStatus=COMPLETED timestamp=${hitAtIso}`);
+
+            transitions.push({
+              nextState: 'TP3_HIT',
+              eventTime: timestampMs,
+              eventSource: 'LIVE_STREAM',
+              timeframeUsed: 'tick',
+              isRecovered: false,
+            });
+          }
+        } else if (tp3Status === 'HIT' && runnerStatus === 'ACTIVE') {
+          // Expansion Runner Management
+          if (price > (runnerPeakPrice ?? tp3)) {
+            runnerPeakPrice = price;
+            runnerTrailingStop = Number(Math.max(runnerTrailingStop ?? tp2, price - 1.5 * atrBasis).toFixed(precision));
+            logger.info(`[EXPANSION_RUNNER_RATCHET] symbol=${symbol} direction=BUY newPeak=${price} trailingStop=${runnerTrailingStop}`);
+          }
+
+          if (price <= (runnerTrailingStop ?? tp2) + EPSILON) {
+            runnerStatus = 'EXITED';
+            runnerExitPrice = price;
+            runnerExitAt = hitAtIso;
+            runnerExitReason = 'TRAILING_STOP_HIT';
+            currentStatus = 'COMPLETED';
+
+            logger.info(`[EXPANSION_RUNNER_EXIT] symbol=${symbol} direction=BUY exitPrice=${price} trailingStop=${runnerTrailingStop} reason=TRAILING_STOP_HIT newStatus=COMPLETED timestamp=${hitAtIso}`);
+
+            transitions.push({
+              nextState: 'COMPLETED' as any,
+              eventTime: timestampMs,
+              eventSource: 'LIVE_STREAM',
+              timeframeUsed: 'tick',
+              isRecovered: false,
+            });
+          }
         }
       }
     } else {
@@ -480,17 +564,66 @@ export class SignalLifecycleManager {
           tp3Status = 'HIT';
           tp3HitAt = tp3HitAt || hitAtIso;
           tp3HitPrice = tp3HitPrice ?? price;
-          currentStatus = 'COMPLETED';
 
-          logger.info(`[TP_HIT] symbol=${symbol} direction=SELL currentPrice=${price} target=TP3 targetPrice=${tp3} hitPrice=${price} previousStatus=${prevStatus} newStatus=COMPLETED timestamp=${hitAtIso}`);
+          // Expansion Runner Activation Check
+          const qualifiesForRunner = price <= tp3 + EPSILON && tp2 > tp3;
+          if (qualifiesForRunner) {
+            runnerStatus = 'ACTIVE';
+            runnerAllocationPct = RUNNER_ALLOCATION;
+            runnerActivatedAt = hitAtIso;
+            runnerPeakPrice = price;
+            runnerTrailingStop = Number(Math.min(tp2, price + 1.5 * atrBasis).toFixed(precision));
+            currentStatus = 'TP3_HIT';
 
-          transitions.push({
-            nextState: 'TP3_HIT',
-            eventTime: timestampMs,
-            eventSource: 'LIVE_STREAM',
-            timeframeUsed: 'tick',
-            isRecovered: false,
-          });
+            logger.info(`[EXPANSION_RUNNER_ACTIVATED] symbol=${symbol} direction=SELL tp3=${tp3} currentPrice=${price} peakPrice=${price} trailingStop=${runnerTrailingStop} runnerAllocation=20% timestamp=${hitAtIso}`);
+
+            transitions.push({
+              nextState: 'TP3_HIT',
+              eventTime: timestampMs,
+              eventSource: 'LIVE_STREAM',
+              timeframeUsed: 'tick',
+              isRecovered: false,
+            });
+          } else {
+            runnerStatus = 'INELIGIBLE';
+            runnerExitPrice = tp3;
+            currentStatus = 'COMPLETED';
+
+            logger.info(`[TP_HIT] symbol=${symbol} direction=SELL currentPrice=${price} target=TP3 targetPrice=${tp3} hitPrice=${price} previousStatus=${prevStatus} newStatus=COMPLETED timestamp=${hitAtIso}`);
+
+            transitions.push({
+              nextState: 'TP3_HIT',
+              eventTime: timestampMs,
+              eventSource: 'LIVE_STREAM',
+              timeframeUsed: 'tick',
+              isRecovered: false,
+            });
+          }
+        } else if (tp3Status === 'HIT' && runnerStatus === 'ACTIVE') {
+          // Expansion Runner Management
+          if (price < (runnerPeakPrice ?? tp3)) {
+            runnerPeakPrice = price;
+            runnerTrailingStop = Number(Math.min(runnerTrailingStop ?? tp2, price + 1.5 * atrBasis).toFixed(precision));
+            logger.info(`[EXPANSION_RUNNER_RATCHET] symbol=${symbol} direction=SELL newPeak=${price} trailingStop=${runnerTrailingStop}`);
+          }
+
+          if (price >= (runnerTrailingStop ?? tp2) - EPSILON) {
+            runnerStatus = 'EXITED';
+            runnerExitPrice = price;
+            runnerExitAt = hitAtIso;
+            runnerExitReason = 'TRAILING_STOP_HIT';
+            currentStatus = 'COMPLETED';
+
+            logger.info(`[EXPANSION_RUNNER_EXIT] symbol=${symbol} direction=SELL exitPrice=${price} trailingStop=${runnerTrailingStop} reason=TRAILING_STOP_HIT newStatus=COMPLETED timestamp=${hitAtIso}`);
+
+            transitions.push({
+              nextState: 'COMPLETED' as any,
+              eventTime: timestampMs,
+              eventSource: 'LIVE_STREAM',
+              timeframeUsed: 'tick',
+              isRecovered: false,
+            });
+          }
         }
       }
     }
@@ -521,6 +654,14 @@ export class SignalLifecycleManager {
       tp2HitPrice,
       tp3HitPrice,
       stopLossHitPrice,
+      runnerStatus,
+      runnerAllocationPct,
+      runnerActivatedAt,
+      runnerPeakPrice,
+      runnerTrailingStop,
+      runnerExitPrice,
+      runnerExitAt,
+      runnerExitReason,
       transitions,
     };
   }
@@ -1151,6 +1292,14 @@ export class SignalLifecycleManager {
       tp1HitPrice?: number;
       tp2HitPrice?: number;
       tp3HitPrice?: number;
+      runnerStatus?: 'PENDING' | 'ACTIVE' | 'EXITED' | 'INELIGIBLE';
+      runnerAllocationPct?: number;
+      runnerActivatedAt?: string;
+      runnerPeakPrice?: number;
+      runnerTrailingStop?: number;
+      runnerExitPrice?: number;
+      runnerExitAt?: string;
+      runnerExitReason?: string;
     }
   ): PersistedSentSignal['status'] {
     const isoTime = new Date(time).toISOString();
@@ -1185,6 +1334,10 @@ export class SignalLifecycleManager {
       timestamps.tp3HitTimestamp = timestamps.tp3HitTimestamp || time;
       timestamps.tp3HitAt = timestamps.tp3HitAt || isoTime;
       timestamps.tp3HitPrice = timestamps.tp3HitPrice ?? targetPrice;
+      timestamps.runnerStatus = 'ACTIVE';
+      timestamps.runnerAllocationPct = RUNNER_ALLOCATION;
+      timestamps.runnerActivatedAt = isoTime;
+      timestamps.runnerPeakPrice = targetPrice;
       transitions.push({
         nextState: 'TP3_HIT',
         eventTime: time,
@@ -1216,6 +1369,14 @@ export class SignalLifecycleManager {
       tp1HitPrice?: number;
       tp2HitPrice?: number;
       tp3HitPrice?: number;
+      runnerStatus?: 'PENDING' | 'ACTIVE' | 'EXITED' | 'INELIGIBLE';
+      runnerAllocationPct?: number;
+      runnerActivatedAt?: string;
+      runnerPeakPrice?: number;
+      runnerTrailingStop?: number;
+      runnerExitPrice?: number;
+      runnerExitAt?: string;
+      runnerExitReason?: string;
     }
   ): PersistedSentSignal['status'] {
     const isoTime = new Date(time).toISOString();
@@ -1250,6 +1411,10 @@ export class SignalLifecycleManager {
       timestamps.tp3HitTimestamp = timestamps.tp3HitTimestamp || time;
       timestamps.tp3HitAt = timestamps.tp3HitAt || isoTime;
       timestamps.tp3HitPrice = timestamps.tp3HitPrice ?? targetPrice;
+      timestamps.runnerStatus = 'ACTIVE';
+      timestamps.runnerAllocationPct = RUNNER_ALLOCATION;
+      timestamps.runnerActivatedAt = isoTime;
+      timestamps.runnerPeakPrice = targetPrice;
       transitions.push({
         nextState: 'TP3_HIT',
         eventTime: time,
@@ -1351,6 +1516,15 @@ export class SignalLifecycleManager {
     if (result.tp3HitPrice !== undefined) timestamps.tp3HitPrice = result.tp3HitPrice;
     if (result.stopLossHitPrice !== undefined) timestamps.stopLossHitPrice = result.stopLossHitPrice;
 
+    if (result.runnerStatus) (timestamps as any).runnerStatus = result.runnerStatus;
+    if (result.runnerAllocationPct !== undefined) (timestamps as any).runnerAllocationPct = result.runnerAllocationPct;
+    if (result.runnerActivatedAt) (timestamps as any).runnerActivatedAt = result.runnerActivatedAt;
+    if (result.runnerPeakPrice !== undefined) (timestamps as any).runnerPeakPrice = result.runnerPeakPrice;
+    if (result.runnerTrailingStop !== undefined) (timestamps as any).runnerTrailingStop = result.runnerTrailingStop;
+    if (result.runnerExitPrice !== undefined) (timestamps as any).runnerExitPrice = result.runnerExitPrice;
+    if (result.runnerExitAt) (timestamps as any).runnerExitAt = result.runnerExitAt;
+    if (result.runnerExitReason) (timestamps as any).runnerExitReason = result.runnerExitReason;
+
     return { finalState: result.newStatus, transitions: result.transitions };
   }
 
@@ -1387,6 +1561,14 @@ export class SignalLifecycleManager {
       tp2HitPrice?: number;
       tp3HitPrice?: number;
       stopLossHitPrice?: number;
+      runnerStatus?: 'PENDING' | 'ACTIVE' | 'EXITED' | 'INELIGIBLE';
+      runnerAllocationPct?: number;
+      runnerActivatedAt?: string;
+      runnerPeakPrice?: number;
+      runnerTrailingStop?: number;
+      runnerExitPrice?: number;
+      runnerExitAt?: string;
+      runnerExitReason?: string;
       lastLifecycleCheckAt?: string;
       lastLifecycleCheckStatus?: LifecycleCheckStatus;
       lastLifecycleCheckPrice?: number;
@@ -1498,6 +1680,14 @@ export class SignalLifecycleManager {
       tp2HitPrice: timestamps.tp2HitPrice,
       tp3HitPrice: timestamps.tp3HitPrice,
       stopLossHitPrice: timestamps.stopLossHitPrice,
+      runnerStatus: timestamps.runnerStatus ?? sig.runnerStatus,
+      runnerAllocationPct: timestamps.runnerAllocationPct ?? sig.runnerAllocationPct,
+      runnerActivatedAt: timestamps.runnerActivatedAt ?? sig.runnerActivatedAt,
+      runnerPeakPrice: timestamps.runnerPeakPrice ?? sig.runnerPeakPrice,
+      runnerTrailingStop: timestamps.runnerTrailingStop ?? sig.runnerTrailingStop,
+      runnerExitPrice: timestamps.runnerExitPrice ?? sig.runnerExitPrice,
+      runnerExitAt: timestamps.runnerExitAt ?? sig.runnerExitAt,
+      runnerExitReason: timestamps.runnerExitReason ?? sig.runnerExitReason,
       detectedAt: now,
       eventTime: step.eventTime,
       eventSource: step.eventSource,
@@ -1570,6 +1760,14 @@ export class SignalLifecycleManager {
       tp2HitPrice: entryConfirmed ? timestamps.tp2HitPrice : undefined,
       tp3HitPrice: entryConfirmed ? timestamps.tp3HitPrice : undefined,
       stopLossHitPrice: entryConfirmed ? timestamps.stopLossHitPrice : undefined,
+      runnerStatus: timestamps.runnerStatus ?? sig.runnerStatus,
+      runnerAllocationPct: timestamps.runnerAllocationPct ?? sig.runnerAllocationPct,
+      runnerActivatedAt: timestamps.runnerActivatedAt ?? sig.runnerActivatedAt,
+      runnerPeakPrice: timestamps.runnerPeakPrice ?? sig.runnerPeakPrice,
+      runnerTrailingStop: timestamps.runnerTrailingStop ?? sig.runnerTrailingStop,
+      runnerExitPrice: timestamps.runnerExitPrice ?? sig.runnerExitPrice,
+      runnerExitAt: timestamps.runnerExitAt ?? sig.runnerExitAt,
+      runnerExitReason: timestamps.runnerExitReason ?? sig.runnerExitReason,
       expiredTimestamp: nextStateStr === 'EXPIRED' ? (timestamps.expiredTimestamp || now) : undefined,
       expiresAt: sig.expiresAt || (sig.timestamp + serverConfig.getConfig().signalExpirationMs),
       finalOutcome: derivedFinalOutcome,
@@ -1630,12 +1828,17 @@ export class SignalLifecycleManager {
               const w1 = TP1_ALLOCATION;
               const w2 = TP2_ALLOCATION;
               const w3 = TP3_ALLOCATION;
-              const sumW = w1 + w2 + w3;
-              const normW1 = sumW > 0 ? w1 / sumW : 1/3;
-              const normW2 = sumW > 0 ? w2 / sumW : 1/3;
-              const normW3 = sumW > 0 ? w3 / sumW : 1/3;
+              const wRunner = RUNNER_ALLOCATION;
+              const sumW = w1 + w2 + w3 + wRunner;
+              const normW1 = sumW > 0 ? w1 / sumW : 0.30;
+              const normW2 = sumW > 0 ? w2 / sumW : 0.30;
+              const normW3 = sumW > 0 ? w3 / sumW : 0.20;
+              const normRunner = sumW > 0 ? wRunner / sumW : 0.20;
 
-              realizedRR = (normW1 * calculateR(tp1)) + (normW2 * calculateR(tp2)) + (normW3 * calculateR(tp3));
+              const runnerExitPrice = Number(sig.runnerExitPrice ?? timestamps.runnerExitPrice ?? tp3);
+              const runnerR = calculateR(runnerExitPrice);
+
+              realizedRR = (normW1 * calculateR(tp1)) + (normW2 * calculateR(tp2)) + (normW3 * calculateR(tp3)) + (normRunner * runnerR);
             } else {
               realizedRR = calculateR(sig.takeProfit);
             }
@@ -1645,19 +1848,25 @@ export class SignalLifecycleManager {
             if (isPartialTp) {
               const tp1Hit = timestamps.tp1Status === 'HIT' || sig.tp1Status === 'HIT';
               const tp2Hit = timestamps.tp2Status === 'HIT' || sig.tp2Status === 'HIT';
+              const tp3Hit = timestamps.tp3Status === 'HIT' || sig.tp3Status === 'HIT';
 
               const w1 = TP1_ALLOCATION;
               const w2 = TP2_ALLOCATION;
               const w3 = TP3_ALLOCATION;
-              const sumW = w1 + w2 + w3;
-              const normW1 = sumW > 0 ? w1 / sumW : 1/3;
-              const normW2 = sumW > 0 ? w2 / sumW : 1/3;
-              const normW3 = sumW > 0 ? w3 / sumW : 1/3;
+              const wRunner = RUNNER_ALLOCATION;
+              const sumW = w1 + w2 + w3 + wRunner;
+              const normW1 = sumW > 0 ? w1 / sumW : 0.30;
+              const normW2 = sumW > 0 ? w2 / sumW : 0.30;
+              const normW3 = sumW > 0 ? w3 / sumW : 0.20;
+              const normRunner = sumW > 0 ? wRunner / sumW : 0.20;
 
-              if (tp1Hit && tp2Hit) {
-                realizedRR = (normW1 * calculateR(tp1)) + (normW2 * calculateR(tp2)) + (normW3 * -1.0);
+              if (tp1Hit && tp2Hit && tp3Hit) {
+                const runnerExitPrice = Number(sig.runnerExitPrice ?? timestamps.runnerExitPrice ?? sig.runnerTrailingStop ?? tp2);
+                realizedRR = (normW1 * calculateR(tp1)) + (normW2 * calculateR(tp2)) + (normW3 * calculateR(tp3)) + (normRunner * calculateR(runnerExitPrice));
+              } else if (tp1Hit && tp2Hit) {
+                realizedRR = (normW1 * calculateR(tp1)) + (normW2 * calculateR(tp2)) + ((normW3 + normRunner) * -1.0);
               } else if (tp1Hit) {
-                realizedRR = (normW1 * calculateR(tp1)) + ((normW2 + normW3) * -1.0);
+                realizedRR = (normW1 * calculateR(tp1)) + ((normW2 + normW3 + normRunner) * -1.0);
               } else {
                 realizedRR = -1.0;
               }
@@ -1670,19 +1879,25 @@ export class SignalLifecycleManager {
             if (isPartialTp) {
               const tp1Hit = timestamps.tp1Status === 'HIT' || sig.tp1Status === 'HIT';
               const tp2Hit = timestamps.tp2Status === 'HIT' || sig.tp2Status === 'HIT';
+              const tp3Hit = timestamps.tp3Status === 'HIT' || sig.tp3Status === 'HIT';
 
               const w1 = TP1_ALLOCATION;
               const w2 = TP2_ALLOCATION;
               const w3 = TP3_ALLOCATION;
-              const sumW = w1 + w2 + w3;
-              const normW1 = sumW > 0 ? w1 / sumW : 1/3;
-              const normW2 = sumW > 0 ? w2 / sumW : 1/3;
-              const normW3 = sumW > 0 ? w3 / sumW : 1/3;
+              const wRunner = RUNNER_ALLOCATION;
+              const sumW = w1 + w2 + w3 + wRunner;
+              const normW1 = sumW > 0 ? w1 / sumW : 0.30;
+              const normW2 = sumW > 0 ? w2 / sumW : 0.30;
+              const normW3 = sumW > 0 ? w3 / sumW : 0.20;
+              const normRunner = sumW > 0 ? wRunner / sumW : 0.20;
 
-              if (tp1Hit && tp2Hit) {
-                realizedRR = (normW1 * calculateR(tp1)) + (normW2 * calculateR(tp2)) + (normW3 * 0.0);
+              if (tp1Hit && tp2Hit && tp3Hit) {
+                const runnerExitPrice = Number(sig.runnerExitPrice ?? timestamps.runnerExitPrice ?? tp3);
+                realizedRR = (normW1 * calculateR(tp1)) + (normW2 * calculateR(tp2)) + (normW3 * calculateR(tp3)) + (normRunner * calculateR(runnerExitPrice));
+              } else if (tp1Hit && tp2Hit) {
+                realizedRR = (normW1 * calculateR(tp1)) + (normW2 * calculateR(tp2)) + ((normW3 + normRunner) * 0.0);
               } else if (tp1Hit) {
-                realizedRR = (normW1 * calculateR(tp1)) + ((normW2 + normW3) * 0.0);
+                realizedRR = (normW1 * calculateR(tp1)) + ((normW2 + normW3 + normRunner) * 0.0);
               } else {
                 realizedRR = 0.0;
               }

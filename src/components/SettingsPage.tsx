@@ -48,6 +48,7 @@ export function SettingsPage({}: SettingsPageProps) {
     nextScanTime: number;
     scannerStatus: 'ACTIVE' | 'RUNNING' | 'DISABLED' | 'CAP_REACHED';
     limit: number;
+    dailySignalCap?: number;
     dailySignalCount?: number;
     lastCronExecution?: number;
     lastAutomatedScan?: number;
@@ -183,6 +184,9 @@ export function SettingsPage({}: SettingsPageProps) {
   }, [fetchMarketStatus, fetchScannerSettings]);
 
   const activeMarketProviders = marketStatus?.providers;
+  const configuredCap = scannerSettings?.dailySignalCap ?? scannerSettings?.limit ?? 10;
+  const currentDailyCount = scannerSettings?.dailySignalCount ?? 0;
+  const remainingAllowance = Math.max(0, configuredCap - currentDailyCount);
 
   const getProviderConnectionBadge = (providerId: string) => {
     if (!activeMarketProviders || !activeMarketProviders[providerId]) {
@@ -560,17 +564,17 @@ export function SettingsPage({}: SettingsPageProps) {
             <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Daily Usage Counter</span>
             <div className="flex items-baseline gap-2">
               <span className="text-2xl font-bold text-white tracking-tight">
-                {scannerSettings?.dailySignalCount ?? 0}
+                {currentDailyCount}
               </span>
               <span className="text-slate-400 text-sm font-semibold">
-                / {scannerSettings?.limit ?? 10}
+                / {configuredCap}
               </span>
               <span className="text-slate-500 text-xs font-sans ml-1">signals today</span>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
-            {(scannerSettings?.dailySignalCount ?? 0) >= (scannerSettings?.limit ?? 10) ? (
+            {currentDailyCount >= configuredCap ? (
               <div className="px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-semibold flex items-center gap-1.5 font-sans">
                 <AlertTriangle className="w-3.5 h-3.5" />
                 <span>CAP REACHED</span>
@@ -578,7 +582,7 @@ export function SettingsPage({}: SettingsPageProps) {
             ) : (
               <div className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center gap-1.5 font-sans">
                 <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                <span>CAP ACTIVE ({(scannerSettings?.limit ?? 10) - (scannerSettings?.dailySignalCount ?? 0)} remaining)</span>
+                <span>CAP ACTIVE ({remainingAllowance} remaining)</span>
               </div>
             )}
           </div>
@@ -601,8 +605,8 @@ export function SettingsPage({}: SettingsPageProps) {
                 Are you sure you want to reset today&apos;s automated signal cap counter?
               </p>
               <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 font-mono text-xs text-slate-200">
-                <p>Current Usage: <span className="font-bold text-amber-400">{scannerSettings?.dailySignalCount ?? 0} / {scannerSettings?.limit ?? 10}</span></p>
-                <p>New Usage: <span className="font-bold text-emerald-400">0 / {scannerSettings?.limit ?? 10}</span></p>
+                <p>Current Usage: <span className="font-bold text-amber-400">{currentDailyCount} / {configuredCap}</span></p>
+                <p>New Usage: <span className="font-bold text-emerald-400">0 / {configuredCap}</span></p>
               </div>
               <p className="text-slate-400 text-[11px]">
                 Note: This resets only today&apos;s automated signal counter to zero. Existing signals, trade logs, and historical records will <strong className="text-slate-200">NOT</strong> be deleted.

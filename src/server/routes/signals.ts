@@ -2080,7 +2080,7 @@ router.get('/signals/outcome-feedback', async (_req: Request, res: Response) => 
 /**
  * GET /api/signals/calibration
  * GATE 15: Evaluates adaptive calibration status from verified live production outcomes.
- * Enforces hard safety floors (1.8R min RR, 70 min score) and sample size guardrails.
+ * Enforces hard safety floors (1.8R min RR, 65 min score) and sample size guardrails.
  */
 router.get('/signals/calibration', async (_req: Request, res: Response) => {
   try {

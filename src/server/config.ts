@@ -9,13 +9,14 @@
 import { logger } from './logger.js';
 import { isProductionPersistenceReady } from './firebaseAdmin.js';
 
-export const TP1_ALLOCATION = 0.40;
+export const TP1_ALLOCATION = 0.30;
 export const TP2_ALLOCATION = 0.30;
-export const TP3_ALLOCATION = 0.30;
+export const TP3_ALLOCATION = 0.20;
+export const RUNNER_ALLOCATION = 0.20;
 export const HISTORICAL_ENTRY_POLICY: 'CONSERVATIVE' = 'CONSERVATIVE';
 
-if (Math.abs(TP1_ALLOCATION + TP2_ALLOCATION + TP3_ALLOCATION - 1.0) > 0.000001) {
-  throw new Error(`FATAL: TP allocations must sum exactly to 1.0. Got: ${TP1_ALLOCATION + TP2_ALLOCATION + TP3_ALLOCATION}`);
+if (Math.abs(TP1_ALLOCATION + TP2_ALLOCATION + TP3_ALLOCATION + RUNNER_ALLOCATION - 1.0) > 0.000001) {
+  throw new Error(`FATAL: TP and Runner allocations must sum exactly to 1.0. Got: ${TP1_ALLOCATION + TP2_ALLOCATION + TP3_ALLOCATION + RUNNER_ALLOCATION}`);
 }
 
 export interface ProviderReadiness {
@@ -105,17 +106,21 @@ class ConfigService {
     );
     const twelvedataConfigured = Boolean(process.env.TWELVE_DATA_API_KEY && process.env.TWELVE_DATA_API_KEY.trim().length > 0);
 
-    const authoritativeMinScore = parseInt(process.env.THRESHOLD_MIN_SCORE || process.env.THRESHOLD_SIGNAL_SCORE || '65', 10);
+    // Canonical production values:
+    // Minimum/final score floor: 65, Signal threshold: 65, Minimum executable R:R: 1.8
+    // Do NOT use 70, 72, or 75 as an executable threshold.
+    // Do NOT reduce the 1.8 R:R requirement.
+    const authoritativeMinScore = 65;
     const rawWinProb = parseFloat(process.env.THRESHOLD_MIN_WIN_PROB || '55');
     const rawAiConf = parseFloat(process.env.THRESHOLD_MIN_AI_CONFIDENCE || '55');
 
     const thresholds: SignalThresholds = {
       minimumScore: authoritativeMinScore,
       watchingThreshold: parseInt(process.env.THRESHOLD_WATCHING_SCORE || '60', 10),
-      qualifiedCandidateThreshold: parseInt(process.env.THRESHOLD_QUALIFIED_CANDIDATE_SCORE || '65', 10),
+      qualifiedCandidateThreshold: parseInt(process.env.THRESHOLD_QUALIFIED_CANDIDATE_SCORE || '63', 10),
       signalThreshold: authoritativeMinScore,
-      minimumRR: parseFloat(process.env.THRESHOLD_MIN_RR || '1.8'),
-      minimumNetRR: parseFloat(process.env.THRESHOLD_MIN_NET_RR || '1.2'),
+      minimumRR: 1.8,
+      minimumNetRR: parseFloat(process.env.THRESHOLD_MIN_NET_RR || '1.1'),
       minimumAdverseNetRR: process.env.THRESHOLD_MIN_ADVERSE_NET_RR ? parseFloat(process.env.THRESHOLD_MIN_ADVERSE_NET_RR) : 1.0,
       enforceAdverseNetRRHardGate: process.env.ENFORCE_ADVERSE_NET_RR_HARD_GATE === 'true',
       minimumWinProbability: rawWinProb <= 1.0 ? rawWinProb * 100 : rawWinProb,
@@ -123,7 +128,7 @@ class ConfigService {
       minimumTimeframeAlignment: 0.50,
       AIConfirmationMode: (process.env.THRESHOLD_AI_CONFIRMATION_MODE as 'REQUIRED' | 'OPTIONAL' | 'DISABLED') || 'OPTIONAL',
       minimumAiConfidence: rawAiConf <= 1.0 ? rawAiConf * 100 : rawAiConf,
-      dailySignalCap: parseInt(process.env.THRESHOLD_DAILY_SIGNAL_CAP || '5', 10),
+      dailySignalCap: parseInt(process.env.THRESHOLD_DAILY_SIGNAL_CAP || '10', 10),
       candidateLimit: parseInt(process.env.THRESHOLD_CANDIDATE_LIMIT || '10', 10),
       probabilitySource: (process.env.THRESHOLD_PROBABILITY_SOURCE || process.env.PROBABILITY_SOURCE || 'EMPIRICAL') as 'EMPIRICAL' | 'MODEL' | 'NONE',
       requireEmpiricalCalibration: process.env.REQUIRE_EMPIRICAL_CALIBRATION === 'true',
@@ -183,7 +188,7 @@ class ConfigService {
   }
 
   updateThresholds(partial: Partial<SignalThresholds>): SignalThresholds {
-    const minScore = Math.max(65, partial.signalThreshold ?? partial.minimumScore ?? this.config.thresholds.signalThreshold);
+    const minScore = 65; // Canonical production score floor and signal threshold is strictly 65
     const minRR = Math.max(1.8, partial.minimumRR ?? this.config.thresholds.minimumRR);
 
     this.config.thresholds = {

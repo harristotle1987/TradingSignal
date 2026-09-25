@@ -46,6 +46,14 @@ export interface SignalOutcomeRecord {
   tp2HitPrice?: number;
   tp3HitPrice?: number;
   stopLossHitPrice?: number;
+  runnerStatus?: 'PENDING' | 'ACTIVE' | 'EXITED' | 'INELIGIBLE';
+  runnerAllocationPct?: number;
+  runnerActivatedAt?: string;
+  runnerPeakPrice?: number;
+  runnerTrailingStop?: number;
+  runnerExitPrice?: number;
+  runnerExitAt?: string;
+  runnerExitReason?: string;
   timestamp: number; // creation timestamp
   updatedAt: number; // last updated timestamp
   detectedAt?: number;

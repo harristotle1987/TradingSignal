@@ -14,7 +14,8 @@ import { ExchangeRateAdapter } from '../src/server/market/adapters/ExchangeRateA
 import { adminAuthMiddleware, extractAuthToken } from '../src/server/middleware/adminAuth.js';
 import { SignalEngine } from '../src/server/signals/SignalEngine.js';
 import { StrategyEngine } from '../src/server/signals/StrategyEngine.js';
-import { serverConfig } from '../src/server/config.js';
+import { serverConfig, TP1_ALLOCATION, TP2_ALLOCATION, TP3_ALLOCATION, RUNNER_ALLOCATION } from '../src/server/config.js';
+import { AtrTpGenerator, ASSET_CLASS_GUARDRAILS } from '../src/server/signals/AtrTpGenerator.js';
 import { SignalValidator } from '../src/server/signals/SignalValidator.js';
 import { MarketStructureDetector } from '../src/server/signals/MarketStructureDetector.js';
 import { CooldownManager } from '../src/server/signals/CooldownManager.js';
@@ -38,6 +39,7 @@ import { Gate27RegimeThresholds } from '../src/server/signals/Gate27RegimeThresh
 import { TradeRankingEngine } from '../src/server/signals/TradeRankingEngine.js';
 import { SignalLifecycleManager } from '../src/server/signals/SignalLifecycleManager.js';
 import { ScannerPersistence, PersistedSentSignal } from '../src/server/signals/ScannerPersistence.js';
+import { Gate36ConfigurableSignalFrequency } from '../src/server/signals/Gate36ConfigurableSignalFrequency.js';
 import { isActionableSignal, NormalizedCandle } from '../src/types/index.js';
 import { logger } from '../src/server/logger.js';
 
@@ -1162,7 +1164,7 @@ async function runAll() {
       tracker2.recordCandidate({
         symbol: 'EURUSD',
         direction: 'BUY',
-        score: 68,
+        score: 62,
         primaryRejectionReason: 'REJECTED: FINAL_SCORE_BELOW_THRESHOLD',
         failedGates: [StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD],
         finalDecision: 'REJECTED',
@@ -2133,10 +2135,10 @@ async function runAll() {
       assert(res.passed === true, 'Score 66 must pass threshold 65');
     });
 
-    await test('34. Switching to CONSERVATIVE raises hurdle to 72 score and 1.8 R:R, rejecting score 66', () => {
+    await test('34. Switching to CONSERVATIVE enforces canonical 65 score floor and 1.8 R:R, passing score 66', () => {
       SignalSensitivityManager.setActiveProfile('CONSERVATIVE');
       assert(SignalSensitivityManager.getActiveProfileName() === 'CONSERVATIVE', 'Active profile must be CONSERVATIVE');
-      assert(serverConfig.getConfig().thresholds.signalThreshold === 72, 'serverConfig signalThreshold must be 72');
+      assert(serverConfig.getConfig().thresholds.signalThreshold === 65, 'serverConfig signalThreshold must be 65');
       assert(serverConfig.getConfig().thresholds.minimumRR === 1.8, 'serverConfig minimumRR must be 1.8');
 
       const res = Gate27RegimeThresholds.resolveThreshold({
@@ -2146,8 +2148,8 @@ async function runAll() {
         assetClass: 'FOREX',
         actualScore: 66,
       });
-      assert(res.resolvedThreshold === 72, `Expected threshold 72, got ${res.resolvedThreshold}`);
-      assert(res.passed === false, 'Score 66 must be rejected against hurdle 72');
+      assert(res.resolvedThreshold === 65, `Expected threshold 65, got ${res.resolvedThreshold}`);
+      assert(res.passed === true, 'Score 66 must pass canonical threshold 65');
     });
 
     await test('35. Switching to ACTIVE trader profile enforces canonical score floor 65 while maintaining 1.8 R:R floor', () => {
@@ -3655,7 +3657,27 @@ async function runAll() {
         await ScannerPersistence.deleteSentSignal(testSig.id);
       });
 
-      await test('POST /api/scanner/reset-cap resets count to 0 and returns updated settings', async () => {
+      await test('Canonical default daily cap is 10 across config, persistence, frequency engine, and scanner', async () => {
+        const configCap = serverConfig.getConfig().thresholds.dailySignalCap;
+        assert(configCap === 10, `serverConfig dailySignalCap must default to 10, got ${configCap}`);
+
+        const capState = await ScannerPersistence.getCapState();
+        assert(capState.dailySignalCap === 10, `ScannerPersistence dailySignalCap must default to 10, got ${capState.dailySignalCap}`);
+
+        const freqConfig = Gate36ConfigurableSignalFrequency.getConfig();
+        assert(freqConfig.dailySignalCap === 10, `Gate36 dailySignalCap must default to 10, got ${freqConfig.dailySignalCap}`);
+
+        const scanner = new HourlyScannerService();
+        const syncSettings = scanner.getSettings();
+        assert(syncSettings.limit === 10, `HourlyScanner sync limit must be 10, got ${syncSettings.limit}`);
+        assert(syncSettings.dailySignalCap === 10, `HourlyScanner sync dailySignalCap must be 10, got ${syncSettings.dailySignalCap}`);
+
+        const asyncSettings = await scanner.getSettingsAsync();
+        assert(asyncSettings.limit === 10, `HourlyScanner async limit must be 10, got ${asyncSettings.limit}`);
+        assert(asyncSettings.dailySignalCap === 10, `HourlyScanner async dailySignalCap must be 10, got ${asyncSettings.dailySignalCap}`);
+      });
+
+      await test('POST /api/scanner/reset-cap resets count to 0 and returns updated settings with canonical cap', async () => {
         // Increment cap count
         await ScannerPersistence.tryIncrementCap(10);
 
@@ -3669,12 +3691,134 @@ async function runAll() {
         assert(data.success === true, 'Response success must be true');
         assert(data.settings?.dailySignalCount === 0, 'dailySignalCount in returned settings must be 0');
         assert(data.capState?.dailySignalCount === 0, 'dailySignalCount in capState must be 0');
+        assert(data.settings?.limit === 10, `limit in returned settings must be 10, got ${data.settings?.limit}`);
+        assert(data.capState?.dailySignalCap === 10, `dailySignalCap in capState must be 10, got ${data.capState?.dailySignalCap}`);
       });
     } finally {
       if (server) {
         server.close();
       }
     }
+  });
+
+  // --- SUITE 23: GATE 1 — EXPANDED TP GUARDRAILS & EXPANSION RUNNER ---
+  await describe('Suite 23: Gate 1 — Expanded TP Guardrails & Expansion Runner', async () => {
+    await test('ASSET_CLASS_GUARDRAILS contains correct expanded percentage ceilings for Crypto, Forex, and Stocks', () => {
+      // CRYPTO
+      assert(ASSET_CLASS_GUARDRAILS.CRYPTO.tp1.minPct === 0.50 && ASSET_CLASS_GUARDRAILS.CRYPTO.tp1.maxPct === 3.00, 'Crypto TP1 guardrail must be 0.50% - 3.00%');
+      assert(ASSET_CLASS_GUARDRAILS.CRYPTO.tp2.minPct === 1.00 && ASSET_CLASS_GUARDRAILS.CRYPTO.tp2.maxPct === 7.50, 'Crypto TP2 guardrail must be 1.00% - 7.50%');
+      assert(ASSET_CLASS_GUARDRAILS.CRYPTO.tp3.minPct === 1.50 && ASSET_CLASS_GUARDRAILS.CRYPTO.tp3.maxPct === 12.00, 'Crypto TP3 guardrail must be 1.50% - 12.00%');
+
+      // FOREX
+      assert(ASSET_CLASS_GUARDRAILS.FOREX.tp1.minPct === 0.15 && ASSET_CLASS_GUARDRAILS.FOREX.tp1.maxPct === 1.00, 'Forex TP1 guardrail must be 0.15% - 1.00%');
+      assert(ASSET_CLASS_GUARDRAILS.FOREX.tp2.minPct === 0.30 && ASSET_CLASS_GUARDRAILS.FOREX.tp2.maxPct === 2.00, 'Forex TP2 guardrail must be 0.30% - 2.00%');
+      assert(ASSET_CLASS_GUARDRAILS.FOREX.tp3.minPct === 0.50 && ASSET_CLASS_GUARDRAILS.FOREX.tp3.maxPct === 4.00, 'Forex TP3 guardrail must be 0.50% - 4.00%');
+
+      // STOCKS
+      assert(ASSET_CLASS_GUARDRAILS.STOCKS.tp1.minPct === 0.30 && ASSET_CLASS_GUARDRAILS.STOCKS.tp1.maxPct === 2.00, 'Stocks TP1 guardrail must be 0.30% - 2.00%');
+      assert(ASSET_CLASS_GUARDRAILS.STOCKS.tp2.minPct === 0.60 && ASSET_CLASS_GUARDRAILS.STOCKS.tp2.maxPct === 4.00, 'Stocks TP2 guardrail must be 0.60% - 4.00%');
+      assert(ASSET_CLASS_GUARDRAILS.STOCKS.tp3.minPct === 1.00 && ASSET_CLASS_GUARDRAILS.STOCKS.tp3.maxPct === 7.00, 'Stocks TP3 guardrail must be 1.00% - 7.00%');
+    });
+
+    await test('AtrTpGenerator generates strictly ordered TP1 < TP2 < TP3 for BUY and TP1 > TP2 > TP3 for SELL', () => {
+      const buyRes = AtrTpGenerator.generate({
+        direction: 'BUY',
+        entryPrice: 50000,
+        atr: 1000,
+        assetClass: 'CRYPTO',
+      });
+
+      assert(buyRes.isValid, 'BUY TP generation must be valid');
+      assert(buyRes.tp1 > 50000, 'BUY TP1 must be greater than entry');
+      assert(buyRes.tp2 > buyRes.tp1, 'BUY TP2 must be greater than TP1');
+      assert(buyRes.tp3 > buyRes.tp2, 'BUY TP3 must be greater than TP2');
+
+      const sellRes = AtrTpGenerator.generate({
+        direction: 'SELL',
+        entryPrice: 50000,
+        atr: 1000,
+        assetClass: 'CRYPTO',
+      });
+
+      assert(sellRes.isValid, 'SELL TP generation must be valid');
+      assert(sellRes.tp1 < 50000, 'SELL TP1 must be less than entry');
+      assert(sellRes.tp2 < sellRes.tp1, 'SELL TP2 must be less than TP1');
+      assert(sellRes.tp3 < sellRes.tp2, 'SELL TP3 must be less than TP2');
+    });
+
+    await test('Position allocations match 30% TP1, 30% TP2, 20% TP3, 20% Runner, summing exactly to 100%', () => {
+      assert(TP1_ALLOCATION === 0.30, `TP1_ALLOCATION must be 0.30, got ${TP1_ALLOCATION}`);
+      assert(TP2_ALLOCATION === 0.30, `TP2_ALLOCATION must be 0.30, got ${TP2_ALLOCATION}`);
+      assert(TP3_ALLOCATION === 0.20, `TP3_ALLOCATION must be 0.20, got ${TP3_ALLOCATION}`);
+      assert(RUNNER_ALLOCATION === 0.20, `RUNNER_ALLOCATION must be 0.20, got ${RUNNER_ALLOCATION}`);
+      const total = TP1_ALLOCATION + TP2_ALLOCATION + TP3_ALLOCATION + RUNNER_ALLOCATION;
+      assert(Math.abs(total - 1.0) < 1e-6, `Total position allocation must sum to 1.0, got ${total}`);
+    });
+
+    await test('SignalLifecycleManager activates Expansion Runner at TP3 and trails stop dynamically', () => {
+      const now = Date.now();
+      const testSig: PersistedSentSignal = {
+        id: 'test_runner_sig_1',
+        snapshotId: 'snap_runner_1',
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        entryPrice: 60000,
+        stopLoss: 59000,
+        takeProfit: 63000,
+        tp1: 61000,
+        tp2: 62000,
+        tp3: 63000,
+        riskRewardRatio: 2.0,
+        score: 85,
+        rankTier: 'BEST_TRADE',
+        strategy: 'Trend Confluence',
+        timeframe: '1h',
+        dataSource: 'Bitget',
+        status: 'ACTIVE',
+        entryHitTimestamp: new Date(now - 3600000).toISOString(),
+        tp1Status: 'HIT',
+        tp2Status: 'HIT',
+        tp3Status: 'PENDING',
+        timestamp: now - 3600000,
+        date: new Date(now).toISOString().split('T')[0],
+        isTradeableSignal: true,
+        signalClassification: 'TRADEABLE',
+      } as any;
+
+      // Price hits TP3 (63000)
+      const resTp3 = SignalLifecycleManager.evaluateSignalPriceUpdate(testSig, 63050, now);
+      assert(resTp3.tp3Status === 'HIT', 'TP3 must be marked HIT');
+      assert(resTp3.runnerStatus === 'ACTIVE', 'Expansion Runner must be ACTIVE when TP3 is reached with continuation');
+      assert(resTp3.runnerAllocationPct === 0.20, 'Expansion Runner allocation must be 20%');
+      assert(resTp3.runnerPeakPrice === 63050, 'Runner peak price must be recorded');
+      assert(typeof resTp3.runnerTrailingStop === 'number' && resTp3.runnerTrailingStop >= 62000, 'Runner trailing stop must be >= TP2');
+
+      // Price advances further in trend (64500)
+      const sigWithRunnerActive: PersistedSentSignal = {
+        ...testSig,
+        status: resTp3.newStatus,
+        tp3Status: 'HIT',
+        runnerStatus: 'ACTIVE',
+        runnerPeakPrice: resTp3.runnerPeakPrice,
+        runnerTrailingStop: resTp3.runnerTrailingStop,
+      };
+
+      const resAdvance = SignalLifecycleManager.evaluateSignalPriceUpdate(sigWithRunnerActive, 64500, now + 60000);
+      assert(resAdvance.runnerPeakPrice === 64500, 'Runner peak price must update on new high');
+      assert(resAdvance.runnerTrailingStop! > resTp3.runnerTrailingStop!, 'Runner trailing stop must ratchet upward on higher price');
+
+      // Price pulls back and hits trailing stop
+      const sigAdvanced: PersistedSentSignal = {
+        ...sigWithRunnerActive,
+        runnerPeakPrice: resAdvance.runnerPeakPrice,
+        runnerTrailingStop: resAdvance.runnerTrailingStop,
+      };
+
+      const resExit = SignalLifecycleManager.evaluateSignalPriceUpdate(sigAdvanced, sigAdvanced.runnerTrailingStop! - 10, now + 120000);
+      assert(resExit.runnerStatus === 'EXITED', 'Runner must be EXITED when price hits trailing stop');
+      assert(resExit.newStatus === 'COMPLETED', 'Signal status must transition to COMPLETED upon runner exit');
+      assert(resExit.runnerExitReason === 'TRAILING_STOP_HIT', 'Exit reason must be recorded as TRAILING_STOP_HIT');
+    });
   });
 
   console.log('\n\x1b[35m================================================================\x1b[0m');

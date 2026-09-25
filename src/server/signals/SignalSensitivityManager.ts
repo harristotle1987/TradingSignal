@@ -6,28 +6,28 @@
  *
  * PROFILES:
  * 1. BALANCED (Default / Recommended):
- *    - Score hurdle: ≥ 65 (down from 72/75)
- *    - Gross R:R hurdle: ≥ 1.5:1 (down from 1.8/2.0:1)
- *    - Net R:R hurdle: ≥ 1.10:1 (down from 1.30:1)
+ *    - Score hurdle: ≥ 65
+ *    - Gross R:R hurdle: ≥ 1.8:1
+ *    - Net R:R hurdle: ≥ 1.10:1
  *    - Win Probability hurdle: ≥ 50%
  *    - Frequency: ~2-5 signals/day
  *
  * 2. CONSERVATIVE (Institutional):
- *    - Score hurdle: ≥ 72
+ *    - Score hurdle: ≥ 65
  *    - Gross R:R hurdle: ≥ 1.8:1
  *    - Net R:R hurdle: ≥ 1.30:1
  *    - Win Probability hurdle: ≥ 55%
  *    - Frequency: ~1-3 signals/week
  *
  * 3. ACTIVE (High Frequency / Intraday):
- *    - Score hurdle: ≥ 62
- *    - Gross R:R hurdle: ≥ 1.3:1
+ *    - Score hurdle: ≥ 65
+ *    - Gross R:R hurdle: ≥ 1.8:1
  *    - Net R:R hurdle: ≥ 1.05:1
  *    - Win Probability hurdle: ≥ 45%
  *    - Frequency: ~5-10 signals/day
  *
  * 4. CUSTOM:
- *    - User-defined thresholds with safe institutional bounds.
+ *    - User-defined thresholds with safe canonical bounds (floor ≥ 65, R:R ≥ 1.8).
  */
 
 import {
@@ -67,13 +67,13 @@ export const CANONICAL_SENSITIVITY_PROFILES: Record<
     label: 'Conservative (Institutional)',
     badge: 'Ultra-Selective',
     description:
-      'Original ultra-strict institutional filter demanding near-perfect MTF alignment and high 1.8:1 gross R:R. Generates very few signals.',
-    signalThreshold: 72,
-    minimumScore: 72,
+      'Institutional filter demanding high-conviction MTF alignment and strict >=1.8:1 gross R:R. Operates on canonical 65 score floor.',
+    signalThreshold: 65,
+    minimumScore: 65,
     minimumRR: 1.8,
     minimumNetRR: 1.30,
-    watchingThreshold: 68,
-    qualifiedCandidateThreshold: 70,
+    watchingThreshold: 60,
+    qualifiedCandidateThreshold: 63,
     minimumWinProbability: 55,
     minimumTimeframeAlignment: 0.50,
     minimumStrategyAgreement: 0.50,
@@ -200,8 +200,10 @@ export class SignalSensitivityManager {
 
     if (profileName === 'CUSTOM') {
       if (customOverrides) {
-        // Enforce safe bounds on custom overrides to prevent invalid parameters
-        const score = Math.max(FINAL_SCORE_FLOOR, Math.min(85, customOverrides.signalThreshold ?? customOverrides.minimumScore ?? this.customConfig.signalThreshold));
+        // Enforce safe bounds on custom overrides to prevent invalid parameters.
+        // Canonical score floor and signal threshold is strictly 65 (do NOT use 70, 72, 75).
+        // Canonical minimum executable R:R floor is strictly 1.8 (do NOT reduce below 1.8).
+        const score = FINAL_SCORE_FLOOR;
         const rr = Math.max(FINAL_EXECUTABLE_RR_FLOOR, Math.min(3.5, customOverrides.minimumRR ?? this.customConfig.minimumRR));
         const netRR = Math.max(1.0, Math.min(2.5, customOverrides.minimumNetRR ?? this.customConfig.minimumNetRR));
         const winProb = Math.max(35, Math.min(75, customOverrides.minimumWinProbability ?? this.customConfig.minimumWinProbability));

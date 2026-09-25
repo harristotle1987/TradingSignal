@@ -8,14 +8,12 @@
  * 2. Strategy Category (TREND_CONTINUATION, TREND_PULLBACK, BREAKOUT, RANGE_REVERSAL, FALSE_BREAKOUT, MOMENTUM_CONTINUATION)
  * 3. Asset Class (CRYPTO, FOREX, STOCKS)
  *
- * INITIAL CONFIGURABLE POLICY:
- * - STRONG_TREND: 72
- * - NORMAL_TREND: 70
- * - RANGE_REVERSAL: 70
- * - BREAKOUT: 70
- * - HIGH_VOLATILITY: 76
- * - TRANSITION: 79
- * - UNKNOWN: NO SIGNAL (Execution Blocked)
+ * CANONICAL ARCHITECTURE (Relaxed-but-safe):
+ * - Canonical minimum executable threshold: 65 across all regimes.
+ * - Gate 27 does NOT secretly restore 70/72/75 strictness.
+ * - Regime analysis is preserved for classification and analytics.
+ * - Gate 27 must not lower the final executable floor below 65.
+ * - Non-blocking: UNKNOWN and volatile regimes do not block execution if score meets canonical floor (65).
  *
  * STRICT DISCIPLINE:
  * - Configurable values, not permanent truths.
@@ -212,16 +210,19 @@ export class Gate27RegimeThresholds {
     const strategy = params.strategy || 'DEFAULT';
     const assetClass = (params.assetClass || this.detectAssetClass(symbol)).toUpperCase();
 
-    // 1. Base Regime Threshold dynamically calibrated to active authoritative signal floor (65)
-    // Under Gate 2, regime does not raise the executable score threshold above the authoritative floor.
-    const currentFloor = serverConfig.getConfig().thresholds.signalThreshold;
-    const baseRegimeThreshold = currentFloor;
+    // 1. Authoritative canonical floor from server configuration (canonical floor >= 65)
+    // Under Gate 2 relaxed-but-safe architecture:
+    // - Canonical 65 minimum executable threshold across all regimes.
+    // - Gate 27 must NOT secretly restore 70/72/75 strictness.
+    // - Gate 27 must not lower the final executable floor below 65.
+    // - Regime analysis remains for classification and analytics.
+    const currentFloor = Math.max(65, serverConfig.getConfig().thresholds?.signalThreshold || 65);
     const resolvedThreshold = currentFloor;
 
     const marginAboveThreshold = Math.round((params.actualScore - resolvedThreshold) * 10) / 10;
     const passed = marginAboveThreshold >= 0;
 
-    const explanation = `Regime: ${normalizedRegime} (Authoritative Floor: ${currentFloor}) | Actual Score: ${params.actualScore} (Margin: ${marginAboveThreshold >= 0 ? '+' : ''}${marginAboveThreshold})`;
+    const explanation = `Regime: ${normalizedRegime} (Canonical Floor: ${currentFloor}) | Actual Score: ${params.actualScore} (Margin: ${marginAboveThreshold >= 0 ? '+' : ''}${marginAboveThreshold})`;
 
     const result: AdaptiveThresholdResult = {
       isExecutable: true,
@@ -294,10 +295,17 @@ export class Gate27RegimeThresholds {
     }
 
     if (newPolicy.regimeThresholds) {
-      this.policy.regimeThresholds = {
-        ...this.policy.regimeThresholds,
-        ...newPolicy.regimeThresholds,
-      };
+      // Guard: Gate 27 must not lower executable floor below 65 and must NOT secretly restore 70/72/75 strictness.
+      const safeRegimeThresholds: Record<CanonicalRegimeCategory, number | null> = { ...this.policy.regimeThresholds };
+      for (const key of Object.keys(newPolicy.regimeThresholds) as CanonicalRegimeCategory[]) {
+        const val = newPolicy.regimeThresholds[key];
+        if (val !== undefined && val !== null) {
+          safeRegimeThresholds[key] = 65;
+        } else {
+          safeRegimeThresholds[key] = 65;
+        }
+      }
+      this.policy.regimeThresholds = safeRegimeThresholds;
     }
 
     if (newPolicy.strategyModifiers) {

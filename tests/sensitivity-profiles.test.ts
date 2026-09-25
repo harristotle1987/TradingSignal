@@ -24,16 +24,16 @@ async function runSensitivityTests() {
 
   // Test 2: Balanced Profile has expected calibrated values
   assert.strictEqual(profiles.BALANCED.signalThreshold, 65, 'BALANCED threshold should be 65');
-  assert.strictEqual(profiles.BALANCED.minimumRR, 1.5, 'BALANCED min RR should be 1.5');
+  assert.strictEqual(profiles.BALANCED.minimumRR, 1.8, 'BALANCED min RR should be 1.8');
   assert.strictEqual(profiles.BALANCED.minimumNetRR, 1.10, 'BALANCED min Net RR should be 1.10');
-  console.log('✓ Test 2: BALANCED profile has calibrated 65 score and 1.5:1 R:R thresholds');
+  console.log('✓ Test 2: BALANCED profile has calibrated 65 score and 1.8:1 R:R thresholds');
 
   // Test 3: Set Active Profile to BALANCED and check serverConfig sync
   SignalSensitivityManager.setActiveProfile('BALANCED');
   assert.strictEqual(SignalSensitivityManager.getActiveProfileName(), 'BALANCED');
   const currentThresholds = serverConfig.getConfig().thresholds;
   assert.strictEqual(currentThresholds.signalThreshold, 65, 'serverConfig signalThreshold should sync to 65');
-  assert.strictEqual(currentThresholds.minimumRR, 1.5, 'serverConfig minimumRR should sync to 1.5');
+  assert.strictEqual(currentThresholds.minimumRR, 1.8, 'serverConfig minimumRR should sync to 1.8');
   console.log('✓ Test 3: Activating BALANCED synchronizes serverConfig thresholds');
 
   // Test 4: Gate 27 Dynamic Floor Adaptation with BALANCED
@@ -51,7 +51,7 @@ async function runSensitivityTests() {
   // Test 5: Switch to CONSERVATIVE
   SignalSensitivityManager.setActiveProfile('CONSERVATIVE');
   assert.strictEqual(SignalSensitivityManager.getActiveProfileName(), 'CONSERVATIVE');
-  assert.strictEqual(serverConfig.getConfig().thresholds.signalThreshold, 72);
+  assert.strictEqual(serverConfig.getConfig().thresholds.signalThreshold, 65);
   assert.strictEqual(serverConfig.getConfig().thresholds.minimumRR, 1.8);
 
   const regimeResConservative = Gate27RegimeThresholds.resolveThreshold({
@@ -61,26 +61,26 @@ async function runSensitivityTests() {
     assetClass: 'FOREX',
     actualScore: 66,
   });
-  assert.strictEqual(regimeResConservative.resolvedThreshold, 72, 'Under CONSERVATIVE, NORMAL_TREND threshold should be 72');
-  assert.strictEqual(regimeResConservative.isExecutable, false, 'Score 66 should be rejected under CONSERVATIVE');
-  console.log('✓ Test 5: Switch to CONSERVATIVE raises hurdle to 72 score and 1.8:1 R:R');
+  assert.strictEqual(regimeResConservative.resolvedThreshold, 65, 'Under CONSERVATIVE, NORMAL_TREND threshold should be 65');
+  assert.strictEqual(regimeResConservative.isExecutable, true, 'Score 66 should pass under CONSERVATIVE canonical floor');
+  console.log('✓ Test 5: Switch to CONSERVATIVE preserves canonical 65 score and 1.8:1 R:R');
 
   // Test 6: Switch to ACTIVE
   SignalSensitivityManager.setActiveProfile('ACTIVE');
   assert.strictEqual(SignalSensitivityManager.getActiveProfileName(), 'ACTIVE');
-  assert.strictEqual(serverConfig.getConfig().thresholds.signalThreshold, 62);
-  assert.strictEqual(serverConfig.getConfig().thresholds.minimumRR, 1.3);
+  assert.strictEqual(serverConfig.getConfig().thresholds.signalThreshold, 65);
+  assert.strictEqual(serverConfig.getConfig().thresholds.minimumRR, 1.8);
 
   const regimeResActive = Gate27RegimeThresholds.resolveThreshold({
     symbol: 'BTCUSDT',
     regime: 'BREAKOUT',
     strategy: 'MOMENTUM_CONTINUATION',
     assetClass: 'CRYPTO',
-    actualScore: 63,
+    actualScore: 65,
   });
-  assert.strictEqual(regimeResActive.resolvedThreshold, 62, 'Under ACTIVE, threshold should adapt to floor 62');
-  assert.strictEqual(regimeResActive.isExecutable, true, 'Score 63 should pass under ACTIVE');
-  console.log('✓ Test 6: Switch to ACTIVE lowers hurdle to 62 score and 1.3:1 R:R');
+  assert.strictEqual(regimeResActive.resolvedThreshold, 65, 'Under ACTIVE, threshold should adapt to floor 65');
+  assert.strictEqual(regimeResActive.isExecutable, true, 'Score 65 should pass under ACTIVE');
+  console.log('✓ Test 6: Switch to ACTIVE maintains canonical 65 score and 1.8:1 R:R');
 
   // Test 7: Custom configuration with safety bounds
   SignalSensitivityManager.setActiveProfile('CUSTOM', {
@@ -90,9 +90,9 @@ async function runSensitivityTests() {
   });
   assert.strictEqual(SignalSensitivityManager.getActiveProfileName(), 'CUSTOM');
   const customConfig = SignalSensitivityManager.getActiveConfig();
-  assert.strictEqual(customConfig.signalThreshold, 58);
-  assert.strictEqual(customConfig.minimumRR, 1.4);
-  console.log('✓ Test 7: Custom fine-tuning applies specified values');
+  assert.strictEqual(customConfig.signalThreshold, 65, 'Custom score should be clamped to canonical 65');
+  assert.strictEqual(customConfig.minimumRR, 1.8, 'Custom R:R should be clamped to canonical 1.8');
+  console.log('✓ Test 7: Custom fine-tuning enforces canonical safety bounds (65 score, 1.8 R:R)');
 
   // Test 8: Reset to Default restores BALANCED
   SignalSensitivityManager.resetToDefault();

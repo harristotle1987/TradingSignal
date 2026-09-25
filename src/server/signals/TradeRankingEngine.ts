@@ -43,8 +43,9 @@ export class TradeRankingEngine {
 
   /**
    * Calculates the centralized final required score for tradeability.
-   * finalRequiredScore = Math.max(thresholds.signalThreshold, regimeAdaptiveThreshold)
-   * Gate 27 can make the system MORE selective, but NEVER less selective than signalThreshold.
+   * Uses canonical 65 minimum executable threshold across regimes.
+   * Gate 27 operates on canonical 65 floor; regime analysis is preserved for classification and analytics.
+   * Gate 27 must not lower the final executable floor below 65, and must NOT secretly restore 70/72/75 strictness.
    */
   public static calculateFinalRequiredScore(params: {
     symbol: string;
@@ -64,7 +65,7 @@ export class TradeRankingEngine {
     rejectionReason?: string;
   } {
     const thresholds = serverConfig.getConfig().thresholds;
-    const globalSignalFloor = params.signalThreshold ?? thresholds.signalThreshold;
+    const globalSignalFloor = Math.max(65, params.signalThreshold ?? thresholds.signalThreshold ?? 65);
 
     const adaptiveRes = Gate27RegimeThresholds.resolveThreshold({
       symbol: params.symbol,
@@ -76,7 +77,8 @@ export class TradeRankingEngine {
 
     const regimeAdaptiveThreshold = adaptiveRes.resolvedThreshold;
     // Under Gate 2: Market regime does not raise the executable score threshold above 65.
-    const finalRequiredScore = globalSignalFloor;
+    // Canonical 65 executable floor is maintained.
+    const finalRequiredScore = Math.max(65, globalSignalFloor, regimeAdaptiveThreshold);
     const passed = params.actualScore >= finalRequiredScore;
     const marginAboveFinalThreshold = Math.round((params.actualScore - finalRequiredScore) * 10) / 10;
 
@@ -321,7 +323,7 @@ export class TradeRankingEngine {
     }
 
     // 11. Execution Quality & Progressive R:R (Gate 9)
-    const activeMinRR = serverConfig.getConfig().thresholds.minimumRR || 1.5;
+    const activeMinRR = serverConfig.getConfig().thresholds.minimumRR || 1.8;
     const effRR = scoring.estimatedFriction?.netRiskRewardRatio ?? signal.netRiskRewardRatio ?? signal.riskRewardRatio;
     if (typeof effRR === 'number') {
       if (effRR >= 3.0) modifier += 3.0;

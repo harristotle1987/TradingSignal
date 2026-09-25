@@ -94,7 +94,7 @@ export class Gate9FinalSignalCap {
     publishedCandidates.forEach((cand, idx) => {
       cand.signal.isTradeableSignal = true;
       cand.signal.signalClassification = 'TRADEABLE';
-      const scoreVal = cand.signal.score ?? cand.finalScore ?? 70;
+      const scoreVal = cand.signal.score ?? cand.finalScore ?? 65;
       if (idx === 0) {
         cand.signal.isPrimary = true;
         cand.signal.isBestTrade = true;

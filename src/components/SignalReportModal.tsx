@@ -60,7 +60,7 @@ export const SignalReportModal: React.FC<SignalReportModalProps> = ({
   if (!isOpen || !signal) return null;
 
   const precision = getDynamicPrecision(signal.entryPrice, signal.symbol);
-  const score = signal.score ?? signal.confidenceScore ?? 75;
+  const score = signal.score ?? signal.confidenceScore ?? 65;
   const isBuy = signal.direction === 'BUY';
 
   return (

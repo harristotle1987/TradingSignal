@@ -19,7 +19,7 @@
  * STRICT EXECUTION POLICY:
  * - If ANY hard gate fails -> candidate is NOT tradeable -> DO NOT generate a signal.
  * - Numerical score NEVER overrides hard gates. (A score of 95 with invalid entry data is strictly rejected).
- * - ACCEPTANCE CRITERIA: FINAL_SCORE >= 70 AND ALL HARD_GATES = PASS.
+ * - ACCEPTANCE CRITERIA: FINAL_SCORE >= signalThreshold (canonical floor 65) AND ALL HARD_GATES = PASS.
  * - Only then classify the candidate as TRADEABLE.
  */
 
