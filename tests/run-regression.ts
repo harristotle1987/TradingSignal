@@ -3411,6 +3411,190 @@ async function runAll() {
     });
   });
 
+  // --- SUITE 21: GATE — SIGNAL DELETE & BULK DELETE SECURITY & RECONCILIATION ---
+  await describe('Suite 21: Gate — Signal Delete & Bulk Delete Security & Reconciliation', async () => {
+    const express = (await import('express')).default;
+    const signalsRouter = (await import('../src/server/routes/signals.js')).default;
+    const { ApiClient } = await import('../src/api/client.js');
+
+    const app = express();
+    app.use(express.json());
+    app.use('/api', signalsRouter);
+
+    let server: any;
+    let baseUrl: string;
+
+    await new Promise<void>((resolve) => {
+      server = app.listen(0, '127.0.0.1', () => {
+        const addr = server.address() as any;
+        baseUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+
+    try {
+      await test('Authorized individual delete succeeds with valid admin credentials', async () => {
+        const origKey = process.env.ADMIN_API_KEY;
+        const origEnv = process.env.NODE_ENV;
+        process.env.ADMIN_API_KEY = 'test_admin_auth_token_999';
+        process.env.NODE_ENV = 'production';
+
+        const testSig: PersistedSentSignal = {
+          id: 'test_delete_auth_1',
+          snapshotId: 'snap_delete_auth_1',
+          symbol: 'TESTUSD',
+          direction: 'BUY',
+          entryPrice: 1.0,
+          stopLoss: 0.9,
+          takeProfit: 1.2,
+          score: 80,
+          status: 'ACTIVE',
+          timestamp: Date.now(),
+          expiresAt: Date.now() + 3600000,
+          date: '2026-09-25',
+          isTradeableSignal: true,
+          signalClassification: 'TRADEABLE',
+        } as any;
+
+        await ScannerPersistence.recordSentSignal(testSig as any);
+
+        const res = await fetch(`${baseUrl}/api/signals/${testSig.id}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': 'Bearer test_admin_auth_token_999',
+            'Content-Type': 'application/json',
+          },
+        });
+
+        assert(res.status === 200, `Expected status 200, got ${res.status}`);
+        const data = await res.json();
+        assert(data.success === true, 'Response success must be true');
+
+        const activeList = await ScannerPersistence.getSentSignals();
+        assert(!activeList.some((s) => s.id === testSig.id), 'Signal must be deleted from persistence');
+
+        process.env.ADMIN_API_KEY = origKey;
+        process.env.NODE_ENV = origEnv;
+      });
+
+      await test('Unauthorized individual delete returns 401 when admin credentials are required', async () => {
+        const origKey = process.env.ADMIN_API_KEY;
+        const origEnv = process.env.NODE_ENV;
+        process.env.ADMIN_API_KEY = 'test_admin_auth_token_999';
+        process.env.NODE_ENV = 'production';
+
+        const testSig: PersistedSentSignal = {
+          id: 'test_delete_unauth_1',
+          snapshotId: 'snap_delete_unauth_1',
+          symbol: 'TESTUSD',
+          direction: 'BUY',
+          entryPrice: 1.0,
+          stopLoss: 0.9,
+          takeProfit: 1.2,
+          score: 80,
+          status: 'ACTIVE',
+          timestamp: Date.now(),
+          expiresAt: Date.now() + 3600000,
+          date: '2026-09-25',
+          isTradeableSignal: true,
+          signalClassification: 'TRADEABLE',
+        } as any;
+
+        await ScannerPersistence.recordSentSignal(testSig as any);
+
+        const res = await fetch(`${baseUrl}/api/signals/${testSig.id}`, {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        assert(res.status === 401, `Expected status 401 Unauthorized, got ${res.status}`);
+        const data = await res.json();
+        assert(data.success === false, 'Response success must be false on 401');
+
+        const activeList = await ScannerPersistence.getSentSignals();
+        assert(activeList.some((s) => s.id === testSig.id), 'Signal must NOT be deleted on 401');
+
+        // Cleanup
+        await ScannerPersistence.deleteSentSignal(testSig.id);
+        process.env.ADMIN_API_KEY = origKey;
+        process.env.NODE_ENV = origEnv;
+      });
+
+      await test('Successful bulk delete removes all specified IDs in a single POST request', async () => {
+        const sigs: PersistedSentSignal[] = ['bulk_test_1', 'bulk_test_2', 'bulk_test_3'].map((id) => ({
+          id,
+          snapshotId: `snap_${id}`,
+          symbol: 'BULKPAIR',
+          direction: 'BUY',
+          entryPrice: 10.0,
+          stopLoss: 9.0,
+          takeProfit: 12.0,
+          score: 80,
+          status: 'ACTIVE',
+          timestamp: Date.now(),
+          expiresAt: Date.now() + 3600000,
+          date: '2026-09-25',
+          isTradeableSignal: true,
+          signalClassification: 'TRADEABLE',
+        } as any));
+
+        for (const s of sigs) {
+          await ScannerPersistence.recordSentSignal(s as any);
+        }
+
+        const res = await fetch(`${baseUrl}/api/signals/log/bulk-delete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: sigs.map((s) => s.id) }),
+        });
+
+        assert(res.status === 200, `Expected status 200, got ${res.status}`);
+        const data = await res.json();
+        assert(data.success === true, 'Response success must be true');
+        assert(data.message.includes('3 of 3'), `Message should mention 3 of 3, got: ${data.message}`);
+
+        const activeList = await ScannerPersistence.getSentSignals();
+        for (const s of sigs) {
+          assert(!activeList.some((item) => item.id === s.id), `Signal ${s.id} must be deleted`);
+        }
+      });
+
+      await test('401 Unauthorized response does NOT trigger automatic retries in ApiClient', async () => {
+        let callCount = 0;
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = (async (input: any, init: any) => {
+          callCount++;
+          return new Response(JSON.stringify({ success: false, error: 'Unauthorized' }), {
+            status: 401,
+            statusText: 'Unauthorized',
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }) as any;
+
+        try {
+          const client = new ApiClient();
+          let threw = false;
+          try {
+            await client.deleteSignal('test_id_no_retry');
+          } catch (err: any) {
+            threw = true;
+            assert(err.status === 401, `Error status should be 401, got ${err.status}`);
+          }
+          assert(threw, 'ApiClient must throw on 401');
+          assert(callCount === 1, `ApiClient must NOT retry on 401! Expected callCount 1, got ${callCount}`);
+        } finally {
+          globalThis.fetch = originalFetch;
+        }
+      });
+    } finally {
+      if (server) {
+        server.close();
+      }
+    }
+  });
+
   console.log('\n\x1b[35m================================================================\x1b[0m');
   console.log(`[REGRESSION RESULTS] ${passedTests}/${totalTests} Tests Passed successfully.`);
   if (failures.length > 0) {

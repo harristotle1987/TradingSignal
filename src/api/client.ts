@@ -17,7 +17,7 @@ import {
   SensitivityProfileConfig,
 } from '../types/index.js';
 
-class ApiClient {
+export class ApiClient {
   private adminToken: string | null = null;
 
   /**
@@ -103,11 +103,18 @@ class ApiClient {
       }
 
       if (!response.ok && response.status !== 503) {
-        throw new Error(`HTTP ${response.status} (${response.statusText}): ${JSON.stringify(data)}`);
+        const err = new Error(`HTTP ${response.status} (${response.statusText}): ${JSON.stringify(data)}`);
+        (err as any).status = response.status;
+        throw err;
       }
 
       return data as T;
-    } catch (error) {
+    } catch (error: any) {
+      const status = error?.status;
+      const isNonRetriable = status === 401 || status === 403 || (status >= 400 && status < 500);
+      if (isNonRetriable) {
+        throw error;
+      }
       if (retries > 0) {
         const delay = (4 - retries) * 400;
         await new Promise((res) => setTimeout(res, delay));

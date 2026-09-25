@@ -750,5 +750,11 @@
     "notifyOnNoTrade": false,
     "intervalMinutes": 30,
     "sensitivityProfile": "BALANCED"
-  }
+  },
+  "deletedSignals": [
+    "test_delete_auth_1|TESTUSD|BUY",
+    "bulk_test_1|BULKPAIR|BUY",
+    "bulk_test_2|BULKPAIR|BUY",
+    "bulk_test_3|BULKPAIR|BUY"
+  ]
 }

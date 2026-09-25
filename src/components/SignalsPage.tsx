@@ -277,12 +277,11 @@ export function SignalsPage({ health }: SignalsPageProps) {
     }
   };
 
-  // Individual history item deletion handler - triggers DELETE /api/signals/:id & /api/signals/log/:id
+  // Individual history item deletion handler
   const handleDeleteHistoryItem = async (id: string, symbol: string) => {
     setDeletingIds((prev) => [...prev, id]);
     try {
-      await api.deleteSignal(id).catch(() => {});
-      await api.deleteSignalLog(id).catch(() => {});
+      await api.deleteSignalLog(id);
       setSignalHistory((prev) => {
         const updated = prev.filter((item) => item.id !== id && item.snapshotId !== id);
         try {
@@ -303,14 +302,13 @@ export function SignalsPage({ health }: SignalsPageProps) {
 
   // Bulk history item deletion handler
   const handleDeleteMultipleHistoryItems = async (ids: string[]) => {
+    if (!ids || ids.length === 0) return;
     setDeletingIds((prev) => [...prev, ...ids]);
     try {
-      await api.deleteSignalLogs(ids).catch(() => {});
-      for (const id of ids) {
-        await api.deleteSignal(id).catch(() => {});
-      }
+      await api.deleteSignalLogs(ids);
+      const idSet = new Set(ids);
       setSignalHistory((prev) => {
-        const updated = prev.filter((item) => !ids.includes(item.id) && !ids.includes(item.snapshotId));
+        const updated = prev.filter((item) => !idSet.has(item.id) && !idSet.has(item.snapshotId));
         try {
           localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updated));
         } catch (e) {
@@ -318,7 +316,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
         }
         return updated;
       });
-      setActiveSignals((prev) => prev.filter((s) => !ids.includes(s.id) && !ids.includes(s.snapshotId)));
+      setActiveSignals((prev) => prev.filter((s) => !idSet.has(s.id) && !idSet.has(s.snapshotId)));
     } catch (e) {
       console.error('Failed to bulk delete signal logs:', e);
       throw e;
