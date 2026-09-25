@@ -3,7 +3,15 @@
     "date": "2026-09-25",
     "dailySignalCount": 0,
     "dailySignalCap": 10,
-    "lastScanTime": 1790227807209,
+    "lastScanTime": 1790333105402,
+    "lastCronExecution": 1790330407749,
+    "lastAutomatedScan": 1790299807889,
+    "lastScanCompletedAt": 1790299832359,
+    "lastScanDuration": 24470,
+    "lastCandidatesEvaluated": 10,
+    "lastSignalsFound": 3,
+    "lastAcceptedSignals": 1,
+    "lastCronTriggerTime": 1790330407749,
     "reservations": []
   },
   "sentSignals": [

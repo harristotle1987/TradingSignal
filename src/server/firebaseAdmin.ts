@@ -76,4 +76,11 @@ export async function tryIncrementCapCount(defaultCap = 5): Promise<{ allowed: b
   return await ScannerPersistence.tryIncrementCap(defaultCap);
 }
 
+/**
+ * Resets only the current day's automated signal cap counter to 0.
+ */
+export async function resetDailyCapCount(): Promise<CapState> {
+  return await ScannerPersistence.resetDailyCapCount();
+}
+
 

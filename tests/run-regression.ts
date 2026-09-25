@@ -3595,6 +3595,88 @@ async function runAll() {
     }
   });
 
+  // --- SUITE 22: GATE 1 — DAILY SIGNAL CAP RESET VERIFICATION ---
+  await describe('Suite 22: Gate 1 — Daily Signal Cap Reset Verification', async () => {
+    const express = (await import('express')).default;
+    const signalsRouter = (await import('../src/server/routes/signals.js')).default;
+
+    const app = express();
+    app.use(express.json());
+    app.use('/api', signalsRouter);
+
+    let server: any;
+    let baseUrl: string;
+
+    await new Promise<void>((resolve) => {
+      server = app.listen(0, '127.0.0.1', () => {
+        const addr = server.address() as any;
+        baseUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+
+    try {
+      await test('ScannerPersistence.resetDailyCapCount resets daily count to 0 while preserving existing signals', async () => {
+        const testSig: PersistedSentSignal = {
+          id: 'preserve_test_signal_1',
+          snapshotId: 'snap_preserve_1',
+          symbol: 'BTCUSD',
+          direction: 'BUY',
+          entryPrice: 50000,
+          stopLoss: 49000,
+          takeProfit: 52000,
+          score: 85,
+          status: 'ACTIVE',
+          timestamp: Date.now(),
+          expiresAt: Date.now() + 3600000,
+          date: new Date().toISOString().split('T')[0],
+          isTradeableSignal: true,
+          signalClassification: 'TRADEABLE',
+        } as any;
+
+        await ScannerPersistence.recordSentSignal(testSig as any);
+
+        // Manually increment cap count to simulate reaching cap
+        await ScannerPersistence.tryIncrementCap(10);
+        await ScannerPersistence.tryIncrementCap(10);
+
+        const capBefore = await ScannerPersistence.getCapState(10);
+        assert(capBefore.dailySignalCount > 0, 'Cap count should be greater than 0 before reset');
+
+        // Reset cap count
+        const capAfter = await ScannerPersistence.resetDailyCapCount();
+        assert(capAfter.dailySignalCount === 0, 'Cap count must be reset to 0');
+
+        // Verify signal was preserved and not deleted
+        const sentSignals = await ScannerPersistence.getSentSignals();
+        assert(sentSignals.some((s) => s.id === testSig.id), 'Sent signals must NOT be deleted upon daily cap reset');
+
+        // Cleanup
+        await ScannerPersistence.deleteSentSignal(testSig.id);
+      });
+
+      await test('POST /api/scanner/reset-cap resets count to 0 and returns updated settings', async () => {
+        // Increment cap count
+        await ScannerPersistence.tryIncrementCap(10);
+
+        const res = await fetch(`${baseUrl}/api/scanner/reset-cap`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+
+        assert(res.status === 200, `Expected 200 OK, got ${res.status}`);
+        const data = await res.json();
+        assert(data.success === true, 'Response success must be true');
+        assert(data.settings?.dailySignalCount === 0, 'dailySignalCount in returned settings must be 0');
+        assert(data.capState?.dailySignalCount === 0, 'dailySignalCount in capState must be 0');
+      });
+    } finally {
+      if (server) {
+        server.close();
+      }
+    }
+  });
+
   console.log('\n\x1b[35m================================================================\x1b[0m');
   console.log(`[REGRESSION RESULTS] ${passedTests}/${totalTests} Tests Passed successfully.`);
   if (failures.length > 0) {

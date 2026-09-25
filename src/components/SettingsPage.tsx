@@ -19,6 +19,9 @@ import {
   VolumeX,
   Clock,
   RefreshCw,
+  RotateCcw,
+  Gauge,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface SettingsPageProps {
@@ -33,6 +36,9 @@ export function SettingsPage({}: SettingsPageProps) {
   );
   const [pushActionMessage, setPushActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [soundAlerts, setSoundAlerts] = useState<boolean>(true);
+  const [showResetModal, setShowResetModal] = useState<boolean>(false);
+  const [resettingCap, setResettingCap] = useState<boolean>(false);
+  const [resetCapMessage, setResetCapMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [scannerSettings, setScannerSettings] = useState<{
     enabled: boolean;
     notificationsEnabled: boolean;
@@ -63,6 +69,44 @@ export function SettingsPage({}: SettingsPageProps) {
   } | null>(null);
   const [loadingScanner, setLoadingScanner] = useState<boolean>(false);
   const [scannerMessage, setScannerMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const handleResetDailyCap = async () => {
+    setResettingCap(true);
+    setResetCapMessage(null);
+    try {
+      const res = await api.resetDailyCap();
+      if (res.success) {
+        if (res.settings) {
+          setScannerSettings(res.settings);
+        } else {
+          await fetchScannerSettings();
+        }
+        setResetCapMessage({
+          type: 'success',
+          text: res.message || 'Daily signal cap counter successfully reset to 0.',
+        });
+        setShowResetModal(false);
+        setTimeout(() => setResetCapMessage(null), 5000);
+      } else {
+        setResetCapMessage({
+          type: 'error',
+          text: res.message || 'Failed to reset daily signal cap counter.',
+        });
+        setShowResetModal(false);
+        setTimeout(() => setResetCapMessage(null), 6000);
+      }
+    } catch (err: any) {
+      console.error('Failed to reset daily cap counter:', err);
+      setResetCapMessage({
+        type: 'error',
+        text: err?.message || 'Failed to reset daily signal cap counter.',
+      });
+      setShowResetModal(false);
+      setTimeout(() => setResetCapMessage(null), 6000);
+    } finally {
+      setResettingCap(false);
+    }
+  };
 
   const fetchScannerSettings = useCallback(async () => {
     setLoadingScanner(true);
@@ -473,6 +517,120 @@ export function SettingsPage({}: SettingsPageProps) {
           </div>
         </div>
       </div>
+
+      {/* DAILY SIGNAL CAP SECTION */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 pb-4 border-b border-slate-800">
+          <div>
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2 font-mono">
+              <Gauge className="w-4 h-4 text-emerald-400" />
+              DAILY SIGNAL CAP
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Enforces maximum daily automated signal allocations to prevent overtrading
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowResetModal(true)}
+              disabled={resettingCap}
+              className="px-3.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 text-xs font-medium font-mono transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${resettingCap ? 'animate-spin' : ''}`} />
+              <span>Reset Daily Cap</span>
+            </button>
+          </div>
+        </div>
+
+        {resetCapMessage && (
+          <div className={`mb-4 p-3 rounded-lg text-xs font-mono flex items-center gap-2 ${
+            resetCapMessage.type === 'success' 
+              ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' 
+              : 'bg-red-500/10 border border-red-500/20 text-red-400'
+          }`}>
+            <span className="font-semibold">{resetCapMessage.type === 'success' ? 'SUCCESS:' : 'ERROR:'}</span>
+            <span>{resetCapMessage.text}</span>
+          </div>
+        )}
+
+        <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 font-mono">
+          <div className="space-y-1">
+            <span className="text-[10px] uppercase text-slate-500 block font-sans font-medium">Daily Usage Counter</span>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-bold text-white tracking-tight">
+                {scannerSettings?.dailySignalCount ?? 0}
+              </span>
+              <span className="text-slate-400 text-sm font-semibold">
+                / {scannerSettings?.limit ?? 10}
+              </span>
+              <span className="text-slate-500 text-xs font-sans ml-1">signals today</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {(scannerSettings?.dailySignalCount ?? 0) >= (scannerSettings?.limit ?? 10) ? (
+              <div className="px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-semibold flex items-center gap-1.5 font-sans">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>CAP REACHED</span>
+              </div>
+            ) : (
+              <div className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center gap-1.5 font-sans">
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                <span>CAP ACTIVE ({(scannerSettings?.limit ?? 10) - (scannerSettings?.dailySignalCount ?? 0)} remaining)</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* CONFIRMATION MODAL */}
+      {showResetModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-amber-400 border-b border-slate-800 pb-3">
+              <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                <AlertTriangle className="w-5 h-5 text-amber-400" />
+              </div>
+              <h3 className="text-base font-semibold text-white">Reset Daily Signal Cap Counter</h3>
+            </div>
+
+            <div className="space-y-2 text-xs text-slate-300 leading-relaxed font-sans">
+              <p>
+                Are you sure you want to reset today&apos;s automated signal cap counter?
+              </p>
+              <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 font-mono text-xs text-slate-200">
+                <p>Current Usage: <span className="font-bold text-amber-400">{scannerSettings?.dailySignalCount ?? 0} / {scannerSettings?.limit ?? 10}</span></p>
+                <p>New Usage: <span className="font-bold text-emerald-400">0 / {scannerSettings?.limit ?? 10}</span></p>
+              </div>
+              <p className="text-slate-400 text-[11px]">
+                Note: This resets only today&apos;s automated signal counter to zero. Existing signals, trade logs, and historical records will <strong className="text-slate-200">NOT</strong> be deleted.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowResetModal(false)}
+                disabled={resettingCap}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleResetDailyCap}
+                disabled={resettingCap}
+                className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium font-mono transition-colors flex items-center gap-1.5 disabled:opacity-50 shadow-sm"
+              >
+                <RotateCcw className={`w-3.5 h-3.5 ${resettingCap ? 'animate-spin' : ''}`} />
+                <span>{resettingCap ? 'Resetting...' : 'Confirm Reset'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -255,6 +255,15 @@ export class ApiClient {
   }
 
   /**
+   * Resets only the current day's automated signal cap counter to 0.
+   */
+  async resetDailyCap(): Promise<{ success: boolean; message: string; settings: any; capState?: any }> {
+    return this.fetchJson<{ success: boolean; message: string; settings: any; capState?: any }>('/api/scanner/reset-cap', {
+      method: 'POST',
+    });
+  }
+
+  /**
    * Manually trigger a complete background scan
    */
   async triggerScannerManualScan(): Promise<{

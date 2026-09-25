@@ -94,6 +94,36 @@ router.post('/scanner/settings', adminAuthMiddleware, async (req: Request, res: 
 });
 
 /**
+ * POST /api/scanner/reset-cap & POST /api/signals/reset-cap
+ * Resets the current day's automated signal cap counter to 0.
+ * Preserves all signals, historical records, and scan telemetry.
+ */
+const resetDailyCapHandler = async (_req: Request, res: Response) => {
+  try {
+    const updatedCapState = await ScannerPersistence.resetDailyCapCount();
+    const settings = await hourlyScanner.getSettingsAsync();
+    res.status(200).json({
+      success: true,
+      message: `Daily signal cap counter successfully reset to 0 / ${updatedCapState.dailySignalCap || settings.limit || 10}.`,
+      settings,
+      capState: updatedCapState,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to reset daily signal cap counter',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+};
+
+router.post('/scanner/reset-cap', resetDailyCapHandler);
+router.post('/signals/reset-cap', resetDailyCapHandler);
+
+/**
  * GET /api/scanner/history
  * [Access Boundary: Public/Read-only]
  * Retrieves full notification history, sent signals today, and rejected candidate logs.

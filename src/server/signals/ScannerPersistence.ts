@@ -824,6 +824,57 @@ export class ScannerPersistence {
   }
 
   /**
+   * Resets only the current day's automated signal cap counter to 0.
+   * Preserves all signals, historical records, and scan telemetry.
+   */
+  static async resetDailyCapCount(): Promise<DailyCapState> {
+    this.init();
+    const today = new Date().toISOString().split('T')[0];
+    const currentCap = this.localData.capState.dailySignalCap || serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 10;
+
+    this.localData.capState.date = today;
+    this.localData.capState.dailySignalCount = 0;
+    this.localData.capState.reservations = [];
+    this.saveLocalData();
+
+    const firestore = getFirestoreAdmin();
+    if (firestore) {
+      try {
+        const docRef = firestore.doc(FIRESTORE_CAP_DOC);
+        await firestore.runTransaction(async (tx) => {
+          const snap = await tx.get(docRef);
+          if (snap.exists) {
+            const data = snap.data() as DailyCapState;
+            tx.set(
+              docRef,
+              {
+                ...data,
+                date: today,
+                dailySignalCount: 0,
+                reservations: [],
+              },
+              { merge: true }
+            );
+          } else {
+            tx.set(docRef, {
+              date: today,
+              dailySignalCount: 0,
+              dailySignalCap: currentCap,
+              lastScanTime: this.localData.capState.lastScanTime || 0,
+              reservations: [],
+            });
+          }
+        });
+        logger.info('[ScannerPersistence] Daily signal cap counter successfully reset to 0 in Firestore.');
+      } catch (err) {
+        logger.warn('[ScannerPersistence] Failed to reset daily signal cap counter in Firestore:', { error: String(err) });
+      }
+    }
+
+    return this.localData.capState;
+  }
+
+  /**
    * Deletes a single sent signal by ID or snapshotId from memory, disk, and Firestore.
    */
   static async deleteSentSignal(id: string): Promise<boolean> {
