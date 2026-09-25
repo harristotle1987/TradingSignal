@@ -1,24 +1,10 @@
 {
   "capState": {
-    "date": "2026-09-24",
-    "dailySignalCount": 1,
+    "date": "2026-09-25",
+    "dailySignalCount": 0,
     "dailySignalCap": 10,
     "lastScanTime": 1790227807209,
-    "lastCronExecution": 1790227807209,
-    "lastAutomatedScan": 1790227807209,
-    "lastScanCompletedAt": 1790227825676,
-    "lastScanDuration": 18467,
-    "lastCandidatesEvaluated": 10,
-    "lastSignalsFound": 1,
-    "lastAcceptedSignals": 0,
-    "lastCronTriggerTime": 1790227807209,
-    "reservations": [
-      {
-        "id": "res_1790255141073_kmrzq",
-        "status": "RESERVED",
-        "timestamp": 1790255141345
-      }
-    ]
+    "reservations": []
   },
   "sentSignals": [
     {

@@ -55,6 +55,17 @@ export interface DailyCapState {
   reservations?: DailyCapReservation[];
 }
 
+export type LifecycleCheckStatus =
+  | 'CHECKED'
+  | 'TP1_HIT'
+  | 'TP2_HIT'
+  | 'TP3_HIT'
+  | 'SL_HIT'
+  | 'ENTRY_CONFIRMED'
+  | 'NO_TARGET_REACHED'
+  | 'NO_VALID_PRICE'
+  | 'AMBIGUOUS';
+
 export interface PersistedSentSignal {
   id: string;
   snapshotId: string;
@@ -121,6 +132,10 @@ export interface PersistedSentSignal {
   ambiguousDetails?: string;
   notifiedStates?: string[];
   marketRegime?: string;
+  lastLifecycleCheckAt?: string;
+  lastLifecycleCheckStatus?: LifecycleCheckStatus;
+  lastLifecycleCheckPrice?: number;
+  lastLifecycleCheckSource?: string;
 }
 
 export interface PersistedRejectedCandidate {

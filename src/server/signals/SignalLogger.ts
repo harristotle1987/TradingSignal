@@ -33,6 +33,7 @@ import { serverConfig } from '../config.js';
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { logger } from '../logger.js';
 import { Gate35SignalFunnelAnalytics } from './Gate35SignalFunnelAnalytics.js';
+import { ScannerPersistence, PersistedSentSignal } from './ScannerPersistence.js';
 
 export type SignalLogStatus = 'WAITING_ENTRY' | 'ENTRY_CONFIRMED' | 'ACTIVE' | 'TP HIT' | 'SL HIT' | 'EXPIRED' | 'INVALIDATED' | 'TP1 HIT' | 'TP2 HIT' | 'TP3 HIT' | 'AMBIGUOUS';
 
@@ -67,6 +68,24 @@ export interface SignalLogRecord {
   isBestTrade?: boolean;
   entryHitTimestamp?: string | null;
   updatedAt?: number;
+  tp1Status?: 'PENDING' | 'HIT';
+  tp2Status?: 'PENDING' | 'HIT';
+  tp3Status?: 'PENDING' | 'HIT';
+  slStatus?: 'ACTIVE' | 'HIT' | 'ACTIVE_FOR_ENTRY_ONLY';
+  tp1HitAt?: string;
+  tp2HitAt?: string;
+  tp3HitAt?: string;
+  stopLossHitAt?: string;
+  tp1HitPrice?: number;
+  tp2HitPrice?: number;
+  tp3HitPrice?: number;
+  stopLossHitPrice?: number;
+  lastLifecycleCheckAt?: string;
+  lastLifecycleCheckStatus?: string;
+  lastLifecycleCheckPrice?: number;
+  lastLifecycleCheckSource?: string;
+  displayPrice?: number;
+  expiresAt?: number;
   isTradeableSignal?: boolean;
   signalClassification?: 'TRADEABLE' | 'WATCHING' | 'QUALIFIED_CANDIDATE' | 'CANDIDATE' | 'REJECTED' | 'FILTERED' | 'BLOCKED' | 'INVALID' | 'EXPIRED_BEFORE_ENTRY' | 'NON_TRADEABLE' | 'ANALYTICS_ONLY' | 'DIAGNOSTIC';
   provenance?: 'LIVE' | 'HISTORICAL' | 'BACKTEST' | 'SIMULATION' | 'TEST';
@@ -530,8 +549,49 @@ export class SignalLogger {
       await this.syncFromFirestore();
     }
 
+    // Load latest sent signals from ScannerPersistence to merge real-time lifecycle check metadata
+    let sentMap = new Map<string, PersistedSentSignal>();
+    try {
+      const sentSignals = await ScannerPersistence.getSentSignals();
+      for (const s of sentSignals) {
+        if (s.id) sentMap.set(s.id, s);
+        if (s.snapshotId) sentMap.set(s.snapshotId, s);
+      }
+    } catch (err) {
+      logger.debug('[SignalLogger] Could not load sent signals for lifecycle enrichment:', err);
+    }
+
     const sorted = Array.from(this.logs.values())
       .filter((r) => isTradeableLogRecord(r) && (!productionOnly || isProductionRecord(r)))
+      .map((r) => {
+        const sent = sentMap.get(r.id) || sentMap.get(r.snapshotId);
+        if (sent) {
+          return {
+            ...r,
+            status: (sent.status as any) || r.status,
+            tp1Status: sent.tp1Status,
+            tp2Status: sent.tp2Status,
+            tp3Status: sent.tp3Status,
+            slStatus: sent.slStatus,
+            tp1HitAt: sent.tp1HitAt,
+            tp2HitAt: sent.tp2HitAt,
+            tp3HitAt: sent.tp3HitAt,
+            stopLossHitAt: sent.stopLossHitAt,
+            tp1HitPrice: sent.tp1HitPrice,
+            tp2HitPrice: sent.tp2HitPrice,
+            tp3HitPrice: sent.tp3HitPrice,
+            stopLossHitPrice: sent.stopLossHitPrice,
+            entryHitTimestamp: sent.entryHitTimestamp,
+            lastLifecycleCheckAt: sent.lastLifecycleCheckAt,
+            lastLifecycleCheckStatus: sent.lastLifecycleCheckStatus,
+            lastLifecycleCheckPrice: sent.lastLifecycleCheckPrice,
+            lastLifecycleCheckSource: sent.lastLifecycleCheckSource,
+            displayPrice: sent.displayPrice,
+            expiresAt: sent.expiresAt,
+          };
+        }
+        return r;
+      })
       .sort((a, b) => b.timestamp - a.timestamp);
     return sorted.slice(0, limit);
   }

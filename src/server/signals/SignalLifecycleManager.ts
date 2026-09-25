@@ -23,7 +23,7 @@
 import { NormalizedTicker, NormalizedCandle, ExecutionEvidenceState, HistoricalEntryPolicy } from '../../types/index.js';
 import { getDynamicPrecision } from '../../utils/formatters.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
-import { ScannerPersistence, PersistedSentSignal } from './ScannerPersistence.js';
+import { ScannerPersistence, PersistedSentSignal, LifecycleCheckStatus } from './ScannerPersistence.js';
 import { StrategyPerformanceTracker } from './StrategyPerformanceTracker.js';
 import { serverConfig, TP1_ALLOCATION, TP2_ALLOCATION, TP3_ALLOCATION, HISTORICAL_ENTRY_POLICY } from '../config.js';
 import { SignalLogger, SignalLogStatus } from './SignalLogger.js';
@@ -73,6 +73,7 @@ export interface SignalEvaluationSummary {
   expiredCount: number;
   invalidatedCount: number;
   ambiguousCount: number;
+  unverifiedCount: number;
   recoveredEventsCount: number;
 }
 
@@ -537,6 +538,7 @@ export class SignalLifecycleManager {
         expiredCount: 0,
         invalidatedCount: 0,
         ambiguousCount: 0,
+        unverifiedCount: 0,
         recoveredEventsCount: 0,
       };
     }
@@ -548,6 +550,7 @@ export class SignalLifecycleManager {
     let expiredCount = 0;
     let invalidatedCount = 0;
     let ambiguousCount = 0;
+    let unverifiedCount = 0;
     let recoveredEventsCount = 0;
 
     try {
@@ -589,6 +592,10 @@ export class SignalLifecycleManager {
           tp2HitPrice?: number;
           tp3HitPrice?: number;
           stopLossHitPrice?: number;
+          lastLifecycleCheckAt?: string;
+          lastLifecycleCheckStatus?: LifecycleCheckStatus;
+          lastLifecycleCheckPrice?: number;
+          lastLifecycleCheckSource?: string;
         } = {
           entryHitTimestamp: sig.entryHitTimestamp ?? existingOutcome?.entryHitTimestamp,
           tp1HitTimestamp: sig.tp1HitTimestamp ?? existingOutcome?.tp1HitTimestamp,
@@ -616,7 +623,8 @@ export class SignalLifecycleManager {
         const queuedTransitions = [...historicalResult.transitions];
 
         // If candle scan did not resolve a terminal state, evaluate latest real-time quote
-        if (currentState !== 'SL_HIT' && currentState !== 'STOPPED_OUT' && currentState !== 'TP3_HIT' && currentState !== 'COMPLETED' && currentState !== 'AMBIGUOUS') {
+        let hasValidLiveTicker = false;
+        if (currentState !== 'SL_HIT' && currentState !== 'STOPPED_OUT' && currentState !== 'TP3_HIT' && currentState !== 'COMPLETED' && currentState !== 'AMBIGUOUS' && currentState !== 'EXPIRED') {
           let liveTicker: NormalizedTicker | null = null;
           try {
             liveTicker = await marketDataManager.getPrice(sig.symbol, providerName, true, 'AUTOMATED_SCANNER');
@@ -629,6 +637,7 @@ export class SignalLifecycleManager {
             const isStale = (now - liveTicker.receivedAt > 15 * 60 * 1000) || (now - liveTicker.timestamp > 30 * 60 * 1000) || liveTicker.status !== 'OK';
 
             if (!providerMismatch && !isStale) {
+              hasValidLiveTicker = true;
               const liveResult = this.evaluateLiveTicker(sig, currentState, liveTicker, timestamps);
               currentState = liveResult.finalState;
               queuedTransitions.push(...liveResult.transitions);
@@ -636,27 +645,100 @@ export class SignalLifecycleManager {
           }
         }
 
-        // Check TTL Expiration - ONLY if not yet entry triggered or progressed
-        const ageMs = now - sig.timestamp;
-        const maxTtlMs = serverConfig.getConfig().signalExpirationMs;
+        // Prefer persisted expiresAt value when available
+        const expiresAt = typeof sig.expiresAt === 'number' && sig.expiresAt > 0
+          ? sig.expiresAt
+          : (sig.timestamp + serverConfig.getConfig().signalExpirationMs);
+
         const hasQueuedProgress = queuedTransitions.length > 0;
         const isEntryTriggered = Boolean(timestamps.entryHitTimestamp);
         const isProgressedState = currentState === 'ACTIVE' || currentState === 'TP1_HIT' || currentState === 'TP2_HIT' || currentState === 'TP3_HIT' || currentState === 'SL_HIT' || currentState === 'STOPPED_OUT' || currentState === 'COMPLETED';
+        const isStillWaitingEntry = currentState === 'WAITING_ENTRY' && !isEntryTriggered && !hasQueuedProgress && !isProgressedState;
 
-        if (ageMs >= maxTtlMs && !isEntryTriggered && !hasQueuedProgress && !isProgressedState) {
-          logger.info(`[SignalLifecycle] Signal ${sig.id} (${sig.symbol}) reached TTL expiration (${(ageMs / 3600000).toFixed(1)}h) without entry trigger.`);
-          await this.transitionSignalProgressive(sig, {
-            nextState: 'EXPIRED',
-            eventTime: now,
-            eventSource: 'TICK_EVALUATION',
-            timeframeUsed: '1h',
-            isRecovered: false,
-          }, {
-            ...timestamps,
-            expiredTimestamp: now,
-          });
-          expiredCount++;
-          continue;
+        const hasValidCandles = Array.isArray(candles) && candles.length > 0;
+
+        if (!hasValidCandles && !hasValidLiveTicker) {
+          unverifiedCount++;
+          logger.info(`[SignalLifecycle] Signal ${sig.id} (${sig.symbol}) lifecycle check UNVERIFIED/NO_VALID_PRICE: Price data unavailable or stale from provider ${providerName}. Deferred to next cron.`);
+        }
+
+        // GATE 3: Compute lifecycle check metadata for this pass
+        const checkAt = new Date(now).toISOString();
+        let checkPrice = 0;
+        let checkSource = providerName;
+
+        if (hasValidLiveTicker && (timestamps.displayPrice || sig.displayPrice)) {
+          checkPrice = timestamps.displayPrice || sig.displayPrice || 0;
+          checkSource = providerName;
+        } else if (hasValidCandles && candles.length > 0) {
+          const latestCandle = candles[candles.length - 1];
+          checkPrice = latestCandle.close;
+          checkSource = `${providerName}_CANDLES`;
+        } else {
+          checkPrice = sig.displayPrice || sig.executionPrice || sig.entryPrice || 0;
+          checkSource = providerName || 'UNKNOWN';
+        }
+
+        let checkStatus: LifecycleCheckStatus = 'CHECKED';
+
+        if (!hasValidCandles && !hasValidLiveTicker) {
+          checkStatus = 'NO_VALID_PRICE';
+        } else {
+          const hasAmbiguous = queuedTransitions.some(t => t.nextState === 'AMBIGUOUS') || currentState === 'AMBIGUOUS';
+          const hasSLHit = queuedTransitions.some(t => t.nextState === 'SL_HIT' || (t.nextState as string) === 'STOPPED_OUT');
+          const hasTP3Hit = queuedTransitions.some(t => t.nextState === 'TP3_HIT' || (t.nextState as string) === 'COMPLETED');
+          const hasTP2Hit = queuedTransitions.some(t => t.nextState === 'TP2_HIT');
+          const hasTP1Hit = queuedTransitions.some(t => t.nextState === 'TP1_HIT');
+          const entryConfirmedNow = (sig.status === 'WAITING_ENTRY' && (currentState === 'ACTIVE' || Boolean(timestamps.entryHitTimestamp)));
+
+          if (hasAmbiguous) {
+            checkStatus = 'AMBIGUOUS';
+          } else if (hasSLHit) {
+            checkStatus = 'SL_HIT';
+          } else if (hasTP3Hit) {
+            checkStatus = 'TP3_HIT';
+          } else if (hasTP2Hit) {
+            checkStatus = 'TP2_HIT';
+          } else if (hasTP1Hit) {
+            checkStatus = 'TP1_HIT';
+          } else if (entryConfirmedNow) {
+            checkStatus = 'ENTRY_CONFIRMED';
+          } else {
+            checkStatus = 'NO_TARGET_REACHED';
+          }
+        }
+
+        timestamps.lastLifecycleCheckAt = checkAt;
+        timestamps.lastLifecycleCheckStatus = checkStatus;
+        timestamps.lastLifecycleCheckPrice = checkPrice;
+        timestamps.lastLifecycleCheckSource = checkSource;
+
+        if (isStillWaitingEntry && now >= expiresAt) {
+          // Expiration allowed ONLY when:
+          // 1. signal is still WAITING_ENTRY (isStillWaitingEntry)
+          // 2. valid expiration time has passed (now >= expiresAt)
+          // 3. lifecycle evaluation had sufficient valid market data establishing entry was not reached
+          const latestCandleTime = hasValidCandles ? candles[candles.length - 1].timestamp : 0;
+          const candlesReachedExpiration = hasValidCandles && latestCandleTime >= (expiresAt - 15 * 60 * 1000);
+          const hasSufficientMarketData = candlesReachedExpiration || hasValidLiveTicker || (hasValidCandles && (now - latestCandleTime < 30 * 60 * 1000));
+
+          if (hasSufficientMarketData) {
+            logger.info(`[SignalLifecycle] Signal ${sig.id} (${sig.symbol}) reached expiration time (${new Date(expiresAt).toISOString()}) without entry trigger.`);
+            await this.transitionSignalProgressive(sig, {
+              nextState: 'EXPIRED',
+              eventTime: expiresAt,
+              eventSource: 'TICK_EVALUATION',
+              timeframeUsed: '1h',
+              isRecovered: false,
+            }, {
+              ...timestamps,
+              expiredTimestamp: now,
+            });
+            expiredCount++;
+            continue;
+          } else {
+            logger.info(`[SignalLifecycle] Signal ${sig.id} (${sig.symbol}) passed expiration time (${new Date(expiresAt).toISOString()}), but expiration deferred because this lifecycle pass could not obtain sufficient valid/fresh market data.`);
+          }
         }
 
         // Execute all queued progressive transitions in strict chronological order
@@ -679,19 +761,21 @@ export class SignalLifecycleManager {
             }
           }
         } else {
-          // Persist updated quote metadata and execution evidence even if status remained unchanged
-          if (timestamps.displayPrice !== undefined || (timestamps as any).executionEvidence !== undefined) {
-            await ScannerPersistence.updateSignalStatus(sig.id, sig.status, {
-              displayPrice: timestamps.displayPrice,
-              bid: timestamps.bid,
-              ask: timestamps.ask,
-              executionSide: timestamps.executionSide,
-              executionPrice: timestamps.executionPrice,
-              spread: timestamps.spread,
-              executionEvidence: (timestamps as any).executionEvidence || sig.executionEvidence,
-              historicalEntryPolicy: (timestamps as any).historicalEntryPolicy || sig.historicalEntryPolicy,
-            });
-          }
+          // GATE 3: Persist updated quote metadata, execution evidence, and lifecycle check state on every cron pass
+          await ScannerPersistence.updateSignalStatus(sig.id, sig.status, {
+            displayPrice: timestamps.displayPrice,
+            bid: timestamps.bid,
+            ask: timestamps.ask,
+            executionSide: timestamps.executionSide,
+            executionPrice: timestamps.executionPrice,
+            spread: timestamps.spread,
+            executionEvidence: (timestamps as any).executionEvidence || sig.executionEvidence,
+            historicalEntryPolicy: (timestamps as any).historicalEntryPolicy || sig.historicalEntryPolicy,
+            lastLifecycleCheckAt: timestamps.lastLifecycleCheckAt,
+            lastLifecycleCheckStatus: timestamps.lastLifecycleCheckStatus,
+            lastLifecycleCheckPrice: timestamps.lastLifecycleCheckPrice,
+            lastLifecycleCheckSource: timestamps.lastLifecycleCheckSource,
+          });
         }
       }
 
@@ -702,6 +786,7 @@ export class SignalLifecycleManager {
         expiredCount,
         invalidatedCount,
         ambiguousCount,
+        unverifiedCount,
         recoveredEventsCount,
       };
     } catch (err) {
@@ -713,6 +798,7 @@ export class SignalLifecycleManager {
         expiredCount,
         invalidatedCount,
         ambiguousCount,
+        unverifiedCount,
         recoveredEventsCount,
       };
     } finally {
@@ -846,22 +932,6 @@ export class SignalLifecycleManager {
       const time = candle.timestamp;
       const timeframe = candle.timeframe || '1m';
 
-      // Check TTL Expiration
-      const maxTtlMs = serverConfig.getConfig().signalExpirationMs;
-      const ageMs = time - sig.timestamp;
-      
-      if (currentState === 'WAITING_ENTRY' && ageMs >= maxTtlMs) {
-        currentState = 'EXPIRED';
-        transitions.push({
-          nextState: 'EXPIRED',
-          eventTime: time,
-          eventSource: 'HISTORICAL_BACKFILL',
-          timeframeUsed: timeframe,
-          isRecovered: true,
-        });
-        break;
-      }
-
       if (currentState === 'WAITING_ENTRY') {
         const quotePrice = isBuy ? low : high;
         const validationRes = Gate29ExecutableEntryValidation.validateEntry(
@@ -917,6 +987,23 @@ export class SignalLifecycleManager {
             });
           }
         } else {
+          // Entry was NOT confirmed on this candle. Check if candle timestamp reached or passed expiresAt.
+          const expiresAt = typeof sig.expiresAt === 'number' && sig.expiresAt > 0
+            ? sig.expiresAt
+            : (sig.timestamp + serverConfig.getConfig().signalExpirationMs);
+
+          if (time >= expiresAt) {
+            currentState = 'EXPIRED';
+            transitions.push({
+              nextState: 'EXPIRED',
+              eventTime: time,
+              eventSource: 'HISTORICAL_BACKFILL',
+              timeframeUsed: timeframe,
+              isRecovered: true,
+            });
+            break;
+          }
+
           timestamps.tp1Status = 'PENDING';
           timestamps.tp2Status = 'PENDING';
           timestamps.tp3Status = 'PENDING';
@@ -1300,6 +1387,10 @@ export class SignalLifecycleManager {
       tp2HitPrice?: number;
       tp3HitPrice?: number;
       stopLossHitPrice?: number;
+      lastLifecycleCheckAt?: string;
+      lastLifecycleCheckStatus?: LifecycleCheckStatus;
+      lastLifecycleCheckPrice?: number;
+      lastLifecycleCheckSource?: string;
     }
   ): Promise<void> {
     const now = Date.now();
@@ -1414,6 +1505,10 @@ export class SignalLifecycleManager {
       isRecovered: step.isRecovered,
       ambiguousDetails: step.ambiguousDetails,
       notifiedStates: Array.from(currentNotified),
+      lastLifecycleCheckAt: timestamps.lastLifecycleCheckAt,
+      lastLifecycleCheckStatus: timestamps.lastLifecycleCheckStatus,
+      lastLifecycleCheckPrice: timestamps.lastLifecycleCheckPrice,
+      lastLifecycleCheckSource: timestamps.lastLifecycleCheckSource,
     });
 
     // 3. Update dedicated Signal Logger status

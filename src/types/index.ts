@@ -244,6 +244,11 @@ export interface TradingSignal {
   monteCarloSimulationStatus?: 'INSUFFICIENT_DATA' | 'ROBUST_STABLE' | 'ELEVATED_DRAWDOWN_RISK' | 'HIGH_RUIN_RISK';
   expiresAt?: number;
   notifiedStates?: string[];
+  lastLifecycleCheckAt?: string;
+  lastLifecycleCheckStatus?: string;
+  lastLifecycleCheckPrice?: number;
+  lastLifecycleCheckSource?: string;
+  displayPrice?: number;
   factors?: any;
 }
 
@@ -507,6 +512,11 @@ export interface SignalHistoryItem {
   };
   isTradeableSignal?: boolean;
   signalClassification?: 'TRADEABLE' | 'WATCHING' | 'QUALIFIED_CANDIDATE' | 'CANDIDATE' | 'REJECTED' | 'FILTERED' | 'BLOCKED' | 'INVALID' | 'EXPIRED_BEFORE_ENTRY' | 'NON_TRADEABLE' | 'ANALYTICS_ONLY' | 'DIAGNOSTIC';
+  lastLifecycleCheckAt?: string;
+  lastLifecycleCheckStatus?: string;
+  lastLifecycleCheckPrice?: number;
+  lastLifecycleCheckSource?: string;
+  displayPrice?: number;
 }
 
 export interface MetricSummary {
@@ -654,7 +664,7 @@ export function isActionableSignal(signal: {
     status === 'TP1_HIT' ||
     status === 'TP2_HIT'
   ) {
-    if (signal.expiresAt && Date.now() > signal.expiresAt) {
+    if (status === 'WAITING_ENTRY' && signal.expiresAt && Date.now() > signal.expiresAt) {
       return false;
     }
     return true;

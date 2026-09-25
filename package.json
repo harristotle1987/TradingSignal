@@ -11,7 +11,8 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "test": "tsx tests/run-regression.ts",
-    "test:regression": "tsx tests/run-regression.ts"
+    "test:regression": "tsx tests/run-regression.ts",
+    "audit": "npm run lint && tsx tests/run-regression.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",

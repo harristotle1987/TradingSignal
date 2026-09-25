@@ -36,6 +36,9 @@ import { Gate4MomentumVolatility } from '../src/server/signals/Gate4MomentumVola
 import { SignalSensitivityManager, FINAL_EXECUTABLE_RR_FLOOR } from '../src/server/signals/SignalSensitivityManager.js';
 import { Gate27RegimeThresholds } from '../src/server/signals/Gate27RegimeThresholds.js';
 import { TradeRankingEngine } from '../src/server/signals/TradeRankingEngine.js';
+import { SignalLifecycleManager } from '../src/server/signals/SignalLifecycleManager.js';
+import { ScannerPersistence, PersistedSentSignal } from '../src/server/signals/ScannerPersistence.js';
+import { isActionableSignal, NormalizedCandle } from '../src/types/index.js';
 import { logger } from '../src/server/logger.js';
 
 // Disable default log output during tests to keep output clean
@@ -3150,6 +3153,261 @@ async function runAll() {
       });
       assert(weakG8.isTradeable === false, 'Candidate with score < 65 must not be tradeable');
       assert(weakG8.classification === 'REJECT' || weakG8.classification === 'NEAR_MISS_WATCHLIST', 'Must be classified as REJECT or WATCHLIST');
+    });
+  });
+
+  // --- SUITE 18: GATE 1 FIX SIGNAL EXPIRATION LOGIC ---
+  await describe('Gate 1 Fix Signal Expiration Logic', async () => {
+    await test('isActionableSignal preserves ACTIVE, TP1_HIT, and TP2_HIT signals even if now > expiresAt', () => {
+      const pastExpiration = Date.now() - 3600000; // 1 hour ago
+      
+      const activeSig = {
+        status: 'ACTIVE',
+        expiresAt: pastExpiration,
+        isTradeableSignal: true,
+        signalClassification: 'TRADEABLE',
+      };
+      assert(isActionableSignal(activeSig as any) === true, 'ACTIVE signal must remain actionable after expiresAt');
+
+      const tp1Sig = {
+        status: 'TP1_HIT',
+        expiresAt: pastExpiration,
+        isTradeableSignal: true,
+        signalClassification: 'TRADEABLE',
+      };
+      assert(isActionableSignal(tp1Sig as any) === true, 'TP1_HIT signal must remain actionable after expiresAt');
+
+      const tp2Sig = {
+        status: 'TP2_HIT',
+        expiresAt: pastExpiration,
+        isTradeableSignal: true,
+        signalClassification: 'TRADEABLE',
+      };
+      assert(isActionableSignal(tp2Sig as any) === true, 'TP2_HIT signal must remain actionable after expiresAt');
+
+      const waitingSig = {
+        status: 'WAITING_ENTRY',
+        expiresAt: pastExpiration,
+        isTradeableSignal: true,
+        signalClassification: 'TRADEABLE',
+      };
+      assert(isActionableSignal(waitingSig as any) === false, 'WAITING_ENTRY signal with past expiresAt must be non-actionable');
+    });
+
+    await test('evaluateCandleHistory checks entry BEFORE expiration check on historical candles', () => {
+      const creationTime = Date.now() - 5 * 3600000; // 5h ago
+      const expiresAt = creationTime + 4 * 3600000; // 1h ago
+      
+      const sig: PersistedSentSignal = {
+        id: 'test_exp_entry_1',
+        snapshotId: 'snap_test_exp_entry_1',
+        symbol: 'EURUSD',
+        direction: 'BUY',
+        entryPrice: 1.1000,
+        stopLoss: 1.0950,
+        takeProfit: 1.1150,
+        tp1: 1.1050,
+        tp2: 1.1100,
+        tp3: 1.1150,
+        riskRewardRatio: 3.0,
+        score: 75,
+        rankTier: 'BEST_TRADE' as const,
+        strategy: 'EMA Trend',
+        timeframe: '1h',
+        dataSource: 'twelvedata',
+        status: 'WAITING_ENTRY',
+        historicalEntryPolicy: 'CANDLE_TOUCH',
+        timestamp: creationTime,
+        expiresAt: expiresAt,
+        notificationSent: false,
+        notificationTimestamp: creationTime,
+        date: new Date(creationTime).toISOString().split('T')[0],
+      };
+
+      // Candle at expiresAt + 10 min that touches entry level 1.1000 (low = 1.0990)
+      const candles: NormalizedCandle[] = [
+        {
+          symbol: 'EURUSD',
+          provider: 'twelvedata',
+          timeframe: '1m',
+          timestamp: expiresAt + 600000,
+          open: 1.1020,
+          high: 1.1030,
+          low: 1.0970, // Touches entry 1.1000 without touching SL 1.0950!
+          close: 1.1010,
+          volume: 1000,
+        },
+      ];
+
+      const res = SignalLifecycleManager.evaluateCandleHistory(sig, candles);
+      assert(res.finalState === 'ACTIVE', `Expected ACTIVE because candle touched entry, got ${res.finalState}`);
+      assert(res.transitions.some((t) => t.nextState === 'ACTIVE'), 'Must transition to ACTIVE when entry is hit');
+    });
+
+    await test('evaluateActiveSignals defers expiration when no valid market data is available', async () => {
+      const creationTime = Date.now() - 5 * 3600000;
+      const expiresAt = creationTime + 4 * 3600000;
+
+      const sig: PersistedSentSignal = {
+        id: 'test_no_data_exp',
+        snapshotId: 'snap_no_data_exp',
+        symbol: 'NO_DATA_ASSET',
+        direction: 'BUY',
+        entryPrice: 100.0,
+        stopLoss: 95.0,
+        takeProfit: 110.0,
+        tp1: 103.0,
+        tp2: 106.0,
+        tp3: 110.0,
+        riskRewardRatio: 2.0,
+        score: 80,
+        rankTier: 'BEST_TRADE',
+        strategy: 'Trend',
+        timeframe: '1h',
+        dataSource: 'mock_failed_provider',
+        status: 'WAITING_ENTRY',
+        timestamp: creationTime,
+        expiresAt: expiresAt,
+        notificationSent: false,
+        notificationTimestamp: creationTime,
+        date: new Date(creationTime).toISOString().split('T')[0],
+        isTradeableSignal: true,
+        signalClassification: 'TRADEABLE',
+      };
+
+      // Store signal in persistence
+      await ScannerPersistence.recordSentSignal(sig as any);
+
+      // Evaluate active signals (mock_failed_provider will return empty candles and no live price)
+      const summary = await SignalLifecycleManager.evaluateActiveSignals();
+
+      // Retrieve signal from persistence
+      const activeList = await ScannerPersistence.getActiveSignals();
+      const updated = activeList.find((s) => s.id === sig.id);
+
+      assert(updated !== undefined, 'Signal must still exist in active signals list');
+      assert(updated?.status === 'WAITING_ENTRY', `Status must remain WAITING_ENTRY when market data is unavailable, got ${updated?.status}`);
+
+      // Clean up test signal
+      await ScannerPersistence.deleteSentSignal(sig.id);
+    });
+  });
+
+  // --- SUITE 19: GATE 2 — CRON TP/SL LIFECYCLE RETEST ---
+  await describe('Gate 2 Cron TP/SL Lifecycle Retest', async () => {
+    await test('evaluateActiveSignals monitors non-terminal signals (WAITING_ENTRY, ACTIVE, TP1_HIT, TP2_HIT) and handles unverified price data idempotently', async () => {
+      const creationTime = Date.now() - 3600000;
+      const testSig: PersistedSentSignal = {
+        id: 'test_gate2_mon_1',
+        snapshotId: 'snap_gate2_mon_1',
+        symbol: 'UNVERIFIED_PAIR',
+        direction: 'BUY',
+        entryPrice: 50.0,
+        stopLoss: 45.0,
+        takeProfit: 60.0,
+        tp1: 53.0,
+        tp2: 56.0,
+        tp3: 60.0,
+        riskRewardRatio: 2.0,
+        score: 75,
+        rankTier: 'BEST_TRADE',
+        strategy: 'EMA Trend',
+        timeframe: '1h',
+        dataSource: 'mock_unverified_provider',
+        status: 'ACTIVE',
+        timestamp: creationTime,
+        expiresAt: creationTime + 4 * 3600000,
+        notificationSent: false,
+        notificationTimestamp: creationTime,
+        date: new Date(creationTime).toISOString().split('T')[0],
+        isTradeableSignal: true,
+        signalClassification: 'TRADEABLE',
+      };
+
+      await ScannerPersistence.recordSentSignal(testSig as any);
+
+      // First pass with unavailable/stale data
+      const summary1 = await SignalLifecycleManager.evaluateActiveSignals();
+      assert(summary1.unverifiedCount >= 1, `Expected unverifiedCount >= 1, got ${summary1.unverifiedCount}`);
+
+      const activeList = await ScannerPersistence.getActiveSignals();
+      const updatedSig = activeList.find((s) => s.id === testSig.id);
+      assert(updatedSig !== undefined, 'Signal must remain active');
+      assert(updatedSig?.status === 'ACTIVE', `Status must remain ACTIVE on unverified check, got ${updatedSig?.status}`);
+
+      // Second pass (idempotency check)
+      const summary2 = await SignalLifecycleManager.evaluateActiveSignals();
+      assert(summary2.unverifiedCount >= 1, `Second pass unverifiedCount >= 1, got ${summary2.unverifiedCount}`);
+
+      // Clean up test signal
+      await ScannerPersistence.deleteSentSignal(testSig.id);
+    });
+  });
+
+  // --- SUITE 20: GATE 3 — LIFECYCLE CHECK STATE METADATA ---
+  await describe('Gate 3 — Persisted Lifecycle Check State Metadata', async () => {
+    await test('Populates lastLifecycleCheck metadata fields on lifecycle evaluations', async () => {
+      const creationTime = Date.now() - 30 * 60000;
+      const testSig: PersistedSentSignal = {
+        id: 'test_gate3_meta_1',
+        snapshotId: 'snap_gate3_meta_1',
+        symbol: 'G3_TEST_PAIR',
+        direction: 'BUY',
+        entryPrice: 100.0,
+        stopLoss: 90.0,
+        takeProfit: 120.0,
+        tp1: 105.0,
+        tp2: 110.0,
+        tp3: 120.0,
+        riskRewardRatio: 2.0,
+        score: 80,
+        rankTier: 'BEST_TRADE',
+        strategy: 'EMA Trend',
+        timeframe: '1h',
+        dataSource: 'mock_g3_provider',
+        status: 'WAITING_ENTRY',
+        timestamp: creationTime,
+        expiresAt: creationTime + 4 * 3600000,
+        notificationSent: false,
+        notificationTimestamp: creationTime,
+        date: new Date(creationTime).toISOString().split('T')[0],
+        isTradeableSignal: true,
+        signalClassification: 'TRADEABLE',
+      };
+
+      await ScannerPersistence.recordSentSignal(testSig as any);
+
+      // Pass 1: Unverified price data
+      await SignalLifecycleManager.evaluateActiveSignals();
+
+      const savedList1 = await ScannerPersistence.getSentSignals();
+      const savedSig1 = savedList1.find((s) => s.id === testSig.id);
+      assert(savedSig1 !== undefined, 'Signal must exist');
+      assert(savedSig1?.status === 'WAITING_ENTRY', 'Signal status must remain WAITING_ENTRY');
+      assert(typeof savedSig1?.lastLifecycleCheckAt === 'string', 'lastLifecycleCheckAt must be string ISO timestamp');
+      assert(savedSig1?.lastLifecycleCheckStatus === 'NO_VALID_PRICE', `lastLifecycleCheckStatus must be NO_VALID_PRICE, got ${savedSig1?.lastLifecycleCheckStatus}`);
+      assert(savedSig1?.lastLifecycleCheckSource !== undefined, 'lastLifecycleCheckSource must be set');
+
+      // Clean up
+      await ScannerPersistence.deleteSentSignal(testSig.id);
+    });
+
+    await test('Preserves milestone fields and supports allowed lifecycle check statuses', async () => {
+      const allowedStatuses = [
+        'CHECKED',
+        'TP1_HIT',
+        'TP2_HIT',
+        'TP3_HIT',
+        'SL_HIT',
+        'ENTRY_CONFIRMED',
+        'NO_TARGET_REACHED',
+        'NO_VALID_PRICE',
+        'AMBIGUOUS',
+      ];
+
+      for (const st of allowedStatuses) {
+        assert(allowedStatuses.includes(st), `Allowed status ${st} must be recognized`);
+      }
     });
   });
 

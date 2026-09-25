@@ -237,6 +237,13 @@ export function SignalsPage({ health }: SignalsPageProps) {
           stopLossHitPrice: log.stopLossHitPrice,
           confluenceReasons: log.confluenceReasons,
           aiAssessment: log.aiAssessment,
+          entryHitTimestamp: log.entryHitTimestamp,
+          lastLifecycleCheckAt: log.lastLifecycleCheckAt,
+          lastLifecycleCheckStatus: log.lastLifecycleCheckStatus,
+          lastLifecycleCheckPrice: log.lastLifecycleCheckPrice,
+          lastLifecycleCheckSource: log.lastLifecycleCheckSource,
+          displayPrice: log.displayPrice,
+          expiresAt: log.expiresAt,
           isTradeableSignal: true,
           signalClassification: 'TRADEABLE',
         }));
@@ -247,8 +254,13 @@ export function SignalsPage({ health }: SignalsPageProps) {
     }
   }, []);
 
+  // Poll persisted signal logs every 20 seconds to continuously refresh lifecycle state without triggering market API calls
   useEffect(() => {
     loadDedicatedSignalLogs();
+    const interval = setInterval(() => {
+      loadDedicatedSignalLogs();
+    }, 20000);
+    return () => clearInterval(interval);
   }, [loadDedicatedSignalLogs]);
 
   // Clear history handler - wipes local state and triggers DELETE /api/signals/all
