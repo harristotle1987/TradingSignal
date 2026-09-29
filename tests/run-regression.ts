@@ -6,7 +6,8 @@ import { StrategyPerformanceTracker, TradeOutcomeRecord } from '../src/server/si
 import { runStagedPipeline } from '../src/server/signals/StagedScannerPipeline.js';
 import { ScanPerformanceProfiler } from '../src/server/signals/ScanPerformanceProfiler.js';
 import { CronJobOrgService } from '../src/server/cron/CronJobOrgService.js';
-import { marketCache } from '../src/server/market/CacheStore.js';
+import { marketCache, CACHE_TTL } from '../src/server/market/CacheStore.js';
+import { MarketSessionManager } from '../src/server/market/MarketSessionManager.js';
 import { marketDataManager } from '../src/server/market/MarketDataManager.js';
 import { BitgetAdapter } from '../src/server/market/adapters/BitgetAdapter.js';
 import { TwelveDataAdapter } from '../src/server/market/adapters/TwelveDataAdapter.js';
@@ -38,7 +39,10 @@ import { SignalSensitivityManager, FINAL_EXECUTABLE_RR_FLOOR } from '../src/serv
 import { Gate27RegimeThresholds } from '../src/server/signals/Gate27RegimeThresholds.js';
 import { TradeRankingEngine } from '../src/server/signals/TradeRankingEngine.js';
 import { SignalLifecycleManager } from '../src/server/signals/SignalLifecycleManager.js';
-import { ScannerPersistence, PersistedSentSignal } from '../src/server/signals/ScannerPersistence.js';
+import { SignalLogger, isProductionRecord } from '../src/server/signals/SignalLogger.js';
+import { SignalOutcomeLogger } from '../src/server/signals/SignalOutcomeLogger.js';
+import { ScannerPersistence, PersistedSentSignal, isValidActiveSignal } from '../src/server/signals/ScannerPersistence.js';
+import { setMockFirestoreAdmin } from '../src/server/firebaseAdmin.js';
 import { Gate36ConfigurableSignalFrequency } from '../src/server/signals/Gate36ConfigurableSignalFrequency.js';
 import { isActionableSignal, NormalizedCandle } from '../src/types/index.js';
 import { logger } from '../src/server/logger.js';
@@ -3701,23 +3705,23 @@ async function runAll() {
     }
   });
 
-  // --- SUITE 23: GATE 1 — EXPANDED TP GUARDRAILS & EXPANSION RUNNER ---
-  await describe('Suite 23: Gate 1 — Expanded TP Guardrails & Expansion Runner', async () => {
+  // --- SUITE 23: GATE 1 & FURTHER EXPANSION — EXPANDED TP GUARDRAILS & EXPANSION RUNNER ---
+  await describe('Suite 23: Gate 1 & Further Expansion — Expanded TP Guardrails & Expansion Runner', async () => {
     await test('ASSET_CLASS_GUARDRAILS contains correct expanded percentage ceilings for Crypto, Forex, and Stocks', () => {
-      // CRYPTO
-      assert(ASSET_CLASS_GUARDRAILS.CRYPTO.tp1.minPct === 0.50 && ASSET_CLASS_GUARDRAILS.CRYPTO.tp1.maxPct === 3.00, 'Crypto TP1 guardrail must be 0.50% - 3.00%');
-      assert(ASSET_CLASS_GUARDRAILS.CRYPTO.tp2.minPct === 1.00 && ASSET_CLASS_GUARDRAILS.CRYPTO.tp2.maxPct === 7.50, 'Crypto TP2 guardrail must be 1.00% - 7.50%');
-      assert(ASSET_CLASS_GUARDRAILS.CRYPTO.tp3.minPct === 1.50 && ASSET_CLASS_GUARDRAILS.CRYPTO.tp3.maxPct === 12.00, 'Crypto TP3 guardrail must be 1.50% - 12.00%');
+      // CRYPTO: TP1 0.50–5.00%, TP2 1.00–12.00%, TP3 2.00–20.00%
+      assert(ASSET_CLASS_GUARDRAILS.CRYPTO.tp1.minPct === 0.50 && ASSET_CLASS_GUARDRAILS.CRYPTO.tp1.maxPct === 5.00, 'Crypto TP1 guardrail must be 0.50% - 5.00%');
+      assert(ASSET_CLASS_GUARDRAILS.CRYPTO.tp2.minPct === 1.00 && ASSET_CLASS_GUARDRAILS.CRYPTO.tp2.maxPct === 12.00, 'Crypto TP2 guardrail must be 1.00% - 12.00%');
+      assert(ASSET_CLASS_GUARDRAILS.CRYPTO.tp3.minPct === 2.00 && ASSET_CLASS_GUARDRAILS.CRYPTO.tp3.maxPct === 20.00, 'Crypto TP3 guardrail must be 2.00% - 20.00%');
 
-      // FOREX
-      assert(ASSET_CLASS_GUARDRAILS.FOREX.tp1.minPct === 0.15 && ASSET_CLASS_GUARDRAILS.FOREX.tp1.maxPct === 1.00, 'Forex TP1 guardrail must be 0.15% - 1.00%');
-      assert(ASSET_CLASS_GUARDRAILS.FOREX.tp2.minPct === 0.30 && ASSET_CLASS_GUARDRAILS.FOREX.tp2.maxPct === 2.00, 'Forex TP2 guardrail must be 0.30% - 2.00%');
-      assert(ASSET_CLASS_GUARDRAILS.FOREX.tp3.minPct === 0.50 && ASSET_CLASS_GUARDRAILS.FOREX.tp3.maxPct === 4.00, 'Forex TP3 guardrail must be 0.50% - 4.00%');
+      // FOREX: TP1 0.15–1.50%, TP2 0.30–3.00%, TP3 0.50–6.00%
+      assert(ASSET_CLASS_GUARDRAILS.FOREX.tp1.minPct === 0.15 && ASSET_CLASS_GUARDRAILS.FOREX.tp1.maxPct === 1.50, 'Forex TP1 guardrail must be 0.15% - 1.50%');
+      assert(ASSET_CLASS_GUARDRAILS.FOREX.tp2.minPct === 0.30 && ASSET_CLASS_GUARDRAILS.FOREX.tp2.maxPct === 3.00, 'Forex TP2 guardrail must be 0.30% - 3.00%');
+      assert(ASSET_CLASS_GUARDRAILS.FOREX.tp3.minPct === 0.50 && ASSET_CLASS_GUARDRAILS.FOREX.tp3.maxPct === 6.00, 'Forex TP3 guardrail must be 0.50% - 6.00%');
 
-      // STOCKS
-      assert(ASSET_CLASS_GUARDRAILS.STOCKS.tp1.minPct === 0.30 && ASSET_CLASS_GUARDRAILS.STOCKS.tp1.maxPct === 2.00, 'Stocks TP1 guardrail must be 0.30% - 2.00%');
-      assert(ASSET_CLASS_GUARDRAILS.STOCKS.tp2.minPct === 0.60 && ASSET_CLASS_GUARDRAILS.STOCKS.tp2.maxPct === 4.00, 'Stocks TP2 guardrail must be 0.60% - 4.00%');
-      assert(ASSET_CLASS_GUARDRAILS.STOCKS.tp3.minPct === 1.00 && ASSET_CLASS_GUARDRAILS.STOCKS.tp3.maxPct === 7.00, 'Stocks TP3 guardrail must be 1.00% - 7.00%');
+      // STOCKS: TP1 0.30–3.00%, TP2 0.60–6.00%, TP3 1.00–12.00%
+      assert(ASSET_CLASS_GUARDRAILS.STOCKS.tp1.minPct === 0.30 && ASSET_CLASS_GUARDRAILS.STOCKS.tp1.maxPct === 3.00, 'Stocks TP1 guardrail must be 0.30% - 3.00%');
+      assert(ASSET_CLASS_GUARDRAILS.STOCKS.tp2.minPct === 0.60 && ASSET_CLASS_GUARDRAILS.STOCKS.tp2.maxPct === 6.00, 'Stocks TP2 guardrail must be 0.60% - 6.00%');
+      assert(ASSET_CLASS_GUARDRAILS.STOCKS.tp3.minPct === 1.00 && ASSET_CLASS_GUARDRAILS.STOCKS.tp3.maxPct === 12.00, 'Stocks TP3 guardrail must be 1.00% - 12.00%');
     });
 
     await test('AtrTpGenerator generates strictly ordered TP1 < TP2 < TP3 for BUY and TP1 > TP2 > TP3 for SELL', () => {
@@ -3744,6 +3748,50 @@ async function runAll() {
       assert(sellRes.tp1 < 50000, 'SELL TP1 must be less than entry');
       assert(sellRes.tp2 < sellRes.tp1, 'SELL TP2 must be less than TP1');
       assert(sellRes.tp3 < sellRes.tp2, 'SELL TP3 must be less than TP2');
+    });
+
+    await test('AtrTpGenerator clamps targets to new expanded maximum ceilings when raw ATR is very large', () => {
+      // CRYPTO with massive ATR (e.g. 50% of price)
+      const cryptoExtreme = AtrTpGenerator.generate({
+        direction: 'BUY',
+        entryPrice: 10000,
+        atr: 5000, // 50%
+        assetClass: 'CRYPTO',
+      });
+      assert(cryptoExtreme.isValid, 'Crypto extreme ATR generation must be valid');
+      // Max ceilings: TP1 <= 5%, TP2 <= 12%, TP3 <= 20%
+      assert(cryptoExtreme.tp1 <= 10000 * 1.050001, `Crypto TP1 must not exceed 5% ceiling, got ${cryptoExtreme.tp1}`);
+      assert(cryptoExtreme.tp2 <= 10000 * 1.120001, `Crypto TP2 must not exceed 12% ceiling, got ${cryptoExtreme.tp2}`);
+      assert(cryptoExtreme.tp3 <= 10000 * 1.200001, `Crypto TP3 must not exceed 20% ceiling, got ${cryptoExtreme.tp3}`);
+      assert(cryptoExtreme.tp1 < cryptoExtreme.tp2 && cryptoExtreme.tp2 < cryptoExtreme.tp3, 'Strict ordering maintained under ceiling clamp');
+
+      // FOREX with massive ATR
+      const forexExtreme = AtrTpGenerator.generate({
+        direction: 'BUY',
+        entryPrice: 1.1000,
+        atr: 0.2000,
+        assetClass: 'FOREX',
+      });
+      assert(forexExtreme.isValid, 'Forex extreme ATR generation must be valid');
+      // Max ceilings: TP1 <= 1.5%, TP2 <= 3.0%, TP3 <= 6.0%
+      assert(forexExtreme.tp1 <= 1.1000 * 1.015001, `Forex TP1 must not exceed 1.5% ceiling, got ${forexExtreme.tp1}`);
+      assert(forexExtreme.tp2 <= 1.1000 * 1.030001, `Forex TP2 must not exceed 3.0% ceiling, got ${forexExtreme.tp2}`);
+      assert(forexExtreme.tp3 <= 1.1000 * 1.060001, `Forex TP3 must not exceed 6.0% ceiling, got ${forexExtreme.tp3}`);
+      assert(forexExtreme.tp1 < forexExtreme.tp2 && forexExtreme.tp2 < forexExtreme.tp3, 'Strict ordering maintained under ceiling clamp');
+
+      // STOCKS with massive ATR
+      const stockExtreme = AtrTpGenerator.generate({
+        direction: 'SELL',
+        entryPrice: 200,
+        atr: 80,
+        assetClass: 'STOCKS',
+      });
+      assert(stockExtreme.isValid, 'Stock extreme ATR generation must be valid');
+      // Max ceilings: TP1 <= 3%, TP2 <= 6%, TP3 <= 12%
+      assert(stockExtreme.tp1 >= 200 * (1 - 0.030001), `Stock TP1 must not exceed 3% ceiling, got ${stockExtreme.tp1}`);
+      assert(stockExtreme.tp2 >= 200 * (1 - 0.060001), `Stock TP2 must not exceed 6% ceiling, got ${stockExtreme.tp2}`);
+      assert(stockExtreme.tp3 >= 200 * (1 - 0.120001), `Stock TP3 must not exceed 12% ceiling, got ${stockExtreme.tp3}`);
+      assert(stockExtreme.tp1 > stockExtreme.tp2 && stockExtreme.tp2 > stockExtreme.tp3, 'Strict ordering maintained for SELL under ceiling clamp');
     });
 
     await test('Position allocations match 30% TP1, 30% TP2, 20% TP3, 20% Runner, summing exactly to 100%', () => {
@@ -3818,6 +3866,389 @@ async function runAll() {
       assert(resExit.runnerStatus === 'EXITED', 'Runner must be EXITED when price hits trailing stop');
       assert(resExit.newStatus === 'COMPLETED', 'Signal status must transition to COMPLETED upon runner exit');
       assert(resExit.runnerExitReason === 'TRAILING_STOP_HIT', 'Exit reason must be recorded as TRAILING_STOP_HIT');
+    });
+  });
+
+  // --- SUITE 24: GATE — MARKET SESSION CACHE & OPERATIONAL STATUS VERIFICATION ---
+  await describe('Suite 24: Gate — Market Session Cache & Operational Status Verification', async () => {
+    const saturdayMs = new Date('2026-09-26T16:00:00Z').getTime(); // Saturday 12:00 EDT
+    const wednesdayForexOpenMs = new Date('2026-09-23T16:00:00Z').getTime(); // Wednesday 12:00 EDT
+    const wednesdayStockOpenMs = new Date('2026-09-23T14:30:00Z').getTime(); // Wednesday 10:30 EDT (09:30-16:00 ET)
+
+    await test('Forex Saturday = CLOSED', () => {
+      MarketSessionManager.setMockTimestamp(saturdayMs);
+      const eurusdState = MarketSessionManager.getSessionState('EURUSD');
+      assert(eurusdState === 'MARKET_CLOSED', `Forex EURUSD on Saturday must be CLOSED, got ${eurusdState}`);
+      const gbpusdState = MarketSessionManager.getSessionState('GBPUSD');
+      assert(gbpusdState === 'MARKET_CLOSED', `Forex GBPUSD on Saturday must be CLOSED, got ${gbpusdState}`);
+    });
+
+    await test('Crypto Saturday = OPEN (24/7/365)', () => {
+      MarketSessionManager.setMockTimestamp(saturdayMs);
+      const btcState = MarketSessionManager.getSessionState('BTCUSDT');
+      assert(btcState === 'MARKET_OPEN', `Crypto BTCUSDT on Saturday must be OPEN, got ${btcState}`);
+      const ethState = MarketSessionManager.getSessionState('ETHUSDT');
+      assert(ethState === 'MARKET_OPEN', `Crypto ETHUSDT on Saturday must be OPEN, got ${ethState}`);
+    });
+
+    await test('Stock Saturday = CLOSED', () => {
+      MarketSessionManager.setMockTimestamp(saturdayMs);
+      const aaplState = MarketSessionManager.getSessionState('AAPL');
+      assert(aaplState === 'MARKET_CLOSED', `Stock AAPL on Saturday must be CLOSED, got ${aaplState}`);
+      const msftState = MarketSessionManager.getSessionState('MSFT');
+      assert(msftState === 'MARKET_CLOSED', `Stock MSFT on Saturday must be CLOSED, got ${msftState}`);
+    });
+
+    await test('Forex during open session = OPEN', () => {
+      MarketSessionManager.setMockTimestamp(wednesdayForexOpenMs);
+      const eurusdOpen = MarketSessionManager.getSessionState('EURUSD');
+      assert(eurusdOpen === 'MARKET_OPEN', `Forex EURUSD during open session must be OPEN, got ${eurusdOpen}`);
+      const usdjpyOpen = MarketSessionManager.getSessionState('USDJPY');
+      assert(usdjpyOpen === 'MARKET_OPEN', `Forex USDJPY during open session must be OPEN, got ${usdjpyOpen}`);
+    });
+
+    await test('Stock 09:30–16:00 ET = OPEN', () => {
+      MarketSessionManager.setMockTimestamp(wednesdayStockOpenMs);
+      const aaplOpen = MarketSessionManager.getSessionState('AAPL');
+      assert(aaplOpen === 'MARKET_OPEN', `Stock AAPL at 10:30 ET must be OPEN, got ${aaplOpen}`);
+      const tslaOpen = MarketSessionManager.getSessionState('TSLA');
+      assert(tslaOpen === 'MARKET_OPEN', `Stock TSLA at 10:30 ET must be OPEN, got ${tslaOpen}`);
+    });
+
+    await test('Session cache expires and refreshes correctly after 1-minute TTL', () => {
+      // 1. Verify configured TTL is 1 minute (60,000ms)
+      assert(CACHE_TTL.MARKET_SESSION_STATUS === 60 * 1000, `CACHE_TTL.MARKET_SESSION_STATUS must be 60000ms, got ${CACHE_TTL.MARKET_SESSION_STATUS}`);
+
+      // 2. Clear session cache and set operational timestamp
+      MarketSessionManager.clearSessionCache();
+      MarketSessionManager.setMockTimestamp(wednesdayStockOpenMs);
+      const testKey = 'GOOGL:session_status';
+
+      assert(marketCache.getGeneric(testKey) === null, 'Generic cache key must initially be empty');
+      const initialStatus = MarketSessionManager.getSessionState('GOOGL');
+      assert(initialStatus === 'MARKET_OPEN', `Expected MARKET_OPEN, got ${initialStatus}`);
+
+      // 3. Verify entry is cached with future expiry (~60,000ms from now)
+      const cachedEntry = marketCache.getGenericEntry(testKey);
+      assert(cachedEntry !== undefined, 'GOOGL:session_status must exist in cache');
+      assert(cachedEntry!.value === 'MARKET_OPEN', 'Cached value must match calculated state');
+      const ttlRemaining = cachedEntry!.expiresAt - Date.now();
+      assert(ttlRemaining > 50000 && ttlRemaining <= 60000, `Expected TTL around 60000ms, got ${ttlRemaining}ms`);
+
+      // 4. Calling getSessionState while unexpired returns cached state
+      const hitStatus = MarketSessionManager.getSessionState('GOOGL');
+      assert(hitStatus === 'MARKET_OPEN', `Expected cached state MARKET_OPEN, got ${hitStatus}`);
+
+      // 5. Expire the cache entry (simulate 1 minute passing)
+      cachedEntry!.expiresAt = Date.now() - 5000;
+      assert(marketCache.getGeneric(testKey) === null, 'Expired entry must be evicted and return null');
+
+      // 6. Next call recalculates and refreshes cache
+      const refreshedStatus = MarketSessionManager.getSessionState('GOOGL');
+      assert(refreshedStatus === 'MARKET_OPEN', `Expected refreshed status MARKET_OPEN, got ${refreshedStatus}`);
+      const refreshedEntry = marketCache.getGenericEntry(testKey);
+      assert(refreshedEntry !== undefined && refreshedEntry.expiresAt > Date.now(), 'New entry must have fresh 1-minute TTL');
+
+      // 7. Verify market opening transition: from pre-market OUTSIDE_TRADING_SESSION to MARKET_OPEN
+      // At 09:15 ET (pre-market):
+      const preMarketMs = new Date('2026-09-23T13:15:00Z').getTime(); // 09:15 EDT
+      MarketSessionManager.setMockTimestamp(preMarketMs);
+      const preState = MarketSessionManager.getSessionState('NVDA');
+      assert(preState === 'OUTSIDE_TRADING_SESSION', `Expected OUTSIDE_TRADING_SESSION at 09:15 ET, got ${preState}`);
+
+      // Once 1 minute passes and time reaches 09:35 ET:
+      const nvdaKey = 'NVDA:session_status';
+      const nvdaEntry = marketCache.getGenericEntry(nvdaKey)!;
+      nvdaEntry.expiresAt = Date.now() - 1000; // TTL expired
+
+      const openMarketMs = new Date('2026-09-23T13:35:00Z').getTime(); // 09:35 EDT
+      (MarketSessionManager as any).mockTimestamp = openMarketMs;
+
+      const postOpenState = MarketSessionManager.getSessionState('NVDA');
+      assert(postOpenState === 'MARKET_OPEN', `Scanner must transition to MARKET_OPEN immediately after open upon TTL expiry, got ${postOpenState}`);
+
+      // Reset mock mode
+      MarketSessionManager.setMockTimestamp(null);
+      MarketSessionManager.clearSessionCache();
+    });
+  });
+
+  // --- SUITE: GATE 10 — ELIMINATION OF ARTIFICIAL BTC/BNB 50,000 SIGNALS AND FAKE CONTAMINATION ---
+  await describe('Gate 10 — Elimination of Artificial BTC/BNB 50,000 Signals & Fake Test Contamination', async () => {
+    await test('isProductionRecord strictly rejects artificial BTC/BNB records with entryPrice=50000', () => {
+      const artificialBtc = {
+        id: 'fake_btc_1',
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        entryPrice: 50000,
+        stopLoss: 49000,
+        takeProfit: 52000,
+        provenance: 'LIVE',
+        dataSource: 'Bitget',
+      };
+      assert(!isProductionRecord(artificialBtc as any), 'Artificial BTC 50000 record MUST be rejected by isProductionRecord');
+
+      const artificialBnb = {
+        id: 'fake_bnb_1',
+        symbol: 'BNBUSDT',
+        direction: 'BUY',
+        entryPrice: 50000,
+        stopLoss: 49000,
+        takeProfit: 52000,
+        provenance: 'LIVE',
+        dataSource: 'Bitget',
+      };
+      assert(!isProductionRecord(artificialBnb as any), 'Artificial BNB 50000 record MUST be rejected by isProductionRecord');
+
+      const legitimateBtc = {
+        id: 'legit_btc_1',
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        entryPrice: 83747.94,
+        stopLoss: 82945.85,
+        takeProfit: 85264.27,
+        provenance: 'LIVE',
+        dataSource: 'Bitget Live Feed with Live Price & Sentiment Cross-Validation',
+      };
+      assert(isProductionRecord(legitimateBtc as any), 'Legitimate BTC record with real market price MUST pass isProductionRecord');
+    });
+
+    await test('Artificial BTC/BNB records with entryPrice=50000 cannot appear in LIVE signal results', async () => {
+      // Query SignalLogger
+      const liveLogs = await SignalLogger.getSignalLogs(100, true);
+      const contaminatedLogs = liveLogs.filter((s) => s.entryPrice === 50000 || s.stopLoss === 49000 || s.takeProfit === 52000);
+      assert(contaminatedLogs.length === 0, `No artificial 50000 signals allowed in SignalLogger, found: ${contaminatedLogs.length}`);
+
+      // Query ScannerPersistence sent signals
+      const sentSignals = await ScannerPersistence.getSentSignals();
+      const contaminatedSent = sentSignals.filter((s) => s.entryPrice === 50000 || s.stopLoss === 49000 || s.takeProfit === 52000);
+      assert(contaminatedSent.length === 0, `No artificial 50000 signals allowed in sent signals, found: ${contaminatedSent.length}`);
+
+      // Query ScannerPersistence active signals
+      const activeSignals = await ScannerPersistence.getActiveSignals();
+      const contaminatedActive = activeSignals.filter((s) => s.entryPrice === 50000 || s.stopLoss === 49000 || s.takeProfit === 52000);
+      assert(contaminatedActive.length === 0, `No artificial 50000 signals allowed in active signals, found: ${contaminatedActive.length}`);
+    });
+
+    await test('Artificial BTC/BNB records with entryPrice=50000 cannot appear in HISTORICAL performance results', async () => {
+      const consolidated = await HistoricalPerformanceManager.getConsolidatedSignals();
+      const contaminatedConsolidated = consolidated.filter((s) => s.entryPrice === 50000 || s.stopLoss === 49000 || s.takeProfit === 52000);
+      assert(
+        contaminatedConsolidated.length === 0,
+        `No artificial 50000 records allowed in consolidated historical signals, found: ${contaminatedConsolidated.length}`
+      );
+
+      const perfResult = await HistoricalPerformanceManager.getPerformance('ALL');
+      const contaminatedOutcomes = (perfResult.recentOutcomes || []).filter((o) => o.entryPrice === 50000 || o.stopLoss === 49000 || o.takeProfit === 52000);
+      assert(
+        contaminatedOutcomes.length === 0,
+        `No artificial 50000 records allowed in HistoricalPerformance outcomes, found: ${contaminatedOutcomes.length}`
+      );
+    });
+
+    await test('signal_outcome_logs.json is NOT used as a production source or fallback for LIVE/HISTORICAL signals', async () => {
+      const outcomeLogs = await SignalOutcomeLogger.getOutcomeLogs(100, true);
+      const contaminated = outcomeLogs.filter((o) => o.entryPrice === 50000 || o.stopLoss === 49000 || o.takeProfit === 52000);
+      assert(contaminated.length === 0, `No artificial 50000 records allowed in outcome logs, found: ${contaminated.length}`);
+    });
+
+    await test('Explicitly rejects TEST, SIMULATION, BACKTEST, MOCK, SYNTHETIC provenance from production records', () => {
+      const invalidProvenances = ['TEST', 'SIMULATION', 'BACKTEST', 'MOCK', 'SYNTHETIC'];
+      for (const prov of invalidProvenances) {
+        const testRecord = {
+          id: `rec_${prov.toLowerCase()}`,
+          symbol: 'BTCUSDT',
+          direction: 'BUY',
+          entryPrice: 83000,
+          stopLoss: 82000,
+          takeProfit: 85000,
+          provenance: prov,
+          dataSource: 'Bitget',
+        };
+        assert(!isProductionRecord(testRecord as any), `Provenance "${prov}" MUST be rejected from production records`);
+      }
+
+      const syntheticRecord = {
+        id: 'rec_synth',
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        entryPrice: 83000,
+        stopLoss: 82000,
+        takeProfit: 85000,
+        provenance: 'LIVE',
+        isSynthetic: true,
+        dataSource: 'Bitget',
+      };
+      assert(!isProductionRecord(syntheticRecord as any), 'isSynthetic=true MUST be rejected from production records');
+
+      const liveRecord = {
+        id: 'rec_live',
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        entryPrice: 83000,
+        stopLoss: 82000,
+        takeProfit: 85000,
+        provenance: 'LIVE',
+        dataSource: 'Bitget Live Feed',
+      };
+      assert(isProductionRecord(liveRecord as any), 'Provenance "LIVE" with valid price and source MUST be accepted');
+    });
+
+    await test('Any production signal whose entry price was not obtained from verified market-data pipeline is rejected', () => {
+      const unverifiedRecord = {
+        id: 'rec_unverified',
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        entryPrice: 83000,
+        stopLoss: 82000,
+        takeProfit: 85000,
+        provenance: 'LIVE',
+        dataSource: 'mock_unverified_feed',
+      };
+      assert(!isProductionRecord(unverifiedRecord as any), 'Unverified mock market-data pipeline MUST be rejected');
+
+      const fallbackDefaultRecord = {
+        id: 'rec_fallback_default',
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        entryPrice: 83000,
+        stopLoss: 82000,
+        takeProfit: 85000,
+        provenance: 'LIVE',
+        dataSource: 'fallback_default_pipeline',
+      };
+      assert(!isProductionRecord(fallbackDefaultRecord as any), 'Fallback default price pipeline MUST be rejected');
+    });
+
+    await test('SignalValidator rejects artificial 50000/49000/52000 prices as INVALID_ENTRY', () => {
+      const valRes = SignalValidator.validate({
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        entryPrice: 50000,
+        stopLoss: 49000,
+        takeProfit: 52000,
+        riskRewardRatio: 2.0,
+        score: 85,
+        candlesMap: {},
+        liveTicker: {
+          symbol: 'BTCUSDT',
+          rawSymbol: 'BTCUSDT',
+          provider: 'bitget',
+          assetType: 'CRYPTO',
+          price: 50000,
+          bid: 49999,
+          ask: 50001,
+          timestamp: Date.now(),
+          receivedAt: Date.now(),
+          isFresh: true,
+          status: 'OK',
+          source: 'LIVE',
+        } as any,
+      });
+
+      assert(!valRes.isValid, 'SignalValidator MUST reject 50000 entryPrice');
+      assert(valRes.validationReason === 'INVALID_ENTRY', 'Validation reason MUST be INVALID_ENTRY');
+    });
+
+    await test('In production mode, if Firestore is unavailable, fails safely without loading fake/stale local signal data', async () => {
+      const originalEnv = process.env.NODE_ENV;
+      try {
+        process.env.NODE_ENV = 'production';
+        setMockFirestoreAdmin(null);
+
+        const outcomeLogs = await SignalOutcomeLogger.getOutcomeLogs(100, true);
+        assert(outcomeLogs.length === 0, 'Production query without Firestore must fail safely and return empty outcomes');
+
+        const sentSignals = await ScannerPersistence.getSentSignals();
+        assert(sentSignals.length === 0, 'Production query without Firestore must fail safely and return empty sent signals');
+
+        const activeSignals = await ScannerPersistence.getActiveSignals();
+        assert(activeSignals.length === 0, 'Production query without Firestore must fail safely and return empty active signals');
+
+        const consolidated = await HistoricalPerformanceManager.getConsolidatedSignals();
+        assert(consolidated.length === 0, 'Production query without Firestore must fail safely and return empty consolidated signals');
+      } finally {
+        setMockFirestoreAdmin(undefined);
+        process.env.NODE_ENV = originalEnv;
+      }
+    });
+  });
+
+  await describe('GATE 11 — Authoritative Active Signals & Lifecycle Hardening', async () => {
+    await test('isValidActiveSignal strictly rejects terminal, synthetic, test, and invalid records', () => {
+      const baseValidSignal: PersistedSentSignal = {
+        id: 'sig_valid_g11',
+        snapshotId: 'snap_valid_g11',
+        symbol: 'BTCUSDT',
+        direction: 'BUY',
+        entryPrice: 85000,
+        stopLoss: 84000,
+        takeProfit: 87000,
+        tp1: 85500,
+        tp2: 86000,
+        tp3: 87000,
+        riskRewardRatio: 2.0,
+        score: 85,
+        rankTier: 'BEST_TRADE',
+        strategy: 'Trend Breakout',
+        timeframe: 'H1',
+        dataSource: 'Bitget Live Feed',
+        status: 'ACTIVE',
+        timestamp: Date.now(),
+        expiresAt: Date.now() + 3600000,
+        notificationSent: true,
+        notificationTimestamp: Date.now(),
+        date: '2026-09-29',
+        isTradeableSignal: true,
+        signalClassification: 'TRADEABLE',
+        provenance: 'LIVE',
+      };
+
+      assert(isValidActiveSignal(baseValidSignal, true).isValid, 'Base valid LIVE signal must be valid');
+
+      // Terminal statuses must be rejected
+      const terminalStatuses = ['EXPIRED', 'SL_HIT', 'TP_HIT', 'TP3_HIT', 'CANCELLED', 'COMPLETED', 'SUPERSEDED', 'STOPPED_OUT', 'INVALID'];
+      for (const term of terminalStatuses) {
+        assert(!isValidActiveSignal({ ...baseValidSignal, status: term }, true).isValid, `Terminal status ${term} must be rejected`);
+      }
+
+      // Non-LIVE and test provenances must be rejected
+      const testProvenances = ['TEST', 'SIMULATION', 'BACKTEST', 'MOCK', 'SYNTHETIC'];
+      for (const prov of testProvenances) {
+        assert(!isValidActiveSignal({ ...baseValidSignal, provenance: prov }, true).isValid, `Provenance ${prov} must be rejected`);
+      }
+
+      assert(!isValidActiveSignal({ ...baseValidSignal, isSynthetic: true }, true).isValid, 'Synthetic record must be rejected');
+      assert(!isValidActiveSignal({ ...baseValidSignal, entryPrice: 50000 }, true).isValid, '50000 entry price rejected');
+      assert(!isValidActiveSignal({ ...baseValidSignal, entryPrice: 83000, stopLoss: 84000 }, true).isValid, 'BUY entry <= SL rejected');
+      assert(!isValidActiveSignal({ ...baseValidSignal, riskRewardRatio: 0.8 }, true).isValid, 'R:R < 1.0 rejected');
+      assert(!isValidActiveSignal({ ...baseValidSignal, expiresAt: Date.now() - 1000 }, true).isValid, 'Expired lifetime rejected');
+    });
+
+    await test('Clear diagnostics returned from getActiveSignalsDetailed when zero active signals exist', async () => {
+      const emptyMockFirestore = {
+        collection: () => ({
+          where: () => ({
+            get: async () => ({ empty: true, docs: [], forEach: () => {} }),
+          }),
+          doc: () => ({
+            get: async () => ({ exists: false, data: () => null }),
+            set: async () => {},
+          }),
+        }),
+      } as any;
+      setMockFirestoreAdmin(emptyMockFirestore);
+      try {
+        const res = await ScannerPersistence.getActiveSignalsDetailed();
+        assert(res.activeCount === 0, 'Active count must be 0');
+        assert(res.signals.length === 0, 'Signals array must be empty');
+        assert(res.persistedActiveCount === 0, 'Persisted active count must be 0');
+        assert(res.filteredCount === 0, 'Filtered count must be 0');
+        assert(res.rejectionReason !== undefined && res.rejectionReason.length > 0, 'Rejection reason must be defined');
+        assert(res.diagnostics.activeCount === 0, 'Diagnostics activeCount must be 0');
+      } finally {
+        setMockFirestoreAdmin(undefined);
+      }
     });
   });
 

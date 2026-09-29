@@ -13,46 +13,111 @@ import {
   PerformanceMetricsResponse,
   HistoricalPerformanceResponse,
   HistoricalPerformanceRange,
+  HistoricalTradesQueryOptions,
+  HistoricalTradesResponse,
   SensitivityProfileName,
   SensitivityProfileConfig,
 } from '../types/index.js';
 
-export class ApiClient {
-  private adminToken: string | null = null;
+export interface AuthUser {
+  uid: string;
+  email: string;
+  admin: boolean;
+  role: 'ADMIN' | 'USER';
+}
 
+export class ApiClient {
   /**
-   * Dynamically sets admin authentication token in memory & storage for administrative requests
+   * Deprecated token setting kept for interface compatibility (does not write to localStorage)
    */
-  public setAdminToken(token: string | null): void {
-    this.adminToken = token;
+  public setAdminToken(_token: string | null): void {
     if (typeof localStorage !== 'undefined') {
-      if (token) {
-        localStorage.setItem('admin_api_token', token);
-      } else {
-        localStorage.removeItem('admin_api_token');
-      }
+      localStorage.removeItem('admin_api_token');
+      localStorage.removeItem('admin_token');
+      localStorage.removeItem('admin_api_key');
     }
   }
 
   /**
-   * Retrieves active admin authentication token
+   * Deprecated token getter kept for interface compatibility
    */
   public getAdminToken(): string | null {
-    if (!this.adminToken && typeof localStorage !== 'undefined') {
-      this.adminToken =
-        localStorage.getItem('admin_api_token') ||
-        localStorage.getItem('admin_token') ||
-        localStorage.getItem('admin_api_key');
-    }
-    if (!this.adminToken) {
-      this.adminToken =
-        (import.meta as any).env?.VITE_ADMIN_API_KEY ||
-        (import.meta as any).env?.VITE_ADMIN_KEY ||
-        (import.meta as any).env?.VITE_ADMIN_SECRET ||
-        (import.meta as any).env?.VITE_SCANNER_CRON_SECRET ||
-        null;
-    }
-    return this.adminToken;
+    return null;
+  }
+
+  /**
+   * Registers a user account enforcing First-User Admin logic.
+   */
+  public async register(params: { idToken?: string; email?: string; password?: string }): Promise<{
+    success: boolean;
+    authenticated?: boolean;
+    user?: AuthUser;
+    isFirstAdmin?: boolean;
+    error?: string;
+  }> {
+    return this.fetchJson<{
+      success: boolean;
+      authenticated?: boolean;
+      user?: AuthUser;
+      isFirstAdmin?: boolean;
+      error?: string;
+    }>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  /**
+   * Authenticates session via Firebase ID Token or credentials.
+   * Sets HttpOnly secure cookie on successful login.
+   */
+  public async createAuthSession(params: { idToken?: string; email?: string; password?: string }): Promise<{
+    success: boolean;
+    authenticated?: boolean;
+    user?: AuthUser;
+    isFirstAdmin?: boolean;
+    error?: string;
+  }> {
+    return this.fetchJson<{
+      success: boolean;
+      authenticated?: boolean;
+      user?: AuthUser;
+      isFirstAdmin?: boolean;
+      error?: string;
+    }>('/api/auth/session', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  /**
+   * Retrieves current authenticated user state based on HttpOnly session cookie.
+   */
+  public async getAuthMe(): Promise<{
+    success: boolean;
+    authenticated: boolean;
+    admin: boolean;
+    role: 'ADMIN' | 'USER';
+    user?: AuthUser;
+    error?: string;
+  }> {
+    return this.fetchJson<{
+      success: boolean;
+      authenticated: boolean;
+      admin: boolean;
+      role: 'ADMIN' | 'USER';
+      user?: AuthUser;
+      error?: string;
+    }>('/api/auth/me');
+  }
+
+  /**
+   * Clears the authenticated session cookie.
+   */
+  public async logout(): Promise<{ success: boolean; message?: string }> {
+    return this.fetchJson<{ success: boolean; message?: string }>('/api/auth/logout', {
+      method: 'POST',
+    });
   }
 
   private async fetchJson<T>(endpoint: string, options?: RequestInit, retries = 3): Promise<T> {
@@ -67,22 +132,26 @@ export class ApiClient {
       const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
       const fullUrl = endpoint.startsWith('http') ? endpoint : `${cleanBaseUrl}${cleanEndpoint}`;
 
-      const activeAdminToken = this.getAdminToken();
-      const authHeaders: Record<string, string> = {};
-      if (activeAdminToken) {
-        authHeaders['Authorization'] = `Bearer ${activeAdminToken}`;
-        authHeaders['x-admin-key'] = activeAdminToken;
-        authHeaders['x-admin-secret'] = activeAdminToken;
-        authHeaders['x-api-key'] = activeAdminToken;
+      // Extract CSRF token from cookie for mutating browser requests (Gate 3 & Gate 18)
+      let csrfHeader: Record<string, string> = {};
+      if (typeof document !== 'undefined' && document.cookie) {
+        const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+        if (match && match[1]) {
+          const method = (options?.method || 'GET').toUpperCase();
+          if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+            csrfHeader['x-csrf-token'] = decodeURIComponent(match[1]);
+          }
+        }
       }
 
       const response = await fetch(fullUrl, {
+        credentials: 'include',
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache',
           'x-client-app': 'trading-signal-ui',
-          ...authHeaders,
+          ...csrfHeader,
           ...(options?.headers || {}),
         },
         ...options,
@@ -188,6 +257,17 @@ export class ApiClient {
     return this.fetchJson<SignalGenerationResponse>('/api/signals/generate', {
       method: 'POST',
       body: JSON.stringify({ symbol, category }),
+    });
+  }
+
+  /**
+   * Specific trade search & qualification pipeline (Gate 14)
+   * Requires admin session authorization
+   */
+  async searchSpecificTrade(symbol: string): Promise<SignalGenerationResponse> {
+    return this.fetchJson<SignalGenerationResponse>('/api/signals/trade-search', {
+      method: 'POST',
+      body: JSON.stringify({ symbol }),
     });
   }
 
@@ -386,6 +466,27 @@ export class ApiClient {
    */
   async getPerformanceMetrics(): Promise<PerformanceMetricsResponse> {
     return this.fetchJson<PerformanceMetricsResponse>('/api/signals/performance');
+  }
+
+  /**
+   * Fetch authoritative historical trades with server-side pagination and filtering (Gate 16)
+   */
+  async getHistoricalTrades(
+    options: HistoricalTradesQueryOptions = {}
+  ): Promise<HistoricalTradesResponse> {
+    const query = new URLSearchParams();
+    if (options.page) query.append('page', String(options.page));
+    if (options.limit) query.append('limit', String(options.limit));
+    if (options.status) query.append('status', options.status);
+    if (options.symbol) query.append('symbol', options.symbol);
+    if (options.direction) query.append('direction', options.direction);
+    if (options.range) query.append('range', options.range);
+    if (options.search) query.append('search', options.search);
+
+    const queryString = query.toString();
+    return this.fetchJson<HistoricalTradesResponse>(
+      `/api/signals/historical${queryString ? `?${queryString}` : ''}`
+    );
   }
 
   /**

@@ -7,6 +7,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../logger.js';
+import { SecurityAuditLogger, SEC_CSRF } from '../security/SecurityService.js';
 
 /**
  * Normalizes an origin URL string (e.g. "https://app.example.com/" -> "https://app.example.com")
@@ -94,13 +95,18 @@ export function corsMiddleware(req: Request, res: Response, next: NextFunction) 
   }
 
   // Unauthorized origin handling:
-  logger.warn(`[CORS] Rejected unauthorized origin "${origin}" on ${req.method} ${req.path}`);
+  SecurityAuditLogger.logWarning(SEC_CSRF, `Rejected unauthorized origin "${origin}" on ${req.method} ${req.path}`, {
+    origin,
+    method: req.method,
+    path: req.path,
+  });
 
   if (req.method === 'OPTIONS') {
     return res.status(403).json({
       success: false,
       status: 'FORBIDDEN',
       message: 'CORS policy: Origin not allowed.',
+      securityId: SEC_CSRF,
       timestamp: Date.now(),
     });
   }
@@ -110,6 +116,7 @@ export function corsMiddleware(req: Request, res: Response, next: NextFunction) 
       success: false,
       status: 'FORBIDDEN',
       message: 'CORS policy: Origin not allowed for credentialed or mutating requests.',
+      securityId: SEC_CSRF,
       timestamp: Date.now(),
     });
   }

@@ -144,6 +144,8 @@ export interface PersistedSentSignal {
   runnerExitPrice?: number;
   runnerExitAt?: string;
   runnerExitReason?: string;
+  provenance?: string;
+  isSynthetic?: boolean;
 }
 
 export interface PersistedRejectedCandidate {
@@ -200,6 +202,145 @@ export interface ScanLockState {
   instanceId?: string;
 }
 
+/**
+ * Strict validator for active signal candidates according to Gate 11.
+ * Enforces:
+ * - isTradeableSignal === true
+ * - signalClassification === 'TRADEABLE'
+ * - Non-terminal status (excludes EXPIRED, SL_HIT, TP_HIT, TP3_HIT, CANCELLED, etc.)
+ * - Valid entry price (positive, finite, != 50000)
+ * - Valid stop loss (positive, finite, != 49000)
+ * - Valid TP1/TP2/TP3 (positive, finite, != 52000)
+ * - Correct BUY/SELL geometry
+ * - Valid R:R (>= 1.0)
+ * - Excludes TEST, SIMULATION, BACKTEST, MOCK, SYNTHETIC
+ * - In production, strictly requires provenance === 'LIVE'
+ * - Excludes signals whose lifetime has expired (now > expiresAt)
+ */
+export function isValidActiveSignal(signal: any, isProd: boolean = false): { isValid: boolean; reason?: string } {
+  if (!signal) return { isValid: false, reason: 'Signal record is null or undefined' };
+
+  // 1. Classification & tradeable status
+  if (signal.isTradeableSignal !== true) {
+    return { isValid: false, reason: 'isTradeableSignal is not true' };
+  }
+  if (signal.signalClassification !== 'TRADEABLE') {
+    return { isValid: false, reason: `signalClassification is "${signal.signalClassification}", expected "TRADEABLE"` };
+  }
+
+  // 2. Reject terminal statuses
+  const status = (signal.status || '').toUpperCase().trim();
+  const terminalStatuses = new Set([
+    'EXPIRED',
+    'SL_HIT',
+    'TP_HIT',
+    'TP3_HIT',
+    'CANCELLED',
+    'COMPLETED',
+    'SUPERSEDED',
+    'STOPPED_OUT',
+    'INVALID',
+    'INVALIDATED',
+  ]);
+  if (terminalStatuses.has(status)) {
+    return { isValid: false, reason: `Terminal record status: ${status}` };
+  }
+
+  // 3. Reject synthetic and test provenances
+  if (signal.isSynthetic === true) {
+    return { isValid: false, reason: 'Synthetic record rejected' };
+  }
+  const prov = (signal.provenance || '').toUpperCase().trim();
+  const testProvenances = new Set(['TEST', 'SIMULATION', 'BACKTEST', 'MOCK', 'SYNTHETIC']);
+  if (testProvenances.has(prov)) {
+    return { isValid: false, reason: `Invalid provenance: ${prov}` };
+  }
+  if (isProd && prov !== 'LIVE') {
+    return { isValid: false, reason: `Production requires LIVE provenance, found: "${prov}"` };
+  }
+
+  // 4. Valid entry price
+  const entry = Number(signal.entryPrice);
+  if (isNaN(entry) || entry <= 0 || !isFinite(entry) || entry === 50000) {
+    return { isValid: false, reason: `Invalid entry price: ${signal.entryPrice}` };
+  }
+
+  // 5. Valid stop loss
+  const sl = Number(signal.stopLoss);
+  if (isNaN(sl) || sl <= 0 || !isFinite(sl) || sl === 49000) {
+    return { isValid: false, reason: `Invalid stop loss: ${signal.stopLoss}` };
+  }
+
+  // 6. Valid TP1, TP2, TP3
+  const tp1 = Number(signal.tp1 !== undefined ? signal.tp1 : signal.takeProfit);
+  const tp2 = Number(signal.tp2 !== undefined ? signal.tp2 : signal.takeProfit);
+  const tp3 = Number(signal.tp3 !== undefined ? signal.tp3 : signal.takeProfit);
+  if (isNaN(tp1) || tp1 <= 0 || !isFinite(tp1) || tp1 === 52000) {
+    return { isValid: false, reason: `Invalid TP1: ${signal.tp1 ?? signal.takeProfit}` };
+  }
+  if (isNaN(tp2) || tp2 <= 0 || !isFinite(tp2) || tp2 === 52000) {
+    return { isValid: false, reason: `Invalid TP2: ${signal.tp2 ?? signal.takeProfit}` };
+  }
+  if (isNaN(tp3) || tp3 <= 0 || !isFinite(tp3) || tp3 === 52000) {
+    return { isValid: false, reason: `Invalid TP3: ${signal.tp3 ?? signal.takeProfit}` };
+  }
+
+  // Check duplicate TPs
+  if (signal.tp1 !== undefined && signal.tp2 !== undefined && signal.tp3 !== undefined) {
+    if (signal.tp1 === signal.tp2 || signal.tp2 === signal.tp3 || signal.tp1 === signal.tp3) {
+      return { isValid: false, reason: 'Duplicate take profit targets' };
+    }
+  }
+
+  // 7. Correct BUY/SELL geometry
+  const direction = (signal.direction || '').toUpperCase().trim();
+  if (direction === 'BUY') {
+    if (entry <= sl) {
+      return { isValid: false, reason: `BUY geometry violation: entryPrice (${entry}) <= stopLoss (${sl})` };
+    }
+    if (signal.tp1 !== undefined && signal.tp2 !== undefined && signal.tp3 !== undefined) {
+      if (entry >= tp1 || tp1 >= tp2 || tp2 >= tp3) {
+        return { isValid: false, reason: `BUY geometry violation: entry (${entry}) < tp1 (${tp1}) < tp2 (${tp2}) < tp3 (${tp3}) required` };
+      }
+    } else {
+      if (entry >= tp3) {
+        return { isValid: false, reason: `BUY geometry violation: entryPrice (${entry}) >= takeProfit (${tp3})` };
+      }
+    }
+  } else if (direction === 'SELL') {
+    if (entry >= sl) {
+      return { isValid: false, reason: `SELL geometry violation: entryPrice (${entry}) >= stopLoss (${sl})` };
+    }
+    if (signal.tp1 !== undefined && signal.tp2 !== undefined && signal.tp3 !== undefined) {
+      if (entry <= tp1 || tp1 <= tp2 || tp2 <= tp3) {
+        return { isValid: false, reason: `SELL geometry violation: entry (${entry}) > tp1 (${tp1}) > tp2 (${tp2}) > tp3 (${tp3}) required` };
+      }
+    } else {
+      if (entry <= tp3) {
+        return { isValid: false, reason: `SELL geometry violation: entryPrice (${entry}) <= takeProfit (${tp3})` };
+      }
+    }
+  } else {
+    return { isValid: false, reason: `Invalid signal direction: ${signal.direction}` };
+  }
+
+  // 8. Valid Risk-to-Reward (R:R)
+  const rr = Number(signal.riskRewardRatio);
+  if (isNaN(rr) || rr <= 0 || !isFinite(rr) || rr < 1.0) {
+    return { isValid: false, reason: `Invalid risk-reward ratio: ${signal.riskRewardRatio}` };
+  }
+
+  // 9. Expiry check
+  const now = Date.now();
+  const maxLifetime = serverConfig.getConfig().signalExpirationMs || (240 * 60 * 1000);
+  const expiresAt = Number(signal.expiresAt) || ((signal.timestamp || now) + maxLifetime);
+  if (now > expiresAt) {
+    return { isValid: false, reason: `Signal expired (expiresAt: ${expiresAt}, now: ${now})` };
+  }
+
+  return { isValid: true };
+}
+
 export class ScannerPersistence {
   private static localLock: ScanLockState = {
     isScanning: false,
@@ -235,6 +376,9 @@ export class ScannerPersistence {
   private static isInitialized = false;
 
   public static isProductionMode(): boolean {
+    try {
+      if (serverConfig.getConfig().nodeEnv === 'production') return true;
+    } catch {}
     return process.env.NODE_ENV === 'production';
   }
 
@@ -695,6 +839,20 @@ export class ScannerPersistence {
       return { success: false, error: 'Rejected: Signal is not tradeable' };
     }
 
+    const provRaw = (signal.provenance || '').toUpperCase().trim();
+    const isFakePrice = signal.entryPrice === 50000 || signal.stopLoss === 49000 || signal.takeProfit === 52000;
+
+    if (this.isProductionMode() || provRaw === 'LIVE') {
+      if (isFakePrice) {
+        logger.warn(`[ScannerPersistence] Rejected artificial 50000/49000/52000 price for ${signal.symbol}`);
+        return { success: false, error: 'Rejected: Artificial test price (50000/49000/52000) not allowed in production.' };
+      }
+      if (provRaw === 'TEST' || provRaw === 'SIMULATION' || provRaw === 'BACKTEST' || provRaw === 'MOCK' || provRaw === 'SYNTHETIC' || signal.isSynthetic) {
+        logger.warn(`[ScannerPersistence] Rejected non-LIVE provenance in production: ${signal.symbol} (${provRaw})`);
+        return { success: false, error: `Rejected: Provenance ${provRaw} not allowed in production.` };
+      }
+    }
+
     const today = new Date().toISOString().split('T')[0];
     const now = Date.now();
 
@@ -737,11 +895,19 @@ export class ScannerPersistence {
       marketRegime: signal.marketRegime || 'UNKNOWN',
       isTradeableSignal: signal.isTradeableSignal,
       signalClassification: signal.signalClassification,
+      provenance: signal.provenance,
+      isSynthetic: signal.isSynthetic,
     };
 
     if (!firestore) {
       if (this.isProductionMode()) {
         return { success: false, error: 'Firestore required in production mode' };
+      }
+      // Supersede any existing active signal for the same symbol
+      for (const p of this.localData.sentSignals) {
+        if (p.symbol === signal.symbol && p.id !== signal.id && (p.status === 'ACTIVE' || p.status === 'WAITING_ENTRY')) {
+          p.status = 'SUPERSEDED';
+        }
       }
       this.localData.sentSignals.push(persisted);
       this.saveLocalData();
@@ -749,9 +915,32 @@ export class ScannerPersistence {
     }
 
     try {
+      // Mark any prior active signal for the same symbol as SUPERSEDED in Firestore
+      try {
+        const prevQuery = await firestore
+          .collection(FIRESTORE_SIGNALS_COL)
+          .where('symbol', '==', signal.symbol)
+          .where('status', 'in', ['ACTIVE', 'WAITING_ENTRY'])
+          .get();
+        if (!prevQuery.empty) {
+          for (const doc of prevQuery.docs) {
+            if (doc.id !== signal.id) {
+              await firestore.collection(FIRESTORE_SIGNALS_COL).doc(doc.id).set({ status: 'SUPERSEDED' }, { merge: true });
+            }
+          }
+        }
+      } catch (prevErr) {
+        logger.debug('[ScannerPersistence] Note: error superseding prior active signals in Firestore:', prevErr);
+      }
+
       const cleanData = JSON.parse(JSON.stringify(persisted));
       await firestore.collection(FIRESTORE_SIGNALS_COL).doc(persisted.id).set(cleanData);
       if (!this.isProductionMode()) {
+        for (const p of this.localData.sentSignals) {
+          if (p.symbol === signal.symbol && p.id !== signal.id && (p.status === 'ACTIVE' || p.status === 'WAITING_ENTRY')) {
+            p.status = 'SUPERSEDED';
+          }
+        }
         this.localData.sentSignals.push(persisted);
         this.saveLocalData();
       }
@@ -1432,31 +1621,36 @@ export class ScannerPersistence {
   }
 
   /**
-   * Retrieves all currently ACTIVE signals from persistence.
+   * Detailed retrieval of active signals from authoritative persistence (Firestore)
+   * with diagnostics for filtered/rejected candidates.
    */
-  static async getActiveSignals(): Promise<PersistedSentSignal[]> {
+  static async getActiveSignalsDetailed(): Promise<{
+    signals: PersistedSentSignal[];
+    activeCount: number;
+    persistedActiveCount: number;
+    filteredCount: number;
+    rejectionReason?: string;
+    diagnostics: {
+      activeCount: number;
+      persistedActiveCount: number;
+      filteredCount: number;
+      rejectionReason?: string;
+    };
+  }> {
     this.init();
+    const isProd = this.isProductionMode();
     const firestore = getFirestoreAdmin();
+    const now = Date.now();
+
+    let candidateSignals: PersistedSentSignal[] = [];
+
     if (firestore) {
       try {
-        const query = await firestore
-          .collection(FIRESTORE_SIGNALS_COL)
-          .where('status', '==', 'ACTIVE')
-          .get();
+        // Authoritative query on Firestore: scanner_sent_signals
+        const activeStatuses = ['ACTIVE', 'TP1_HIT', 'TP2_HIT', 'WAITING_ENTRY'];
+        const seenIds = new Set<string>();
 
-        const signals: PersistedSentSignal[] = [];
-        if (!query.empty) {
-          query.forEach((doc) => {
-            const data = doc.data() as PersistedSentSignal;
-            if (data && data.isTradeableSignal === true && data.signalClassification === 'TRADEABLE') {
-              signals.push(data);
-            }
-          });
-        }
-
-        // Also query other potential non-terminal progressive statuses to ensure active monitoring of progressive levels
-        const activeOrProgressive = ['TP1_HIT', 'TP2_HIT', 'WAITING_ENTRY'];
-        for (const stat of activeOrProgressive) {
+        for (const stat of activeStatuses) {
           const q = await firestore
             .collection(FIRESTORE_SIGNALS_COL)
             .where('status', '==', stat)
@@ -1464,77 +1658,152 @@ export class ScannerPersistence {
           if (!q.empty) {
             q.forEach((doc) => {
               const data = doc.data() as PersistedSentSignal;
-              if (data && data.isTradeableSignal === true && data.signalClassification === 'TRADEABLE') {
-                signals.push(data);
+              if (data && data.id && !seenIds.has(data.id)) {
+                seenIds.add(data.id);
+                candidateSignals.push(data);
               }
             });
           }
         }
-
-        if (!this.isProductionMode()) {
-          const firestoreActiveIds = new Set(signals.map((s) => s.id));
-          const localActive = this.localData.sentSignals.filter((s) => 
-            s.isTradeableSignal === true && s.signalClassification === 'TRADEABLE' &&
-            (s.status === 'ACTIVE' || s.status === 'TP1_HIT' || s.status === 'TP2_HIT' || s.status === 'WAITING_ENTRY')
-          );
-
-          const missingFromActive = localActive.filter((s) => !firestoreActiveIds.has(s.id));
-          let localUpdated = false;
-
-          if (missingFromActive.length > 0) {
-            await Promise.all(
-              missingFromActive.map(async (localSig) => {
-                try {
-                  const docRef = firestore.collection(FIRESTORE_SIGNALS_COL).doc(localSig.id);
-                  const docSnap = await docRef.get();
-                  if (!docSnap.exists) {
-                    // Completely deleted in Firestore -> remove locally
-                    this.localData.sentSignals = this.localData.sentSignals.filter((s) => s.id !== localSig.id);
-                    localUpdated = true;
-                  } else {
-                    // Updated to terminal status in Firestore -> sync status locally
-                    const fsData = docSnap.data();
-                    if (fsData && fsData.status) {
-                      const target = this.localData.sentSignals.find((s) => s.id === localSig.id);
-                      if (target) {
-                        target.status = fsData.status;
-                        localUpdated = true;
-                      }
-                    }
-                  }
-                } catch (docErr) {
-                  logger.warn(`[ScannerPersistence] Failed to reconcile missing active signal ${localSig.id}:`, docErr);
-                }
-              })
-            );
-          }
-
-          if (localUpdated) {
-            this.saveLocalData();
-          }
-        }
-
-        return signals.sort((a, b) => b.timestamp - a.timestamp);
       } catch (err) {
         logger.warn('[ScannerPersistence] Firestore getActiveSignals failed:', { error: String(err) });
       }
     }
 
-    if (this.isProductionMode()) {
+    if (!firestore && isProd) {
       logger.error('[ScannerPersistence] FAIL CLOSED: Cannot read active signals from local disk in production mode.');
-      return [];
+      return {
+        signals: [],
+        activeCount: 0,
+        persistedActiveCount: 0,
+        filteredCount: 0,
+        rejectionReason: 'Firestore persistence unavailable in production mode',
+        diagnostics: {
+          activeCount: 0,
+          persistedActiveCount: 0,
+          filteredCount: 0,
+          rejectionReason: 'Firestore persistence unavailable in production mode',
+        },
+      };
     }
 
-    return this.localData.sentSignals
-      .filter((s) => s.isTradeableSignal === true && s.signalClassification === 'TRADEABLE' && (s.status === 'ACTIVE' || s.status === 'TP1_HIT' || s.status === 'TP2_HIT' || s.status === 'WAITING_ENTRY'))
-      .sort((a, b) => b.timestamp - a.timestamp);
+    if (!firestore && !isProd) {
+      candidateSignals = (this.localData.sentSignals || []).filter((s) => {
+        const stat = s.status || '';
+        return stat === 'ACTIVE' || stat === 'TP1_HIT' || stat === 'TP2_HIT' || stat === 'WAITING_ENTRY';
+      });
+    }
+
+    const persistedActiveCount = candidateSignals.length;
+    const validSignals: PersistedSentSignal[] = [];
+    const rejectionReasons: string[] = [];
+
+    // Map to keep newest active signal per symbol (prevents duplicate symbols and ensures newly persisted signal takes precedence)
+    const symbolMap = new Map<string, PersistedSentSignal>();
+
+    for (const sig of candidateSignals) {
+      const val = isValidActiveSignal(sig, isProd);
+      if (!val.isValid) {
+        rejectionReasons.push(`${sig.symbol || sig.id}: ${val.reason}`);
+        // If expired or terminal, update status in Firestore and local state
+        if (val.reason && val.reason.includes('expired')) {
+          sig.status = 'EXPIRED';
+          if (firestore) {
+            firestore.collection(FIRESTORE_SIGNALS_COL).doc(sig.id).set({ status: 'EXPIRED' }, { merge: true }).catch(() => {});
+          }
+          if (!isProd) {
+            const loc = this.localData.sentSignals.find((s) => s.id === sig.id);
+            if (loc) loc.status = 'EXPIRED';
+          }
+        }
+        continue;
+      }
+
+      // Check if another signal for the same symbol was already encountered
+      const sym = (sig.symbol || '').toUpperCase();
+      const existing = symbolMap.get(sym);
+      if (existing) {
+        // Keep the newer one, mark older as SUPERSEDED
+        if ((sig.timestamp || 0) > (existing.timestamp || 0)) {
+          existing.status = 'SUPERSEDED';
+          if (firestore) {
+            firestore.collection(FIRESTORE_SIGNALS_COL).doc(existing.id).set({ status: 'SUPERSEDED' }, { merge: true }).catch(() => {});
+          }
+          symbolMap.set(sym, sig);
+        } else {
+          sig.status = 'SUPERSEDED';
+          if (firestore) {
+            firestore.collection(FIRESTORE_SIGNALS_COL).doc(sig.id).set({ status: 'SUPERSEDED' }, { merge: true }).catch(() => {});
+          }
+        }
+      } else {
+        symbolMap.set(sym, sig);
+      }
+    }
+
+    for (const s of symbolMap.values()) {
+      validSignals.push(s);
+    }
+
+    // Sort valid signals: TOP TRADE first, then score descending, then timestamp descending
+    validSignals.sort((a, b) => {
+      const aTop = a.rankTier === 'BEST_TRADE' ? 1 : 0;
+      const bTop = b.rankTier === 'BEST_TRADE' ? 1 : 0;
+      if (aTop !== bTop) return bTop - aTop;
+      const scoreDiff = (b.score || 0) - (a.score || 0);
+      if (scoreDiff !== 0) return scoreDiff;
+      return (b.timestamp || 0) - (a.timestamp || 0);
+    });
+
+    const activeCount = validSignals.length;
+    const filteredCount = persistedActiveCount - activeCount;
+
+    let rejectionReason: string | undefined = undefined;
+    if (activeCount === 0) {
+      if (persistedActiveCount === 0) {
+        rejectionReason = 'No active tradeable signals persisted in authoritative database';
+      } else {
+        const uniqueReasons = Array.from(new Set(rejectionReasons));
+        rejectionReason = `All ${persistedActiveCount} persisted candidate signals were filtered: ${uniqueReasons.slice(0, 3).join('; ')}`;
+      }
+    }
+
+    // Also sync localData in dev
+    if (!isProd && firestore) {
+      this.saveLocalData();
+    }
+
+    return {
+      signals: validSignals,
+      activeCount,
+      persistedActiveCount,
+      filteredCount,
+      rejectionReason,
+      diagnostics: {
+        activeCount,
+        persistedActiveCount,
+        filteredCount,
+        rejectionReason,
+      },
+    };
+  }
+
+  /**
+   * Retrieves all currently ACTIVE signals from persistence (authoritative Firestore layer).
+   */
+  static async getActiveSignals(): Promise<PersistedSentSignal[]> {
+    const res = await this.getActiveSignalsDetailed();
+    return res.signals;
   }
 
   /**
    * Retrieves all sent signals from Firestore or local data.
+   * In production mode, Firestore is the authoritative source of truth.
+   * If Firestore is unavailable, fails safely instead of loading fake/stale local signal data.
    */
   static async getSentSignals(): Promise<PersistedSentSignal[]> {
     this.init();
+    const isProd = this.isProductionMode();
     const firestore = getFirestoreAdmin();
     if (firestore) {
       try {
@@ -1543,7 +1812,14 @@ export class ScannerPersistence {
           const res: PersistedSentSignal[] = [];
           query.forEach((doc) => {
             const data = doc.data() as PersistedSentSignal;
-            if (data && data.id) res.push(data);
+            if (data && data.id) {
+              const isFakePrice = data.entryPrice === 50000 || data.stopLoss === 49000 || data.takeProfit === 52000;
+              const prov = (data.provenance || '').toUpperCase().trim();
+              const isTest = prov === 'TEST' || prov === 'SIMULATION' || prov === 'BACKTEST' || prov === 'MOCK' || prov === 'SYNTHETIC' || data.isSynthetic;
+              if (!isFakePrice && (!isProd || (!isTest && prov === 'LIVE'))) {
+                res.push(data);
+              }
+            }
           });
           return res;
         }
@@ -1551,7 +1827,16 @@ export class ScannerPersistence {
         logger.warn('[ScannerPersistence] Failed to fetch sent signals from Firestore:', { error: String(err) });
       }
     }
-    return this.localData.sentSignals || [];
+
+    if (isProd) {
+      logger.error('[ScannerPersistence] FAIL CLOSED: Cannot read sent signals from local disk in production mode.');
+      return [];
+    }
+
+    return (this.localData.sentSignals || []).filter((s) => {
+      const isFakePrice = s.entryPrice === 50000 || s.stopLoss === 49000 || s.takeProfit === 52000;
+      return !isFakePrice;
+    });
   }
 
   /**

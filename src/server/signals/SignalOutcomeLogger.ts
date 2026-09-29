@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { logger } from '../logger.js';
+import { serverConfig } from '../config.js';
 import { ExecutionEvidenceState, HistoricalEntryPolicy } from '../../types/index.js';
 import { isProductionRecord } from './SignalLogger.js';
 
@@ -82,7 +83,10 @@ export class SignalOutcomeLogger {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
           for (const item of parsed) {
-            this.localLogs.set(item.id, item);
+            // Reject any fake 50000/49000/52000 records from memory initialization
+            if (item && item.id && item.entryPrice !== 50000 && item.stopLoss !== 49000 && item.takeProfit !== 52000) {
+              this.localLogs.set(item.id, item);
+            }
           }
         }
         logger.info('[SignalOutcomeLogger] Loaded persisted outcome logs from disk.');
@@ -94,8 +98,15 @@ export class SignalOutcomeLogger {
   }
 
   private static saveLocal(): void {
+    // 2. In production mode, signal_outcome_logs.json must NOT be used as a production persistence target
+    if (serverConfig.getConfig().nodeEnv === 'production') {
+      return;
+    }
+
     try {
-      const records = Array.from(this.localLogs.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+      const records = Array.from(this.localLogs.values())
+        .filter((r) => r.entryPrice !== 50000 && r.stopLoss !== 49000 && r.takeProfit !== 52000)
+        .sort((a, b) => b.updatedAt - a.updatedAt);
       // Limit local outcomes to last 200 items
       const limited = records.slice(0, 200);
       fs.writeFileSync(LOCAL_OUTCOME_LOG_PATH, JSON.stringify(limited, null, 2), 'utf-8');
@@ -109,15 +120,42 @@ export class SignalOutcomeLogger {
    */
   public static async recordOutcome(record: SignalOutcomeRecord): Promise<void> {
     this.init();
+    const isProd = serverConfig.getConfig().nodeEnv === 'production';
+
+    const isFakePrice = record.entryPrice === 50000 || record.stopLoss === 49000 || record.takeProfit === 52000;
+    if (isFakePrice) {
+      record.provenance = 'TEST';
+      record.isSynthetic = true;
+    }
+
     if (!record.provenance) {
-      if (process.env.NODE_ENV === 'test' || process.env.TEST_MODE === 'true' || record.isSynthetic || record.id.startsWith('test_') || record.id.startsWith('sim_') || record.id.startsWith('backtest_')) {
+      if (
+        process.env.NODE_ENV === 'test' ||
+        process.env.TEST_MODE === 'true' ||
+        record.isSynthetic ||
+        record.id.startsWith('test_') ||
+        record.id.startsWith('sim_') ||
+        record.id.startsWith('backtest_') ||
+        isFakePrice
+      ) {
         record.provenance = 'TEST';
       } else {
         record.provenance = 'LIVE';
       }
     }
+
+    // Explicitly reject TEST, SIMULATION, BACKTEST, MOCK, SYNTHETIC or fake prices in production
+    if (isProd) {
+      if (!isProductionRecord(record as any)) {
+        logger.warn(`[SignalOutcomeLogger] Rejected fake/test outcome record in production: ${record.id} (${record.symbol}, entryPrice=${record.entryPrice})`);
+        return;
+      }
+    }
+
     this.localLogs.set(record.id, record);
-    this.saveLocal();
+    if (!isProd) {
+      this.saveLocal();
+    }
 
     const firestore = getFirestoreAdmin();
     if (firestore) {
@@ -136,11 +174,32 @@ export class SignalOutcomeLogger {
    * Retrieves an outcome log entry by ID
    */
   public static async getOutcome(id: string): Promise<SignalOutcomeRecord | null> {
+    const isProd = serverConfig.getConfig().nodeEnv === 'production';
+    const firestore = getFirestoreAdmin();
+
+    if (isProd) {
+      if (!firestore) {
+        // Fail safely in production
+        return null;
+      }
+      try {
+        const doc = await firestore.collection(FIRESTORE_OUTCOME_COL).doc(id).get();
+        if (doc.exists) {
+          const remote = doc.data() as SignalOutcomeRecord;
+          if (isProductionRecord(remote as any)) {
+            return remote;
+          }
+        }
+      } catch (err) {
+        logger.warn('[SignalOutcomeLogger] Firestore failed to get record in production:', { error: String(err) });
+      }
+      return null;
+    }
+
     this.init();
     const local = this.localLogs.get(id);
-    if (local) return local;
+    if (local && local.entryPrice !== 50000) return local;
 
-    const firestore = getFirestoreAdmin();
     if (firestore) {
       try {
         const doc = await firestore.collection(FIRESTORE_OUTCOME_COL).doc(id).get();
@@ -158,16 +217,56 @@ export class SignalOutcomeLogger {
 
   /**
    * Retrieves all outcome logs. Options enable filtering by production status or exact provenance.
+   * "signal_outcome_logs.json" MUST NOT be used as a production source or fallback for LIVE/HISTORICAL signals.
+   * Firestore is the production source of truth.
+   * If Firestore is unavailable in production, fails safely instead of loading fake/stale local signal data.
    */
   public static async getOutcomeLogs(
     limit = 100,
     productionOnly = true,
     provenanceFilter?: string
   ): Promise<SignalOutcomeRecord[]> {
+    const isProd = serverConfig.getConfig().nodeEnv === 'production';
+    const isProductionQuery = productionOnly || isProd || (provenanceFilter && provenanceFilter.toUpperCase() === 'LIVE');
+
+    const firestore = getFirestoreAdmin();
+
+    // In production or when querying production records:
+    // Firestore is authoritative source of truth.
+    // signal_outcome_logs.json MUST NOT be used as production source or fallback!
+    if (isProductionQuery) {
+      if (!firestore) {
+        logger.warn('[SignalOutcomeLogger] FAIL SAFELY: Firestore unavailable for production outcome logs query. Returning empty list without local fallback.');
+        return [];
+      }
+
+      try {
+        const query = await firestore
+          .collection(FIRESTORE_OUTCOME_COL)
+          .orderBy('updatedAt', 'desc')
+          .limit(limit * 2)
+          .get();
+
+        const records: SignalOutcomeRecord[] = [];
+        if (!query.empty) {
+          query.forEach((doc) => {
+            const data = doc.data() as SignalOutcomeRecord;
+            if (data && isProductionRecord(data as any)) {
+              records.push(data);
+            }
+          });
+        }
+        return records.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
+      } catch (err) {
+        logger.warn('[SignalOutcomeLogger] FAIL SAFELY: Firestore failed to retrieve outcome logs. Returning empty list without local fallback:', { error: String(err) });
+        return [];
+      }
+    }
+
+    // Dev/Test only queries (only reachable when NOT a production query and NOT in production)
     this.init();
     let records: SignalOutcomeRecord[] = [];
 
-    const firestore = getFirestoreAdmin();
     if (firestore) {
       try {
         const query = await firestore
@@ -175,25 +274,21 @@ export class SignalOutcomeLogger {
           .orderBy('updatedAt', 'desc')
           .limit(limit * 2)
           .get();
-        
         if (!query.empty) {
           query.forEach((doc) => records.push(doc.data() as SignalOutcomeRecord));
-          for (const item of records) {
-            this.localLogs.set(item.id, item);
-          }
         }
       } catch (err) {
-        logger.warn('[SignalOutcomeLogger] Firestore failed to retrieve logs, falling back to local:', { error: String(err) });
         records = Array.from(this.localLogs.values());
       }
     } else {
       records = Array.from(this.localLogs.values());
     }
 
+    // Filter out 50000 artificial records even in dev/test queries
+    records = records.filter((r) => r.entryPrice !== 50000 && r.stopLoss !== 49000 && r.takeProfit !== 52000);
+
     if (provenanceFilter && provenanceFilter.toUpperCase() !== 'PRODUCTION') {
       records = records.filter((r) => (r.provenance || '').toUpperCase() === provenanceFilter.toUpperCase());
-    } else if (productionOnly) {
-      records = records.filter((r) => isProductionRecord(r));
     }
 
     return records

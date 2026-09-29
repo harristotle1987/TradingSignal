@@ -93,20 +93,88 @@ export interface SignalLogRecord {
 }
 
 /**
- * Helper to determine if a record represents a legitimate LIVE or HISTORICAL production outcome/signal.
- * Strictly excludes TEST, SIMULATION, BACKTEST, synthetic, and unclassified records.
+ * Helper to determine if a record represents a legitimate LIVE production outcome/signal.
+ * Strictly requires LIVE provenance and verified market data pipeline.
+ * Explicitly rejects TEST, SIMULATION, BACKTEST, MOCK, SYNTHETIC, artificial 50000/49000/52000 prices,
+ * and unverified market data pipelines.
  */
-export function isProductionRecord(record: { provenance?: string; isSynthetic?: boolean; id?: string; signalId?: string } | null | undefined): boolean {
+export function isProductionRecord(record: {
+  provenance?: string;
+  isSynthetic?: boolean;
+  id?: string;
+  signalId?: string;
+  entryPrice?: number;
+  stopLoss?: number;
+  takeProfit?: number;
+  tp1?: number;
+  tp2?: number;
+  tp3?: number;
+  dataSource?: string;
+  provider?: string;
+} | null | undefined): boolean {
   if (!record) return false;
-  if (record.isSynthetic) return false;
+  if (record.isSynthetic === true) return false;
 
   const id = record.id || record.signalId || '';
-  if (id.startsWith('test_') || id.startsWith('sim_') || id.startsWith('backtest_') || id.startsWith('mock_') || id.startsWith('funnel_test_')) {
+  if (
+    id.startsWith('test_') ||
+    id.startsWith('sim_') ||
+    id.startsWith('backtest_') ||
+    id.startsWith('mock_') ||
+    id.startsWith('funnel_test_') ||
+    id.startsWith('s1') ||
+    id === 'entry_after_expiry' ||
+    id === 'entry_before_expiry' ||
+    id === 'after_expiry' ||
+    id === 'exact_expiry'
+  ) {
     return false;
   }
 
   const prov = (record.provenance || '').toUpperCase().trim();
-  return prov === 'LIVE' || prov === 'HISTORICAL';
+  // 6. Explicitly reject: "TEST", "SIMULATION", "BACKTEST", "MOCK", "SYNTHETIC"
+  if (
+    prov === 'TEST' ||
+    prov === 'SIMULATION' ||
+    prov === 'BACKTEST' ||
+    prov === 'MOCK' ||
+    prov === 'SYNTHETIC'
+  ) {
+    return false;
+  }
+
+  // 5. Production records must have valid provenance: "LIVE"
+  if (prov !== 'LIVE') {
+    return false;
+  }
+
+  // 7 & 8. Reject artificial 50000, 49000, 52000 or invalid/default prices
+  const entry = Number(record.entryPrice);
+  const sl = Number(record.stopLoss);
+  const tp = Number(record.takeProfit);
+
+  if (isNaN(entry) || entry <= 0 || !isFinite(entry)) {
+    return false;
+  }
+
+  if (entry === 50000 || sl === 49000 || tp === 52000) {
+    return false;
+  }
+
+  // Reject artificial/mock data sources
+  const src = ((record as any).dataSource || (record as any).provider || '').toLowerCase();
+  if (
+    src.includes('mock') ||
+    src.includes('synthetic') ||
+    src.includes('unverified') ||
+    src.includes('simulation') ||
+    src.includes('test') ||
+    src.includes('fallback_default')
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 /**
@@ -206,15 +274,19 @@ export class SignalLogger {
         }
       });
 
-      // Purge any log entries from memory that are missing in Firestore (indicating cross-pod/user deletion)
-      for (const id of this.logs.keys()) {
-        if (!firestoreIds.has(id)) {
-          this.logs.delete(id);
+      // Only reconcile deletions if Firestore returned documents
+      if (firestoreIds.size > 0) {
+        for (const id of this.logs.keys()) {
+          if (!firestoreIds.has(id)) {
+            this.logs.delete(id);
+          }
         }
       }
 
       this.lastFirestoreSync = Date.now();
-      this.flushToDisk();
+      if (firestoreIds.size > 0) {
+        this.flushToDisk();
+      }
     } catch (err) {
       logger.debug('[SignalLogger] Firestore synchronization deferred:', { reason: String(err) });
     }
@@ -400,6 +472,20 @@ export class SignalLogger {
       isSynthetic: Boolean(signal.isSynthetic),
     };
 
+    const isProd = serverConfig.getConfig().nodeEnv === 'production';
+    if (isProd || provenance === 'LIVE') {
+      if (!isProductionRecord(record as any)) {
+        const rejectMsg = `[SignalLogger] REJECTED signal ${id} (${signal.symbol}): Failed production provenance, artificial price, or unverified market data pipeline.`;
+        logger.warn(rejectMsg);
+        return {
+          success: false,
+          status: 'PERSISTENCE_FAILED',
+          record,
+          error: rejectMsg,
+        };
+      }
+    }
+
     this.logs.set(id, record);
     this.flushToDisk();
 
@@ -542,6 +628,13 @@ export class SignalLogger {
     limit = 100,
     productionOnly = true
   ): Promise<SignalLogRecord[]> {
+    const isProd = serverConfig.getConfig().nodeEnv === 'production';
+    const firestore = getFirestoreAdmin();
+    if (isProd && !firestore) {
+      logger.warn('[SignalLogger] FAIL SAFELY: Firestore is unavailable in production. Returning empty list instead of local fallback.');
+      return [];
+    }
+
     await this.init();
 
     const now = Date.now();

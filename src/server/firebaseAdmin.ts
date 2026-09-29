@@ -1,9 +1,19 @@
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore, Firestore } from 'firebase-admin/firestore';
+import { getAuth, Auth } from 'firebase-admin/auth';
 import { logger } from './logger.js';
 import { ScannerPersistence, DailyCapState } from './signals/ScannerPersistence.js';
 
 let db: Firestore | null = null;
+let authInstance: Auth | null = null;
+let mockDb: Firestore | null | undefined = undefined;
+
+/**
+ * Allows tests to mock Firestore availability (e.g. simulate Firestore outage/unavailability).
+ */
+export function setMockFirestoreAdmin(mock: Firestore | null | undefined): void {
+  mockDb = mock;
+}
 
 /**
  * Checks if production persistence requirements are met.
@@ -28,6 +38,7 @@ export function isProductionPersistenceReady(): boolean {
  * Handles missing credentials gracefully without crashing the server.
  */
 export function getFirestoreAdmin(): Firestore | null {
+  if (mockDb !== undefined) return mockDb;
   if (db) return db;
 
   const saJson = process.env.FIREBASE_SERVICE_ACCOUNT;
@@ -56,6 +67,22 @@ export function getFirestoreAdmin(): Firestore | null {
     logger.warn('[Firebase Admin] Initialization failed:', { error: err instanceof Error ? err.message : String(err) });
     return null;
   }
+}
+
+/**
+ * Returns the Firebase Auth admin instance.
+ */
+export function getAuthAdmin(): Auth | null {
+  const firestore = getFirestoreAdmin();
+  if (!firestore) return null;
+  if (!authInstance) {
+    try {
+      authInstance = getAuth();
+    } catch {
+      authInstance = null;
+    }
+  }
+  return authInstance;
 }
 
 export type CapState = DailyCapState;

@@ -367,20 +367,22 @@ export class ScanPerformanceProfiler {
 
   public static persistProfile(profile: ScanPerformanceProfile): void {
     try {
-      let history: ScanPerformanceProfile[] = [];
-      if (fs.existsSync(LOCAL_HISTORY_PATH)) {
-        try {
-          const raw = fs.readFileSync(LOCAL_HISTORY_PATH, 'utf-8');
-          history = JSON.parse(raw);
-        } catch {
-          history = [];
+      if (process.env.NODE_ENV !== 'production') {
+        let history: ScanPerformanceProfile[] = [];
+        if (fs.existsSync(LOCAL_HISTORY_PATH)) {
+          try {
+            const raw = fs.readFileSync(LOCAL_HISTORY_PATH, 'utf-8');
+            history = JSON.parse(raw);
+          } catch {
+            history = [];
+          }
         }
+        history.push(profile);
+        if (history.length > 100) {
+          history = history.slice(-100);
+        }
+        fs.writeFileSync(LOCAL_HISTORY_PATH, JSON.stringify(history, null, 2), 'utf-8');
       }
-      history.push(profile);
-      if (history.length > 100) {
-        history = history.slice(-100);
-      }
-      fs.writeFileSync(LOCAL_HISTORY_PATH, JSON.stringify(history, null, 2), 'utf-8');
     } catch (err) {
       logger.warn('[ScanPerformanceProfiler] Failed to write profile history to disk:', { error: String(err) });
     }
@@ -410,7 +412,7 @@ export class ScanPerformanceProfiler {
     healthWarnings: string[];
   } {
     let history: ScanPerformanceProfile[] = [];
-    if (fs.existsSync(LOCAL_HISTORY_PATH)) {
+    if (process.env.NODE_ENV !== 'production' && fs.existsSync(LOCAL_HISTORY_PATH)) {
       try {
         const raw = fs.readFileSync(LOCAL_HISTORY_PATH, 'utf-8');
         history = JSON.parse(raw);

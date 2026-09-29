@@ -48,7 +48,7 @@ import { Gate22MonteCarloSimulation } from './Gate22MonteCarloSimulation.js';
 import { NvidiaAIService } from './NvidiaAIService.js';
 import { SignalValidator, ValidationResult } from './SignalValidator.js';
 import { TradeRankingEngine, ValidatedCandidate } from './TradeRankingEngine.js';
-import { SignalLogger } from './SignalLogger.js';
+import { SignalLogger, isProductionRecord } from './SignalLogger.js';
 import { SignalFingerprint } from './SignalFingerprint.js';
 import { CooldownManager } from './CooldownManager.js';
 import { MarketStructureDetector } from './MarketStructureDetector.js';
@@ -159,106 +159,84 @@ export class SignalEngine {
   }
 
   /**
-   * Retrieves active signals list (sorted by TOP TRADEs first, then by score descending).
-   * Dynamically synchronizes active signals from persistent Firebase/disk storage periodically.
+   * Retrieves active signals list directly from authoritative persistence (Firestore).
+   * Refreshes in-memory cache synchronously, eliminating any 5-second race condition.
    */
-  async getActiveSignals(): Promise<TradingSignal[]> {
-    const now = Date.now();
+  async getActiveSignalsDetailed(): Promise<{
+    signals: TradingSignal[];
+    activeCount: number;
+    persistedActiveCount: number;
+    filteredCount: number;
+    rejectionReason?: string;
+    diagnostics: {
+      activeCount: number;
+      persistedActiveCount: number;
+      filteredCount: number;
+      rejectionReason?: string;
+    };
+  }> {
+    const detailed = await ScannerPersistence.getActiveSignalsDetailed();
+    const persisted = detailed.signals;
 
-    // Re-synchronize from persistence if memory map is empty or more than 5 seconds have elapsed
-    if (this.activeSignals.size === 0 || now - this.lastActiveSignalsSyncTime > 5000) {
-      try {
-        const persisted = await ScannerPersistence.getActiveSignals();
-        const persistedSymbols = new Set<string>();
+    this.activeSignals.clear();
 
-        for (const s of persisted) {
-          if (isActionableSignal(s) && s.isTradeableSignal === true && s.signalClassification === 'TRADEABLE') {
-            persistedSymbols.add(s.symbol.toUpperCase());
-
-            // Enforce that we do NOT load any signal with duplicate TPs
-            const tp1 = s.tp1;
-            const tp2 = s.tp2;
-            const tp3 = s.tp3;
-            if (tp1 !== undefined && tp2 !== undefined && tp3 !== undefined) {
-              if (tp1 === tp2 || tp2 === tp3 || tp1 === tp3) {
-                continue;
-              }
-              // Enforce correct geometry
-              if (s.direction === 'BUY' && (s.entryPrice >= tp1 || tp1 >= tp2 || tp2 >= tp3)) {
-                continue;
-              }
-              if (s.direction === 'SELL' && (s.entryPrice <= tp1 || tp1 <= tp2 || tp2 <= tp3)) {
-                continue;
-              }
-            } else {
-              continue;
-            }
-
-            const sig: TradingSignal = {
-              id: s.id,
-              snapshotId: s.snapshotId,
-              symbol: s.symbol,
-              direction: s.direction,
-              entryPrice: s.entryPrice,
-              stopLoss: s.stopLoss,
-              takeProfit: s.takeProfit,
-              tp1: s.tp1,
-              tp2: s.tp2,
-              tp3: s.tp3,
-              riskRewardRatio: s.riskRewardRatio,
-              score: s.score,
-              confidenceScore: s.score,
-              rankTier: s.rankTier,
-              isBestTrade: s.rankTier === 'BEST_TRADE',
-              isSecondBest: s.rankTier === 'SECOND_BEST',
-              isTopTrade: s.rankTier === 'BEST_TRADE',
-              strategy: s.strategy,
-              timeframe: s.timeframe,
-              dataSource: s.dataSource,
-              status: s.status as any,
-              isActionableSignal: isActionableSignal(s),
-              timestamp: s.timestamp,
-              validatedAt: s.timestamp,
-              confluenceReasons: [],
-              estimatedWinRate: s.estimatedWinRate,
-              aiAssessment: s.aiAssessment,
-              expiresAt: s.expiresAt || (s.timestamp + serverConfig.getConfig().signalExpirationMs),
-            };
-            this.activeSignals.set(sig.symbol, sig);
-          }
-        }
-
-        // Clean up any in-memory active signal that was deleted/modified to terminal status in persistence
-        for (const symbol of this.activeSignals.keys()) {
-          if (!persistedSymbols.has(symbol.toUpperCase())) {
-            this.activeSignals.delete(symbol);
-          }
-        }
-
-        this.lastActiveSignalsSyncTime = now;
-      } catch (err) {
-        logger.warn('[SignalEngine] Failed to restore active signals from persistence:', { error: String(err) });
-      }
+    for (const s of persisted) {
+      const sig: TradingSignal = {
+        id: s.id,
+        snapshotId: s.snapshotId,
+        symbol: s.symbol,
+        direction: s.direction,
+        entryPrice: s.entryPrice,
+        stopLoss: s.stopLoss,
+        takeProfit: s.takeProfit,
+        tp1: s.tp1,
+        tp2: s.tp2,
+        tp3: s.tp3,
+        riskRewardRatio: s.riskRewardRatio,
+        score: s.score,
+        confidenceScore: s.score,
+        rankTier: s.rankTier,
+        isBestTrade: s.rankTier === 'BEST_TRADE',
+        isSecondBest: s.rankTier === 'SECOND_BEST',
+        isTopTrade: s.rankTier === 'BEST_TRADE',
+        strategy: s.strategy,
+        timeframe: s.timeframe,
+        dataSource: s.dataSource,
+        status: s.status as any,
+        isActionableSignal: isActionableSignal(s),
+        timestamp: s.timestamp,
+        validatedAt: s.timestamp,
+        confluenceReasons: [],
+        estimatedWinRate: s.estimatedWinRate,
+        aiAssessment: s.aiAssessment,
+        expiresAt: s.expiresAt || (s.timestamp + serverConfig.getConfig().signalExpirationMs),
+      };
+      this.activeSignals.set(sig.symbol, sig);
     }
 
-    const active: TradingSignal[] = [];
-
-    for (const [symbol, signal] of this.activeSignals.entries()) {
-      const isWaitingAndExpired = signal.status === 'WAITING_ENTRY' && (now - signal.timestamp > serverConfig.getConfig().signalExpirationMs);
-      if (isWaitingAndExpired) {
-        this.activeSignals.delete(symbol);
-      } else {
-        active.push(signal);
-      }
-    }
-
-    return active.sort((a, b) => {
+    const activeList = Array.from(this.activeSignals.values()).sort((a, b) => {
       if (a.isTopTrade && !b.isTopTrade) return -1;
       if (!a.isTopTrade && b.isTopTrade) return 1;
       if (a.isPrimary && !b.isPrimary) return -1;
       if (!a.isPrimary && b.isPrimary) return 1;
       return (b.score || 0) - (a.score || 0);
     });
+
+    this.lastActiveSignalsSyncTime = Date.now();
+
+    return {
+      signals: activeList,
+      activeCount: activeList.length,
+      persistedActiveCount: detailed.persistedActiveCount,
+      filteredCount: detailed.filteredCount,
+      rejectionReason: detailed.rejectionReason,
+      diagnostics: detailed.diagnostics,
+    };
+  }
+
+  async getActiveSignals(): Promise<TradingSignal[]> {
+    const res = await this.getActiveSignalsDetailed();
+    return res.signals;
   }
 
   /**

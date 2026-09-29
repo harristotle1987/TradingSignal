@@ -12,9 +12,11 @@
  * - Supports ranges: "7D", "30D", "90D", "ALL"
  */
 
-import { SignalLogger, SignalLogRecord, isTradeableLogRecord } from './SignalLogger.js';
+import { SignalLogger, SignalLogRecord, isTradeableLogRecord, isProductionRecord } from './SignalLogger.js';
 import { SignalOutcomeLogger, SignalOutcomeRecord } from './SignalOutcomeLogger.js';
 import { ScannerPersistence } from './ScannerPersistence.js';
+import { getFirestoreAdmin } from '../firebaseAdmin.js';
+import { serverConfig } from '../config.js';
 import {
   HistoricalPerformanceRange,
   HistoricalPerformanceResponse,
@@ -127,12 +129,20 @@ export class HistoricalPerformanceManager {
    * Retrieves and consolidates unique stored signals across persistence layers.
    */
   public static async getConsolidatedSignals(): Promise<NormalizedSignalOutcome[]> {
+    const isProd = serverConfig.getConfig().nodeEnv === 'production';
+    const firestore = getFirestoreAdmin();
+    if (isProd && !firestore) {
+      logger.warn('[HistoricalPerformance] FAIL SAFELY: Firestore unavailable in production mode. Returning empty list without local fallback.');
+      return [];
+    }
+
     const [signalLogs, outcomeLogs, sentSignals, deletedRecords] = await Promise.all([
-      SignalLogger.getSignalLogs(1000).catch((err) => {
+      SignalLogger.getSignalLogs(1000, true).catch((err) => {
         logger.warn('[HistoricalPerformance] Error loading signal logs:', { error: String(err) });
         return [] as SignalLogRecord[];
       }),
-      SignalOutcomeLogger.getOutcomeLogs(1000).catch((err) => {
+      // 2. "signal_outcome_logs.json" MUST NOT be used as a production source or fallback for LIVE/HISTORICAL signals.
+      SignalOutcomeLogger.getOutcomeLogs(1000, true).catch((err) => {
         logger.warn('[HistoricalPerformance] Error loading outcome logs:', { error: String(err) });
         return [] as SignalOutcomeRecord[];
       }),
@@ -164,12 +174,8 @@ export class HistoricalPerformanceManager {
     for (const log of signalLogs) {
       if (!log || !log.id || deletedIds.has(log.id)) continue;
       if (!isTradeableLogRecord(log)) continue;
-
-      const provenance = (log as any).provenance ? String((log as any).provenance).toUpperCase() : 'LIVE';
-      const isSynthetic = Boolean((log as any).isSynthetic);
-      if (provenance === 'BACKTEST' || provenance === 'SIMULATION' || provenance === 'TEST' || isSynthetic) {
-        continue;
-      }
+      if (!isProductionRecord(log as any)) continue;
+      if (log.entryPrice === 50000 || log.stopLoss === 49000 || log.takeProfit === 52000) continue;
 
       const ts = sanitizeTimestamp(log.timestamp || log.updatedAt);
       if (!ts) continue;
@@ -203,12 +209,8 @@ export class HistoricalPerformanceManager {
     // 2. Process Outcome Logs (higher precedence on terminal status resolution)
     for (const outcome of outcomeLogs) {
       if (!outcome || !outcome.id || deletedIds.has(outcome.id)) continue;
-
-      const provenance = (outcome as any).provenance ? String((outcome as any).provenance).toUpperCase() : 'LIVE';
-      const isSynthetic = Boolean((outcome as any).isSynthetic);
-      if (provenance === 'BACKTEST' || provenance === 'SIMULATION' || provenance === 'TEST' || isSynthetic) {
-        continue;
-      }
+      if (!isProductionRecord(outcome as any)) continue;
+      if (outcome.entryPrice === 50000 || outcome.stopLoss === 49000 || outcome.takeProfit === 52000) continue;
 
       const ts = sanitizeTimestamp(outcome.timestamp || outcome.detectedAt || outcome.updatedAt);
       if (!ts) continue;
@@ -272,12 +274,8 @@ export class HistoricalPerformanceManager {
       if (!sent || !sent.id || deletedIds.has(sent.id)) continue;
       // Filter out non-tradeable or internal items
       if (sent.isTradeableSignal === false || (sent.direction as string) === 'NO_TRADE') continue;
-
-      const provenance = (sent as any).provenance ? String((sent as any).provenance).toUpperCase() : 'LIVE';
-      const isSynthetic = Boolean((sent as any).isSynthetic);
-      if (provenance === 'BACKTEST' || provenance === 'SIMULATION' || provenance === 'TEST' || isSynthetic) {
-        continue;
-      }
+      if (!isProductionRecord(sent as any)) continue;
+      if (sent.entryPrice === 50000 || sent.stopLoss === 49000 || sent.takeProfit === 52000) continue;
 
       const ts = sanitizeTimestamp(sent.timestamp || (sent as any).validatedAt);
       if (!ts) continue;

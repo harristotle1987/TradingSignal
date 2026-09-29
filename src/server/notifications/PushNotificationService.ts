@@ -25,6 +25,7 @@ import { getDynamicPrecision } from '../../utils/formatters.js';
 export interface StoredPushSubscription {
   id: string;
   endpoint: string;
+  userId?: string;
   keys: {
     p256dh: string;
     auth: string;
@@ -194,7 +195,8 @@ export class PushNotificationService {
    */
   static async registerSubscription(
     subscription: { endpoint: string; keys: { p256dh: string; auth: string } },
-    userAgent?: string
+    userAgent?: string,
+    userId?: string
   ): Promise<{ success: boolean; id: string }> {
     await this.init();
 
@@ -203,12 +205,14 @@ export class PushNotificationService {
     }
 
     const id = this.getSubscriptionId(subscription.endpoint);
+    const existing = this.subscriptions.get(id);
     const record: StoredPushSubscription = {
       id,
       endpoint: subscription.endpoint,
+      userId: userId || existing?.userId,
       keys: subscription.keys,
-      createdAt: Date.now(),
-      userAgent: userAgent || 'Unknown Client',
+      createdAt: existing?.createdAt || Date.now(),
+      userAgent: userAgent || existing?.userAgent || 'Unknown Client',
       active: true,
     };
 
@@ -227,6 +231,14 @@ export class PushNotificationService {
 
     logger.info(`[Push Notification Service] Registered push subscription [${id}]. Total active: ${this.subscriptions.size}`);
     return { success: true, id };
+  }
+
+  /**
+   * Retrieves an in-memory subscription by endpoint.
+   */
+  static getSubscriptionByEndpoint(endpoint: string): StoredPushSubscription | undefined {
+    const id = this.getSubscriptionId(endpoint);
+    return this.subscriptions.get(id);
   }
 
   /**

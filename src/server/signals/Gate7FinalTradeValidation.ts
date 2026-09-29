@@ -409,7 +409,18 @@ export class Gate7FinalTradeValidation {
 
     if (ctx.activeSignals && ctx.activeSignals.has(ctx.symbol)) {
       const activeSig = ctx.activeSignals.get(ctx.symbol);
-      if (activeSig && activeSig.status !== 'EXPIRED' && activeSig.status !== 'CLOSED' && activeSig.status !== 'CANCELLED') {
+      const isTerminalOrExpired = !activeSig ||
+        activeSig.status === 'EXPIRED' ||
+        activeSig.status === 'CLOSED' ||
+        activeSig.status === 'CANCELLED' ||
+        activeSig.status === 'TP_HIT' ||
+        activeSig.status === 'SL_HIT' ||
+        activeSig.status === 'TP3_HIT' ||
+        activeSig.status === 'COMPLETED' ||
+        activeSig.status === 'SUPERSEDED' ||
+        (activeSig.expiresAt && Date.now() > activeSig.expiresAt);
+
+      if (activeSig && !isTerminalOrExpired) {
         if (activeSig.direction !== ctx.direction) {
           g11Passed = false;
           g11Reason = `Conflicting active signal exists on ${ctx.symbol} (Active: ${activeSig.direction}, New: ${ctx.direction}).`;

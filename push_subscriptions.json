@@ -9,5 +9,17 @@
     "active": true,
     "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36",
     "id": "ac17dc0405d7880334494da0d6f0e399"
+  },
+  {
+    "id": "4d0d02ff52241bfff2e7fa8e1c66ec55",
+    "endpoint": "https://fcm.googleapis.com/fcm/send/alice_push_target_123",
+    "userId": "user_alice_uid",
+    "keys": {
+      "p256dh": "key_alice",
+      "auth": "auth_alice"
+    },
+    "createdAt": 1790433932257,
+    "userAgent": "AliceBrowser",
+    "active": true
   }
 ]

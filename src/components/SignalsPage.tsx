@@ -65,36 +65,10 @@ export function SignalsPage({ health }: SignalsPageProps) {
   const [rejected72PlusCandidates, setRejected72PlusCandidates] = useState<any[]>([]);
   const isInitialLoad = useRef<boolean>(true);
 
-  // Local State-Based Signal History (Last 30 generated signals/outcomes)
-  const HISTORY_STORAGE_KEY = 'trading_signal_history_v1';
-  const [signalHistory, setSignalHistory] = useState<SignalHistoryItem[]>(() => {
-    try {
-      const saved = localStorage.getItem(HISTORY_STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          // GATE 62: filter out entries that do not explicitly contain isTradeableSignal === true && signalClassification === 'TRADEABLE'
-          return parsed
-            .filter((item: any) => item && item.isTradeableSignal === true && item.signalClassification === 'TRADEABLE')
-            .slice(0, 30);
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to load signal history from storage:', e);
-    }
-    return [];
-  });
+  // Authoritative Firestore-Backed Historical Trades & Signal Logs (Gate 16)
+  const [signalHistory, setSignalHistory] = useState<SignalHistoryItem[]>([]);
 
-  // Save history to localStorage on change
-  useEffect(() => {
-    try {
-      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(signalHistory));
-    } catch (e) {
-      console.warn('Failed to persist signal history:', e);
-    }
-  }, [signalHistory]);
-
-  // Helper to add signals to local history (Max 30, newest first)
+  // Helper to add signals to state
   const addSignalsToHistory = useCallback(
     (signals: TradingSignal[], defaultOutcome?: SignalHistoryItem['outcomeType']) => {
       if (!signals || signals.length === 0) return;
@@ -104,10 +78,11 @@ export function SignalsPage({ health }: SignalsPageProps) {
         const newItems: SignalHistoryItem[] = [];
 
         for (const sig of signals) {
-          // GATE 62: Reject any signal unless isTradeableSignal === true AND signalClassification === 'TRADEABLE'
-          // Do this BEFORE creating the SignalHistoryItem.
-          // Do not infer tradeability from score, isTopTrade, isBestTrade, rankTier, status, outcomeType.
+          // GATE 62 / GATE 16: Reject any signal unless isTradeableSignal === true AND signalClassification === 'TRADEABLE'
           if (sig.isTradeableSignal !== true || sig.signalClassification !== 'TRADEABLE') {
+            continue;
+          }
+          if (sig.entryPrice === 50000 || sig.entryPrice === 49000 || sig.entryPrice === 52000) {
             continue;
           }
 
@@ -125,6 +100,9 @@ export function SignalsPage({ health }: SignalsPageProps) {
               tp1: sig.tp1,
               tp2: sig.tp2,
               tp3: sig.tp3,
+              tp1Rr: sig.tp1Rr,
+              tp2Rr: sig.tp2Rr,
+              tp3Rr: sig.tp3Rr,
               riskRewardRatio: sig.riskRewardRatio,
               score: sig.score,
               confidenceScore: sig.confidenceScore,
@@ -174,19 +152,78 @@ export function SignalsPage({ health }: SignalsPageProps) {
         }
 
         if (newItems.length === 0) return prev;
-        return [...newItems, ...prev].slice(0, 30);
+        return [...newItems, ...prev];
       });
     },
     []
   );
 
-  // Load dedicated signal logs from backend
+  // Load authoritative historical trades & signal logs from backend (Gate 16)
   const loadDedicatedSignalLogs = useCallback(async () => {
     try {
+      // First try dedicated historical trades API
+      const histRes = await api.getHistoricalTrades({ limit: 100 }).catch(() => null);
+      if (histRes && histRes.success && Array.isArray(histRes.trades) && histRes.trades.length > 0) {
+        const mappedItems: SignalHistoryItem[] = histRes.trades.map((trade: any) => ({
+          id: trade.id,
+          snapshotId: trade.id,
+          symbol: trade.symbol,
+          direction: trade.direction,
+          entryPrice: trade.entryPrice,
+          stopLoss: trade.stopLoss,
+          takeProfit: trade.takeProfit,
+          tp1: trade.tp1,
+          tp2: trade.tp2,
+          tp3: trade.tp3,
+          tp1Rr: trade.tp1Rr,
+          tp2Rr: trade.tp2Rr,
+          tp3Rr: trade.tp3Rr,
+          riskRewardRatio: trade.riskRewardRatio,
+          score: trade.score,
+          confidenceScore: trade.confidenceScore,
+          isTopTrade: trade.rankTier === 'BEST_TRADE',
+          isBestTrade: trade.rankTier === 'BEST_TRADE',
+          isSecondBest: trade.rankTier === 'SECOND_BEST',
+          isSuggestion: trade.rankTier === 'SUGGESTION',
+          rankTier: trade.rankTier,
+          outcomeType: trade.status === 'WIN' ? 'TOP_TRADE' : trade.status === 'LOSS' ? 'VALIDATED' : 'VALIDATED',
+          strategy: formatStrategy(trade.strategy),
+          timeframe: '1h',
+          dataSource: formatLabel(trade.provider || 'Bitget'),
+          timestamp: trade.timestamp || Date.now(),
+          signalStatus: trade.status === 'WIN' ? 'COMPLETED' : trade.status === 'LOSS' ? 'STOPPED_OUT' : (trade.status || 'ACTIVE'),
+          tp1Status: trade.tp1Status,
+          tp2Status: trade.tp2Status,
+          tp3Status: trade.tp3Status,
+          slStatus: trade.slStatus,
+          tp1HitAt: trade.tp1HitAt,
+          tp2HitAt: trade.tp2HitAt,
+          tp3HitAt: trade.tp3HitAt,
+          stopLossHitAt: trade.stopLossHitAt,
+          tp1HitPrice: trade.tp1HitPrice,
+          tp2HitPrice: trade.tp2HitPrice,
+          tp3HitPrice: trade.tp3HitPrice,
+          stopLossHitPrice: trade.stopLossHitPrice,
+          confluenceReasons: trade.confluenceReasons,
+          aiAssessment: trade.aiAssessment,
+          isTradeableSignal: true,
+          signalClassification: 'TRADEABLE',
+        }));
+        setSignalHistory(mappedItems);
+        return;
+      }
+
+      // Fallback to signal logs API
       const res = await api.getSignalLogs();
       if (res && res.success && Array.isArray(res.logs) && res.logs.length > 0) {
-        // DEFENSE-IN-DEPTH: strictly filter tradeable signals on the frontend
-        const tradeableLogs = res.logs.filter((log: any) => log && log.isTradeableSignal === true && log.signalClassification === 'TRADEABLE');
+        const tradeableLogs = res.logs.filter((log: any) => 
+          log && 
+          log.isTradeableSignal === true && 
+          log.signalClassification === 'TRADEABLE' &&
+          log.entryPrice !== 50000 &&
+          log.entryPrice !== 49000 &&
+          log.entryPrice !== 52000
+        );
 
         const mappedItems: SignalHistoryItem[] = tradeableLogs.map((log: any) => ({
           id: log.id,
@@ -247,7 +284,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
           isTradeableSignal: true,
           signalClassification: 'TRADEABLE',
         }));
-        setSignalHistory(mappedItems.slice(0, 30));
+        setSignalHistory(mappedItems);
       }
     } catch (err) {
       console.warn('Could not load dedicated signal logs from backend:', err);
@@ -269,7 +306,6 @@ export function SignalsPage({ health }: SignalsPageProps) {
     setActiveSignals([]);
     setLastGenResult(null);
     try {
-      localStorage.removeItem(HISTORY_STORAGE_KEY);
       await api.deleteAllSignals();
       await api.clearSignalLogs().catch(() => {});
     } catch (e) {
@@ -282,15 +318,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
     setDeletingIds((prev) => [...prev, id]);
     try {
       await api.deleteSignalLog(id);
-      setSignalHistory((prev) => {
-        const updated = prev.filter((item) => item.id !== id && item.snapshotId !== id);
-        try {
-          localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updated));
-        } catch (e) {
-          console.warn('Failed to update localStorage signal history:', e);
-        }
-        return updated;
-      });
+      setSignalHistory((prev) => prev.filter((item) => item.id !== id && item.snapshotId !== id));
       setActiveSignals((prev) => prev.filter((s) => s.id !== id && s.snapshotId !== id));
     } catch (e) {
       console.warn(`Failed to delete backend signal entry ${id}:`, e);
@@ -307,15 +335,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
     try {
       await api.deleteSignalLogs(ids);
       const idSet = new Set(ids);
-      setSignalHistory((prev) => {
-        const updated = prev.filter((item) => !idSet.has(item.id) && !idSet.has(item.snapshotId));
-        try {
-          localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updated));
-        } catch (e) {
-          console.warn('Failed to update localStorage signal history:', e);
-        }
-        return updated;
-      });
+      setSignalHistory((prev) => prev.filter((item) => !idSet.has(item.id) && !idSet.has(item.snapshotId)));
       setActiveSignals((prev) => prev.filter((s) => !idSet.has(s.id) && !idSet.has(s.snapshotId)));
     } catch (e) {
       console.error('Failed to bulk delete signal logs:', e);

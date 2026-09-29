@@ -230,12 +230,15 @@ export class Gate35SignalFunnelAnalytics {
     if (this.isInitialized) return;
 
     try {
-      if (fs.existsSync(LOCAL_FUNNEL_PATH)) {
+      if (process.env.NODE_ENV !== 'production' && fs.existsSync(LOCAL_FUNNEL_PATH)) {
         const raw = fs.readFileSync(LOCAL_FUNNEL_PATH, 'utf-8');
         const parsed: CandidateFunnelRecord[] = JSON.parse(raw);
         if (Array.isArray(parsed)) {
           for (const item of parsed) {
-            this.records.set(item.id, item);
+            if (item && item.id) {
+              if ((item as any).entryPrice === 50000 || (item.symbol === 'BTCUSDT' && (item as any).entryPrice === 50000)) continue;
+              this.records.set(item.id, item);
+            }
           }
         }
       }

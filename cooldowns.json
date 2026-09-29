@@ -8,9 +8,17 @@
   },
   {
     "symbol": "BTCUSDT",
-    "lastAssetSignalMs": 1790255138969,
+    "lastAssetSignalMs": 1790601762824,
     "strategyCooldowns": {
-      "intraday breakout (h1/h4 + volume)": 1790255138969
+      "intraday breakout (h1/h4 + volume)": 1790255138969,
+      "trend following (ema stack rider & trend-pullback)": 1790601762824
+    }
+  },
+  {
+    "symbol": "ETHUSDT",
+    "lastAssetSignalMs": 1790593306989,
+    "strategyCooldowns": {
+      "trend following (ema stack rider & trend-pullback)": 1790593306989
     }
   }
 ]

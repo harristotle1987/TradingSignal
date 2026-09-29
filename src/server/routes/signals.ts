@@ -36,7 +36,7 @@ import { marketDataManager } from '../market/MarketDataManager.js';
 import { marketCache } from '../market/CacheStore.js';
 import { logger } from '../logger.js';
 import { ScannerPersistence, PersistedSentSignal } from '../signals/ScannerPersistence.js';
-import { getFirestoreAdmin } from '../firebaseAdmin.js';
+import { getSignalRepository } from '../infrastructure/index.js';
 import { adminAuthMiddleware } from '../middleware/adminAuth.js';
 import { CronJobOrgService } from '../cron/CronJobOrgService.js';
 import { HistoricalOutcomeFeedbackEngine } from '../signals/HistoricalOutcomeFeedbackEngine.js';
@@ -510,19 +510,7 @@ router.post('/signals/refresh', async (req: Request, res: Response) => {
       });
     }
 
-    const firestore = getFirestoreAdmin();
-    let signal: PersistedSentSignal | undefined;
-
-    if (firestore) {
-      try {
-        const doc = await firestore.collection('scanner_sent_signals').doc(id).get();
-        if (doc.exists) {
-          signal = doc.data() as PersistedSentSignal;
-        }
-      } catch (err) {
-        logger.warn(`[Refresh API] Firestore fetch failed for id=${id}: ${String(err)}`);
-      }
-    }
+    let signal = await getSignalRepository().findById(id).catch(() => null) as PersistedSentSignal | null | undefined;
 
     if (!signal) {
       signal = ScannerPersistence.localData.sentSignals.find((s) => s.id === id);
@@ -782,15 +770,9 @@ router.post('/signals/refresh', async (req: Request, res: Response) => {
       await ScannerPersistence.updateSignalStatus(signal.id, evalResult.newStatus, metadata);
 
       // Re-fetch updated signal to return
-      if (firestore) {
-        try {
-          const doc = await firestore.collection('scanner_sent_signals').doc(id).get();
-          if (doc.exists) {
-            signal = doc.data() as PersistedSentSignal;
-          }
-        } catch (err) {
-          // ignore
-        }
+      const updated = await getSignalRepository().findById(id).catch(() => null);
+      if (updated) {
+        signal = updated;
       }
       if (signal) {
         Object.assign(signal, metadata);
@@ -1013,14 +995,19 @@ router.delete('/signals/log', async (_req: Request, res: Response) => {
 
 /**
  * GET /api/signals
- * Retrieves all currently active validated trading signals.
+ * Retrieves all currently active validated trading signals from authoritative persistence (Firestore).
+ * Returns clear diagnostics when zero active signals exist.
  */
 router.get('/signals', async (_req: Request, res: Response) => {
-  const signals = await signalEngine.getActiveSignals();
+  const result = await signalEngine.getActiveSignalsDetailed();
   res.status(200).json({
     success: true,
-    signals,
-    activeCount: signals.length,
+    signals: result.signals,
+    activeCount: result.activeCount,
+    persistedActiveCount: result.persistedActiveCount,
+    filteredCount: result.filteredCount,
+    rejectionReason: result.rejectionReason,
+    diagnostics: result.diagnostics,
     timestamp: Date.now(),
   });
 });

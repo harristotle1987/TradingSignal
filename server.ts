@@ -24,6 +24,7 @@ import { RepairService } from './src/server/signals/RepairService.js';
 import { SignalLifecycleManager } from './src/server/signals/SignalLifecycleManager.js';
 import { PushNotificationService } from './src/server/notifications/PushNotificationService.js';
 import { SignalSensitivityManager } from './src/server/signals/SignalSensitivityManager.js';
+import { RateLimiter, CSRFProtection, InputValidator } from './src/server/security/SecurityService.js';
 
 export async function createServer() {
   const app = express();
@@ -31,19 +32,30 @@ export async function createServer() {
   // Initialize Sensitivity and Calibration Manager
   SignalSensitivityManager.init();
 
-  app.use(express.json());
-
-  // Hardened Security Response Headers
+  // Hardened Security Response Headers (OWASP ASVS V14 / SEC-CSRF)
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('X-XSS-Protection', '1; mode=block');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     next();
   });
 
-  // Explicit Allowed-Origin CORS Middleware (Gate 69)
+  // Strict CORS Middleware (SEC-CSRF)
   app.use(corsMiddleware);
+
+  // Parse JSON payloads with bounded size (SEC-INPUT)
+  app.use(express.json({ limit: '1mb' }));
+
+  // Global Rate Limiting Middleware (SEC-RATE)
+  app.use(RateLimiter.create({ windowMs: 60000, maxRequests: 300, endpointName: 'GlobalAPI' }));
+
+  // CSRF Defense for State-Mutating Operations (SEC-CSRF)
+  app.use(CSRFProtection.middleware);
+
+  // Input Validation & Normalization Middleware (SEC-INPUT)
+  app.use(InputValidator.middleware);
 
   // Request logger middleware
   app.use((req, _res, next) => {

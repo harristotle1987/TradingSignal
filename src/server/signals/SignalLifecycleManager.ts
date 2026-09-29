@@ -758,6 +758,9 @@ export class SignalLifecycleManager {
           stopLossHitPrice: sig.stopLossHitPrice ?? existingOutcome?.stopLossHitPrice,
         };
 
+        // Pre-set lifecycle check timestamp for transition metadata
+        timestamps.lastLifecycleCheckAt = new Date(now).toISOString();
+
         // Chronological traversal of candle history
         const historicalResult = this.evaluateCandleHistory(sig, candles, timestamps);
         let currentState = historicalResult.finalState;

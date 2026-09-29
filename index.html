@@ -42,14 +42,16 @@
         });
 
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js')
+          navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
             .then((reg) => {
               console.log('[PWA] Service Worker registered:', reg.scope);
               
-              // Check for updates periodically and when window regains focus
+              // Check for updates periodically and when window regains focus (safely guarded)
               document.addEventListener('visibilitychange', () => {
-                if (document.visibilityState === 'visible') {
-                  reg.update();
+                if (document.visibilityState === 'visible' && navigator.onLine) {
+                  reg.update().catch((err) => {
+                    console.debug('[PWA] Service Worker update check skipped or failed:', err);
+                  });
                 }
               });
 

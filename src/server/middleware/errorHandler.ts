@@ -4,6 +4,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../logger.js';
+import { SecurityAuditLogger, SEC_LOG } from '../security/SecurityService.js';
 
 export class AppError extends Error {
   public statusCode: number;
@@ -26,22 +27,27 @@ export function globalErrorHandler(
 ): void {
   const statusCode = err instanceof AppError ? err.statusCode : 500;
   const errorCode = err instanceof AppError ? err.errorCode : 'INTERNAL_SERVER_ERROR';
-  const message = err.message || 'An unexpected internal server error occurred.';
+  const isProd = process.env.NODE_ENV === 'production';
+  // OWASP ASVS V7 Error Handling: Never leak internal stack traces or sensitive internal paths to clients
+  const clientMessage = isProd && statusCode >= 500
+    ? 'An unexpected server error occurred. Please try again later.'
+    : err.message || 'An unexpected internal server error occurred.';
 
-  logger.error('API Error Encountered', {
+  SecurityAuditLogger.logViolation(SEC_LOG, `API Error: ${errorCode}`, {
     path: req.path,
     method: req.method,
     statusCode,
     errorCode,
-    errorMsg: message,
-    stack: process.env.NODE_ENV !== 'production' ? err.stack : undefined,
+    errorMsg: err.message,
+    stack: !isProd ? err.stack : undefined,
   });
 
   res.status(statusCode).json({
     success: false,
+    securityId: SEC_LOG,
     error: {
       code: errorCode,
-      message,
+      message: clientMessage,
       timestamp: new Date().toISOString(),
       path: req.path,
     },

@@ -7,13 +7,14 @@
 import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../logger.js';
+import { SecurityAuditLogger, SEC_AUTH, SEC_AUTHZ } from '../security/SecurityService.js';
 
 /**
  * Constant-time string comparison to avoid leaking information about how
  * many leading characters of an admin credential matched via response
- * timing.
+ * timing (OWASP ASVS V2 Authentication).
  */
-function timingSafeStringEquals(a: string, b: string): boolean {
+export function timingSafeStringEquals(a: string, b: string): boolean {
   const bufA = Buffer.from(a, 'utf8');
   const bufB = Buffer.from(b, 'utf8');
   if (bufA.length !== bufB.length) {
@@ -62,6 +63,7 @@ export function extractAuthToken(req: Request): string | null {
 
 /**
  * Express middleware to enforce admin authentication for administrative endpoints.
+ * Enforces SEC-AUTH (Authentication) and SEC-AUTHZ (Authorization/Access Control).
  */
 export function adminAuthMiddleware(req: Request, res: Response, next: NextFunction) {
   const token = extractAuthToken(req);
@@ -78,22 +80,24 @@ export function adminAuthMiddleware(req: Request, res: Response, next: NextFunct
 
   if (envSecrets.length === 0) {
     if (process.env.NODE_ENV !== 'production') {
-      logger.info(`[AdminAuth] Authorized administrative request in development without configured secrets for ${req.method} ${req.path}`);
+      SecurityAuditLogger.logEvent(SEC_AUTH, `Dev mode admin bypass for ${req.method} ${req.path}`);
       return next();
     }
-    logger.warn(`[AdminAuth] Rejected administrative operation (${req.method} ${req.path}): Server administrative credentials are not configured.`);
+    SecurityAuditLogger.logViolation(SEC_AUTH, `Rejected administrative operation (${req.method} ${req.path}): Missing server credentials`);
     return res.status(401).json({
       success: false,
       error: 'Unauthorized: Server administrative credentials are not configured.',
+      securityId: SEC_AUTH,
       timestamp: Date.now(),
     });
   }
 
   if (!token) {
-    logger.warn(`[AdminAuth] Rejected unauthenticated administrative request for ${req.method} ${req.path}`);
+    SecurityAuditLogger.logWarning(SEC_AUTH, `Unauthenticated administrative request rejected for ${req.method} ${req.path}`);
     return res.status(401).json({
       success: false,
       error: 'Unauthorized: Missing administrative credentials.',
+      securityId: SEC_AUTH,
       timestamp: Date.now(),
     });
   }
@@ -101,14 +105,15 @@ export function adminAuthMiddleware(req: Request, res: Response, next: NextFunct
   const isAuthorized = envSecrets.some((secret) => timingSafeStringEquals(token, secret));
 
   if (!isAuthorized) {
-    logger.warn(`[AdminAuth] Rejected administrative request with invalid credentials for ${req.method} ${req.path}`);
+    SecurityAuditLogger.logViolation(SEC_AUTHZ, `Access denied with invalid credentials for ${req.method} ${req.path}`);
     return res.status(403).json({
       success: false,
       error: 'Forbidden: Invalid administrative credentials.',
+      securityId: SEC_AUTHZ,
       timestamp: Date.now(),
     });
   }
 
-  logger.info(`[AdminAuth] Authorized administrative request for ${req.method} ${req.path}`);
+  SecurityAuditLogger.logEvent(SEC_AUTHZ, `Authorized administrative request for ${req.method} ${req.path}`);
   next();
 }

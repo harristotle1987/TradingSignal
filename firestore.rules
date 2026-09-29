@@ -6,23 +6,42 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // Helper functions
+    // Primitive helper functions
     function isSignedIn() {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    // Signals collection: Authenticated read-only, write restricted to server admin
     match /scanner_sent_signals/{signalId} {
-      allow read: if isSignedIn();
-      allow write: if false; // Only server-admin writes allowed
+      allow get: if isSignedIn() && isValidId(signalId);
+      allow list: if isSignedIn();
+      allow write: if false;
     }
 
+    // Outcome logs collection: Authenticated read-only, write restricted to server admin
     match /signal_outcome_logs/{signalId} {
-      allow read: if isSignedIn();
-      allow write: if false; // Only server-admin writes allowed
+      allow get: if isSignedIn() && isValidId(signalId);
+      allow list: if isSignedIn();
+      allow write: if false;
+    }
+
+    // Rejected candidates audit collection: Authenticated read-only
+    match /scanner_rejected_candidates/{candidateId} {
+      allow get: if isSignedIn() && isValidId(candidateId);
+      allow list: if isSignedIn();
+      allow write: if false;
+    }
+
+    // Scanner notifications collection: Authenticated read-only
+    match /scanner_notifications/{notifId} {
+      allow get: if isSignedIn() && isValidId(notifId);
+      allow list: if isSignedIn();
+      allow write: if false;
     }
   }
 }
+

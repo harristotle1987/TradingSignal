@@ -102,11 +102,16 @@ export class Gate19RegimePerformanceMatrix {
   public static init(): void {
     if (this.isInitialized) return;
     try {
-      if (fs.existsSync(MATRIX_PERSISTENCE_PATH)) {
+      if (process.env.NODE_ENV !== 'production' && fs.existsSync(MATRIX_PERSISTENCE_PATH)) {
         const raw = fs.readFileSync(MATRIX_PERSISTENCE_PATH, 'utf-8');
         const data = JSON.parse(raw);
         if (Array.isArray(data.trades)) {
-          this.trades = data.trades;
+          this.trades = data.trades.filter((t: any) => {
+            if (!t || typeof t !== 'object') return false;
+            if (t.entryPrice === 50000 || (t.symbol === 'BTCUSDT' && t.entryPrice === 50000)) return false;
+            if (typeof t.entryPrice === 'number' && (!Number.isFinite(t.entryPrice) || t.entryPrice <= 0)) return false;
+            return true;
+          });
           logger.info(`[Gate 19 Performance Matrix] Loaded ${this.trades.length} trade records from disk.`);
         }
       }

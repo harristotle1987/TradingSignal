@@ -1301,5 +1301,172 @@ export class ScoringEngine {
       isWatching: false,
     };
   }
+
+  /**
+   * Recalculates Entry/current reference, Stop Loss, Take Profits (TP1, TP2, TP3), and R:R
+   * for an active trade using the canonical TP/SL generator (Gate 15).
+   * Preserves:
+   * - ATR logic
+   * - structural SL
+   * - asset-class limits
+   * - TP guardrails
+   * - BUY/SELL ordering
+   * - minimum 1.8 R:R requirement.
+   */
+  public static recalculateActiveTradeLevels(
+    signal: { symbol: string; direction: SignalDirection; entryPrice: number; stopLoss: number; strategy?: string },
+    currentPrice: number,
+    candles15m?: NormalizedCandle[],
+    candles1h?: NormalizedCandle[]
+  ): {
+    entryPrice: number;
+    stopLoss: number;
+    tp1: number;
+    tp2: number;
+    tp3: number;
+    takeProfit: number;
+    riskRewardRatio: number;
+    tp1Rr: number;
+    tp2Rr: number;
+    tp3Rr: number;
+    isValid: boolean;
+  } {
+    const cleanSymbol = signal.symbol.trim().toUpperCase();
+    const direction = signal.direction;
+    const isBuy = direction === 'BUY';
+
+    let atr_15m = 0;
+    let atr_1h = 0;
+
+    if (candles15m && candles15m.length >= 14) {
+      atr_15m = TechnicalIndicators.calculateATR(candles15m, 14);
+    }
+    if (candles1h && candles1h.length >= 14) {
+      atr_1h = TechnicalIndicators.calculateATR(candles1h, 14);
+    }
+
+    if (!atr_15m || atr_15m <= 0) {
+      const existingDist = Math.abs(signal.entryPrice - signal.stopLoss);
+      atr_15m = existingDist > 0 ? existingDist / 1.5 : (currentPrice * 0.01);
+    }
+    if (!atr_1h || atr_1h <= 0) {
+      atr_1h = atr_15m * 1.5;
+    }
+
+    let support15m = 0;
+    let resistance15m = 0;
+    if (candles15m && candles15m.length >= 5) {
+      const recent = candles15m.slice(-20);
+      support15m = Math.min(...recent.map(c => c.low));
+      resistance15m = Math.max(...recent.map(c => c.high));
+    } else {
+      support15m = currentPrice - atr_15m * 1.5;
+      resistance15m = currentPrice + atr_15m * 1.5;
+    }
+
+    let majorSupport1h = 0;
+    let majorResistance1h = 0;
+    if (candles1h && candles1h.length >= 5) {
+      const recent = candles1h.slice(-20);
+      majorSupport1h = Math.min(...recent.map(c => c.low));
+      majorResistance1h = Math.max(...recent.map(c => c.high));
+    } else {
+      majorSupport1h = currentPrice - atr_1h * 2.0;
+      majorResistance1h = currentPrice + atr_1h * 2.0;
+    }
+
+    const profile = this.getAssetExecutionProfile(cleanSymbol, currentPrice, Math.max(atr_15m, atr_1h));
+    const precision = profile.precision;
+
+    // 1. Structural anchor & 2. Minimum-safe floor (0.85 * ATR noise floor of both 15m and 1h)
+    const effectiveAtrForNoiseFloor = atr_1h > 0 ? Math.max(atr_15m, atr_1h) : atr_15m;
+    const minSafeDistance = Math.max(profile.minPracticalStopDistance, effectiveAtrForNoiseFloor * 0.85);
+    let rawStopDistance = 0;
+    if (isBuy) {
+      const structuralSlPrice = support15m - atr_15m * 0.4;
+      rawStopDistance = Math.max(currentPrice - structuralSlPrice, minSafeDistance);
+    } else {
+      const structuralSlPrice = resistance15m + atr_15m * 0.4;
+      rawStopDistance = Math.max(structuralSlPrice - currentPrice, minSafeDistance);
+    }
+
+    // 3. Maximum stop cap
+    const normalizedAsset = profile.assetClass === 'STOCK' ? 'STOCKS' : profile.assetClass.toUpperCase();
+    const guardrails = ASSET_CLASS_GUARDRAILS[normalizedAsset] || ASSET_CLASS_GUARDRAILS.DEFAULT;
+    const maxStopDistance = Math.max(minSafeDistance, currentPrice * (guardrails.tp3.maxPct / 100));
+    const finalStopDistance = Math.min(rawStopDistance, maxStopDistance);
+
+    // 4. Round final SL
+    const newStopLoss = isBuy
+      ? Number((currentPrice - finalStopDistance).toFixed(precision))
+      : Number((currentPrice + finalStopDistance).toFixed(precision));
+
+    // 5. Canonical Take Profits
+    const tpAtrBasis = atr_1h > 0 ? (atr_15m * 0.5 + atr_1h * 0.5) : atr_15m;
+    const tpSetup = ScoringEngine.calculateThreeTakeProfits(
+      direction,
+      currentPrice,
+      newStopLoss,
+      tpAtrBasis,
+      support15m,
+      resistance15m,
+      majorSupport1h,
+      majorResistance1h,
+      signal.strategy || 'Multi-Timeframe Trend Confluence',
+      profile.minPracticalTargetDistance,
+      precision,
+      profile.assetClass
+    );
+
+    let finalTp1 = tpSetup.tp1;
+    let finalTp2 = tpSetup.tp2;
+    let finalTp3 = tpSetup.tp3;
+
+    // Enforce minimum 1.8 R:R requirement (point 4)
+    const minRequiredRR = Math.max(1.8, serverConfig.getConfig().thresholds.minimumRR);
+    const riskDist = Math.abs(currentPrice - newStopLoss);
+    const minReqReward = riskDist * minRequiredRR;
+
+    if (isBuy) {
+      if (finalTp2 < currentPrice + minReqReward) {
+        finalTp2 = Number((currentPrice + minReqReward).toFixed(precision));
+        if (finalTp3 <= finalTp2) {
+          finalTp3 = Number((finalTp2 + Math.max(riskDist * 0.5, effectiveAtrForNoiseFloor * 0.5)).toFixed(precision));
+        }
+      }
+    } else {
+      if (finalTp2 > currentPrice - minReqReward) {
+        finalTp2 = Number((currentPrice - minReqReward).toFixed(precision));
+        if (finalTp3 >= finalTp2) {
+          finalTp3 = Number((finalTp2 - Math.max(riskDist * 0.5, effectiveAtrForNoiseFloor * 0.5)).toFixed(precision));
+        }
+      }
+    }
+
+    const rrResult = RiskRewardCalculator.calculate(
+      currentPrice, newStopLoss, finalTp1, finalTp2, finalTp3, direction, minRequiredRR
+    );
+
+    // Validate all new levels before saving (point 5)
+    const allPositive = currentPrice > 0 && newStopLoss > 0 && finalTp1 > 0 && finalTp2 > 0 && finalTp3 > 0;
+    const isOrdered = isBuy
+      ? (newStopLoss < currentPrice && currentPrice < finalTp1 && finalTp1 < finalTp2 && finalTp2 < finalTp3)
+      : (newStopLoss > currentPrice && currentPrice > finalTp1 && finalTp1 > finalTp2 && finalTp2 > finalTp3);
+    const isRrValid = rrResult.primaryRR >= 1.8;
+
+    return {
+      entryPrice: currentPrice,
+      stopLoss: newStopLoss,
+      tp1: finalTp1,
+      tp2: finalTp2,
+      tp3: finalTp3,
+      takeProfit: rrResult.passedViaTp3 ? finalTp3 : finalTp2,
+      riskRewardRatio: Number(rrResult.primaryRR.toFixed(2)),
+      tp1Rr: rrResult.tp1RR,
+      tp2Rr: rrResult.tp2RR,
+      tp3Rr: rrResult.tp3RR,
+      isValid: allPositive && isOrdered && isRrValid,
+    };
+  }
 }
 

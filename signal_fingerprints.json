@@ -1,11 +1,29 @@
 [
   {
-    "fingerprint": "EURUSD_BUY_1.1_1h_breakout",
-    "symbol": "EURUSD",
+    "fingerprint": "BTCUSDT_SELL_82770.06_multi-tf realism setup_trend_following_(ema_stack_rider_&_trend-pullback)",
+    "symbol": "BTCUSDT",
+    "direction": "SELL",
+    "entryZone": 82770.06,
+    "timeframe": "Multi-TF Realism Setup",
+    "primaryStrategy": "Trend Following (EMA Stack Rider & Trend-Pullback)",
+    "timestamp": 1790590919004
+  },
+  {
+    "fingerprint": "ETHUSDT_BUY_2659.7_multi-tf realism setup_trend_following_(ema_stack_rider_&_trend-pullback)",
+    "symbol": "ETHUSDT",
     "direction": "BUY",
-    "entryZone": 1.1,
-    "timeframe": "1h",
-    "primaryStrategy": "Breakout",
-    "timestamp": 1787487150021
+    "entryZone": 2659.7,
+    "timeframe": "Multi-TF Realism Setup",
+    "primaryStrategy": "Trend Following (EMA Stack Rider & Trend-Pullback)",
+    "timestamp": 1790593309196
+  },
+  {
+    "fingerprint": "BTCUSDT_BUY_83419.99_multi-tf realism setup_trend_following_(ema_stack_rider_&_trend-pullback)",
+    "symbol": "BTCUSDT",
+    "direction": "BUY",
+    "entryZone": 83419.99,
+    "timeframe": "Multi-TF Realism Setup",
+    "primaryStrategy": "Trend Following (EMA Stack Rider & Trend-Pullback)",
+    "timestamp": 1790601764382
   }
 ]

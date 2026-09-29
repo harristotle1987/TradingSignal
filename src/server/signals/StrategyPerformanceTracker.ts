@@ -156,10 +156,18 @@ export class StrategyPerformanceTracker {
     if (this.isInitialized) return;
 
     try {
-      if (fs.existsSync(LOCAL_PERFORMANCE_PATH)) {
+      if (process.env.NODE_ENV !== 'production' && fs.existsSync(LOCAL_PERFORMANCE_PATH)) {
         const raw = fs.readFileSync(LOCAL_PERFORMANCE_PATH, 'utf-8');
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
+          const rawTrades = Array.isArray(parsed.recentTrades) ? parsed.recentTrades : [];
+          const cleanTrades = rawTrades.filter((t: any) => {
+            if (!t || typeof t !== 'object') return false;
+            if (t.entryPrice === 50000 || (t.symbol === 'BTCUSDT' && t.entryPrice === 50000)) return false;
+            if (typeof t.entryPrice === 'number' && (!Number.isFinite(t.entryPrice) || t.entryPrice <= 0)) return false;
+            return true;
+          });
+
           this.state = {
             version: parsed.version || 2,
             lastUpdated: parsed.lastUpdated || Date.now(),
@@ -171,7 +179,7 @@ export class StrategyPerformanceTracker {
             byTimeframe: parsed.byTimeframe || {},
             byRegime: parsed.byRegime || {},
             byConfidenceRange: parsed.byConfidenceRange || {},
-            recentTrades: Array.isArray(parsed.recentTrades) ? parsed.recentTrades : [],
+            recentTrades: cleanTrades,
           };
           logger.info('[StrategyPerformanceTracker] Loaded strategy performance state from disk.');
         }

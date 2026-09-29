@@ -14,12 +14,18 @@ const STATIC_ASSETS = [
   '/apple-touch-icon.png'
 ];
 
-// Install Event - Pre-cache App Shell assets only
+// Install Event - Pre-cache App Shell assets safely
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
+    caches.open(CACHE_NAME).then(async (cache) => {
       console.log('[Service Worker] Pre-caching static app shell assets');
-      return cache.addAll(STATIC_ASSETS);
+      await Promise.allSettled(
+        STATIC_ASSETS.map((asset) =>
+          cache.add(asset).catch((err) => {
+            console.warn(`[Service Worker] Pre-cache omitted for ${asset}:`, err);
+          })
+        )
+      );
     }).then(() => {
       // Force the waiting service worker to become the active service worker
       return self.skipWaiting();

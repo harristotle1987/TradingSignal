@@ -26,7 +26,7 @@ export const CACHE_TTL = {
   LAST_SCAN_TIMESTAMP: getEnvInt('CACHE_TTL_LAST_SCAN', 60 * 60 * 1000),             // 1 hour
   PREVIOUS_SCORE: getEnvInt('CACHE_TTL_PREV_SCORE', 10 * 60 * 1000),                 // 10 minutes (5-15m)
   PREVIOUS_DIRECTION: getEnvInt('CACHE_TTL_PREV_DIRECTION', 10 * 60 * 1000),         // 10 minutes (5-15m)
-  MARKET_SESSION_STATUS: getEnvInt('CACHE_TTL_MARKET_SESSION_STATUS', 2 * 60 * 60 * 1000), // 2 hours (1-6h)
+  MARKET_SESSION_STATUS: getEnvInt('CACHE_TTL_MARKET_SESSION_STATUS', 60 * 1000),    // 1 minute (reduced from 2 hours to avoid stale status)
   CANDLES_1M: getEnvInt('CACHE_TTL_CANDLES_1M', 2 * 60 * 1000),                      // 2 minutes (1-3m)
   CANDLES_5M: getEnvInt('CACHE_TTL_CANDLES_5M', 5 * 60 * 1000),                      // 5 minutes
   CANDLES_15M: getEnvInt('CACHE_TTL_CANDLES_15M', 15 * 60 * 1000),                    // 15 minutes
@@ -339,6 +339,22 @@ export class MarketDataCache {
       expiresAt: Date.now() + ttlMs,
     });
     logger.debug(`[Cache SET] Generic key: ${key}, TTL: ${ttlMs}ms`);
+  }
+
+  deleteGeneric(key: string): boolean {
+    return this.genericCache.delete(key);
+  }
+
+  getGenericEntry(key: string): GenericCacheEntry | undefined {
+    return this.genericCache.get(key);
+  }
+
+  clearSessionStatusKeys(): void {
+    for (const key of this.genericCache.keys()) {
+      if (key.endsWith(':session_status')) {
+        this.genericCache.delete(key);
+      }
+    }
   }
 
   /**

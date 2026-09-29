@@ -5,7 +5,7 @@
 
 import { NavigationTab, HealthResponse } from '../types/index.js';
 import { StatusBadge } from './StatusBadge.js';
-import { Radio, Settings, ShieldCheck, RefreshCw } from 'lucide-react';
+import { Radio, Settings, ShieldCheck, RefreshCw, Lock, LogOut, UserCheck, User } from 'lucide-react';
 import appLogo from '../assets/images/app_logo_icon_1786903027875.jpg';
 
 interface HeaderProps {
@@ -14,6 +14,9 @@ interface HeaderProps {
   health: HealthResponse | null;
   loadingHealth: boolean;
   onRefreshHealth: () => void;
+  authUser: { uid: string; email: string; admin: boolean; role?: 'ADMIN' | 'USER' } | null;
+  onOpenLoginModal: () => void;
+  onLogout: () => void;
 }
 
 export function Header({
@@ -22,6 +25,9 @@ export function Header({
   health,
   loadingHealth,
   onRefreshHealth,
+  authUser,
+  onOpenLoginModal,
+  onLogout,
 }: HeaderProps) {
   return (
     <header className="fixed top-0 left-0 right-0 z-50 bg-slate-900/95 text-slate-100 border-b border-slate-800/90 pt-[env(safe-area-inset-top)] w-full max-w-full overflow-x-hidden backdrop-blur-md shadow-md shadow-black/30">
@@ -81,7 +87,7 @@ export function Header({
             </nav>
           </div>
 
-          {/* Backend Health Status Indicator */}
+          {/* Backend Health Status Indicator & Admin Login */}
           <div className="flex items-center gap-2 sm:gap-3 text-xs">
             <div className="flex items-center gap-2 text-slate-300 bg-slate-950 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-800">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -92,6 +98,33 @@ export function Header({
                 <StatusBadge status="error" label="Connecting..." />
               )}
             </div>
+
+            {authUser ? (
+              <button
+                id="header-admin-logout-btn"
+                onClick={onLogout}
+                title={`Signed in as ${authUser.admin ? 'System Admin' : 'User'} (${authUser.email}). Click to sign out.`}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                  authUser.admin
+                    ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                    : 'bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/30'
+                }`}
+              >
+                {authUser.admin ? <UserCheck className="w-3.5 h-3.5" /> : <User className="w-3.5 h-3.5" />}
+                <span className="hidden sm:inline">{authUser.admin ? 'Admin' : 'User'}</span>
+                <LogOut className="w-3 h-3 ml-0.5 opacity-70" />
+              </button>
+            ) : (
+              <button
+                id="header-admin-login-btn"
+                onClick={onOpenLoginModal}
+                title="Sign In / Register"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-lg text-xs font-medium transition-colors cursor-pointer"
+              >
+                <Lock className="w-3.5 h-3.5 text-slate-400" />
+                <span className="hidden sm:inline">Sign In / Register</span>
+              </button>
+            )}
 
             <button
               id="header-refresh-health-btn"

@@ -340,6 +340,15 @@ export interface SignalsListResponse {
   signals: TradingSignal[];
   activeCount: number;
   timestamp: number;
+  persistedActiveCount?: number;
+  filteredCount?: number;
+  rejectionReason?: string;
+  diagnostics?: {
+    activeCount: number;
+    persistedActiveCount: number;
+    filteredCount: number;
+    rejectionReason?: string;
+  };
 }
 
 export type OpportunityFunnelStage =

@@ -68,6 +68,17 @@ export class SignalValidator {
     const now = ctx.simulatedTimeMs || Date.now();
     const snapshotId = `snap_${now}_${ctx.symbol}_${Math.random().toString(36).substring(2, 7)}`;
 
+    // 0. Artificial / Default Price Rejection (GATE 10: Never use 50000, 49000, 52000 or hardcoded default prices)
+    if (ctx.entryPrice === 50000 || ctx.stopLoss === 49000 || ctx.takeProfit === 52000 || (ctx.liveTicker && ctx.liveTicker.price === 50000)) {
+      return {
+        isValid: false,
+        validationReason: 'INVALID_ENTRY',
+        detailedMessage: `Artificial default price (50000/49000/52000) rejected by Gate 10 contamination filter for ${ctx.symbol}`,
+        snapshotId,
+        validatedAt: now,
+      };
+    }
+
     // 1. Market Data Availability Check
     if (!ctx.liveTicker || ctx.liveTicker.status === 'MARKET_DATA_UNAVAILABLE' || ctx.liveTicker.price <= 0) {
       return {

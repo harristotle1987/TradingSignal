@@ -1,4 +1,4 @@
-import { TradingSignal, SignalGenerationResponse, NormalizedCandle, NormalizedTicker, SignalDirection } from '../../types/index.js';
+import { TradingSignal, SignalGenerationResponse, NormalizedCandle, NormalizedTicker, SignalDirection, isActionableSignal } from '../../types/index.js';
 import { marketDataManager } from '../market/MarketDataManager.js';
 import { quotaManager } from '../market/QuotaManager.js';
 import { MarketSessionManager } from '../market/MarketSessionManager.js';
@@ -108,7 +108,20 @@ export async function runStagedPipeline(
 
   // 1. Check duplicate / active signal cooldown
   const existingSignal = engine.activeSignals.get(cleanSymbol);
-  if (existingSignal && now - existingSignal.timestamp < 8 * 60 * 1000) {
+  const isExistingExpired = existingSignal && (
+    existingSignal.status === 'EXPIRED' ||
+    existingSignal.status === 'TP_HIT' ||
+    existingSignal.status === 'SL_HIT' ||
+    existingSignal.status === 'TP3_HIT' ||
+    existingSignal.status === 'CANCELLED' ||
+    existingSignal.status === 'COMPLETED' ||
+    existingSignal.status === 'SUPERSEDED' ||
+    (existingSignal.expiresAt && now > existingSignal.expiresAt) ||
+    now - existingSignal.timestamp > serverConfig.getConfig().signalExpirationMs
+  );
+  if (isExistingExpired) {
+    engine.activeSignals.delete(cleanSymbol);
+  } else if (existingSignal && isActionableSignal(existingSignal) && now - existingSignal.timestamp < 8 * 60 * 1000) {
     logger.info('Returning existing active signal within cooldown window', { symbol: cleanSymbol, id: existingSignal.id, snapshotId: existingSignal.snapshotId });
     profiler.endScan();
     setActiveProfiler(null);

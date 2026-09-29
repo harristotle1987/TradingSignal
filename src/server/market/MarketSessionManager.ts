@@ -71,6 +71,7 @@ export class MarketSessionManager {
 
   /**
    * Sets a simulated system time for testing. Pass null to resume real-time mode.
+   * Clears the market session status cache so new simulation timestamps take effect immediately.
    */
   static setMockTimestamp(timestamp: number | null): void {
     if (process.env.NODE_ENV === 'production') {
@@ -78,10 +79,22 @@ export class MarketSessionManager {
       return;
     }
     this.mockTimestamp = timestamp;
+    this.clearSessionCache();
     logger.info('Simulated system time updated', {
       timestamp,
       formatted: timestamp ? new Date(timestamp).toISOString() : 'REAL_TIME',
     });
+  }
+
+  /**
+   * Clears cached market session statuses for an individual symbol or all symbols.
+   */
+  static clearSessionCache(symbol?: string): void {
+    if (symbol) {
+      marketCache.deleteGeneric(`${symbol}:session_status`);
+    } else {
+      marketCache.clearSessionStatusKeys();
+    }
   }
 
   /**
