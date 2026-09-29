@@ -9,8 +9,8 @@ import { logger } from '../logger.js';
 import { MarketSessionManager } from '../market/MarketSessionManager.js';
 import { requestRegistry } from '../market/CacheStore.js';
 import { adminAuthMiddleware } from '../middleware/adminAuth.js';
-import { validateRequest } from '../middleware/validateInput.js';
-import { marketPriceQuerySchema, marketSessionQuerySchema } from '../validation/schemas.js';
+import { validateInput } from '../middleware/validateInput.js';
+import { symbolSchema, candlesQuerySchema } from '../validation/schemas.js';
 
 const router = Router();
 
@@ -116,7 +116,7 @@ router.get('/market/forex/price', async (req: Request, res: Response) => {
  * GET /api/market/price?symbol=BTCUSDT&provider=bitget
  * Unified market price endpoint using MarketDataManager
  */
-router.get('/market/price', validateRequest({ query: marketPriceQuerySchema }), async (req: Request, res: Response) => {
+router.get('/market/price', async (req: Request, res: Response) => {
   const symbol = (req.query.symbol as string) || 'BTCUSDT';
   const provider = req.query.provider as string | undefined;
   const reasonParam = (req.query.reason as string) || 'USER_CLICK';
@@ -135,7 +135,7 @@ router.get('/market/price', validateRequest({ query: marketPriceQuerySchema }), 
  * GET /api/market/session
  * Exposes the session status, asset classification, and timezone details of any symbol.
  */
-router.get('/market/session', validateRequest({ query: marketSessionQuerySchema }), (req: Request, res: Response) => {
+router.get('/market/session', (req: Request, res: Response) => {
   try {
     const symbol = (req.query.symbol as string) || 'EURUSD';
     const cleanSymbol = symbol.trim().toUpperCase();

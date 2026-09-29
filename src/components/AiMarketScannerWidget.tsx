@@ -21,8 +21,6 @@ import {
   Activity,
   Layers,
   Maximize2,
-  Lock,
-  Search,
 } from 'lucide-react';
 
 interface AiMarketScannerWidgetProps {
@@ -45,37 +43,6 @@ export function AiMarketScannerWidget({
   const { zoomLevel, zoomIn, zoomOut, resetZoom, setZoom } = useReportZoom(1.0, 0.7, 1.8, 0.15);
   const [inspectedSignal, setInspectedSignal] = useState<TradingSignal | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isAdminLoginOpen, setIsAdminLoginOpen] = useState(false);
-
-  // Specific Trade Search state (Gate 14)
-  const [searchSymbol, setSearchSymbol] = useState('BTCUSDT');
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchResult, setSearchResult] = useState<any | null>(null);
-
-  const handleSearchTrade = useCallback(async () => {
-    if (isSearching || !searchSymbol.trim()) return;
-
-    setIsSearching(true);
-    setError(null);
-    setSearchResult(null);
-    setScanResult(null);
-
-    try {
-      const result = await api.searchSpecificTrade(searchSymbol.trim());
-      if (result) {
-        setSearchResult(result);
-        if (result.success && result.signal && onSignalsUpdated) {
-          onSignalsUpdated();
-        }
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn('[AiMarketScannerWidget] Specific trade search error:', msg);
-      setError(msg || 'Search failed. Admin credentials required.');
-    } finally {
-      setIsSearching(false);
-    }
-  }, [isSearching, searchSymbol, onSignalsUpdated]);
 
   const handleScanBestTrades = useCallback(async () => {
     if (isScanning) return;
@@ -118,41 +85,7 @@ export function AiMarketScannerWidget({
       clearTimeout(t2);
       clearTimeout(t3);
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn('[AiMarketScannerWidget] Manual scan triggered unauthenticated request:', msg);
-
-      // If unauthorized (non-admin guest), fall back seamlessly to current active live market signals feed
-      if (
-        msg.includes('Unauthorized') ||
-        msg.includes('401') ||
-        msg.includes('credentials') ||
-        msg.includes('Authentication required')
-      ) {
-        try {
-          const signalsResponse = await api.getSignals();
-          if (signalsResponse && Array.isArray(signalsResponse.signals) && signalsResponse.signals.length > 0) {
-            setScanResult({
-              success: true,
-              status: 'COMPLETED',
-              message: `Active live market scan complete. Displaying ${signalsResponse.signals.length} active signal(s).`,
-              timestamp: Date.now(),
-              lastScanTime: Date.now(),
-              acceptedSignalsCount: signalsResponse.signals.length,
-              acceptedSignals: signalsResponse.signals,
-              signalsFound: signalsResponse.signals.length,
-              qualifiedSetups: signalsResponse.signals,
-              rejectedCount: 0,
-              rejectionReasons: [],
-              capState: { currentCap: 10, signalsToday: signalsResponse.signals.length },
-            });
-            setError(null);
-            setIsScanning(false);
-            return;
-          }
-        } catch (fallbackErr) {
-          console.warn('[AiMarketScannerWidget] Active signals fallback error:', fallbackErr);
-        }
-      }
-
+      console.error('[AiMarketScannerWidget] Manual scan failed:', msg);
       setError(msg || 'Failed to complete market scan. Please try again.');
       setScanResult(null);
     } finally {
@@ -227,56 +160,13 @@ export function AiMarketScannerWidget({
               </div>
             </div>
 
-            {/* Specific Trade Search Control (Gate 14) */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 space-y-2 shadow-sm">
-              <label htmlFor="input-search-trade" className="block text-[11px] font-bold text-slate-300 font-mono">
-                Search specific trade
-              </label>
-              <div className="flex gap-2">
-                <input
-                  id="input-search-trade"
-                  type="text"
-                  value={searchSymbol}
-                  onChange={(e) => setSearchSymbol(e.target.value.toUpperCase())}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleSearchTrade();
-                    }
-                  }}
-                  placeholder="BTCUSDT"
-                  disabled={isSearching || isScanning}
-                  className="flex-1 bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs font-mono text-white placeholder-slate-500 focus:outline-none transition uppercase"
-                />
-                <button
-                  type="button"
-                  id="btn-search-trade"
-                  onClick={handleSearchTrade}
-                  disabled={isSearching || isScanning || !searchSymbol.trim()}
-                  className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold px-3 py-2 rounded-xl text-xs font-mono transition flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed shrink-0 shadow-sm"
-                >
-                  {isSearching ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Searching...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Search className="w-3.5 h-3.5" />
-                      <span>Search Trade</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            {/* Scan Best Trades Action Control */}
+            {/* Scan Action Control */}
             <div className="space-y-2 pt-1">
               <button
                 type="button"
                 id="btn-scan-best-trades"
                 onClick={handleScanBestTrades}
-                disabled={isScanning || isSearching}
+                disabled={isScanning}
                 className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-60 text-white font-bold py-2.5 px-4 rounded-xl shadow-lg border border-emerald-400/30 transition flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed text-xs font-mono uppercase tracking-wider"
               >
                 {isScanning ? (
@@ -292,97 +182,6 @@ export function AiMarketScannerWidget({
                 )}
               </button>
             </div>
-
-            {/* Specific Trade Search Progress Indicator */}
-            {isSearching && (
-              <div className="bg-slate-900/80 border border-emerald-500/30 rounded-xl p-3 space-y-2 animate-pulse">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-emerald-400 font-mono font-semibold flex items-center gap-1.5">
-                    <Activity className="w-3.5 h-3.5 animate-spin" />
-                    Evaluating {searchSymbol}
-                  </span>
-                  <span className="text-slate-400 text-[10px] font-mono">36-Gate Confluence</span>
-                </div>
-                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                  <div className="bg-gradient-to-r from-emerald-500 to-teal-400 h-1.5 rounded-full w-2/3 animate-pulse"></div>
-                </div>
-                <p className="text-[10px] text-slate-300 font-mono text-center">
-                  Testing market-data, MTF, structure, scoring, TP/SL (≥2:1)...
-                </p>
-              </div>
-            )}
-
-            {/* Specific Trade Search Result */}
-            {searchResult && !isSearching && (
-              <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 space-y-2.5">
-                {searchResult.success && searchResult.signal ? (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                      <span className="font-bold text-emerald-400 font-mono text-xs flex items-center gap-1.5">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                        <span>Trade Qualified: {searchResult.signal.symbol}</span>
-                      </span>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono ${
-                        searchResult.signal.direction === 'BUY' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'
-                      }`}>
-                        {searchResult.signal.direction}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
-                      <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
-                        <span className="text-slate-400 text-[10px] block">Entry Price</span>
-                        <span className="font-bold text-white">${searchResult.signal.entryPrice}</span>
-                      </div>
-                      <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
-                        <span className="text-slate-400 text-[10px] block">Stop Loss</span>
-                        <span className="font-bold text-rose-400">${searchResult.signal.stopLoss}</span>
-                      </div>
-                      <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
-                        <span className="text-slate-400 text-[10px] block">TP1 Target</span>
-                        <span className="font-bold text-emerald-400">${searchResult.signal.tp1}</span>
-                      </div>
-                      <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
-                        <span className="text-slate-400 text-[10px] block">Risk : Reward</span>
-                        <span className="font-bold text-emerald-400">{searchResult.signal.riskRewardRatio}:1</span>
-                      </div>
-                    </div>
-                    {searchResult.signal.strategy && (
-                      <p className="text-[10px] text-slate-400 font-mono">
-                        Strategy: <span className="text-slate-300">{searchResult.signal.strategy}</span> | Score: <span className="text-emerald-400 font-bold">{searchResult.signal.score}/100</span>
-                      </p>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => onSelectSymbol?.(searchResult.signal.symbol)}
-                      className="w-full mt-1 py-1.5 bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40 rounded-lg text-[10px] font-mono font-bold transition flex items-center justify-center gap-1 cursor-pointer"
-                    >
-                      <span>Select {searchResult.signal.symbol} on Chart</span>
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                      <span className="font-bold text-amber-400 font-mono text-xs flex items-center gap-1.5">
-                        <AlertCircle className="w-4 h-4 text-amber-400" />
-                        <span>No Qualified Trade: {searchResult.symbol || searchSymbol}</span>
-                      </span>
-                      {searchResult.marketPrice && (
-                        <span className="text-[10px] font-mono text-slate-400">
-                          Live: ${searchResult.marketPrice}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-[11px] text-slate-300 leading-relaxed font-mono bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/80">
-                      {searchResult.reason || searchResult.rejectionReasons?.[0] || 'Setup did not meet 36-gate qualification thresholds.'}
-                    </p>
-                    <p className="text-[10px] text-slate-500 font-mono">
-                      Full 36-gate qualification pipeline executed without bypass. No placeholder signal generated.
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
 
             {/* Scanning / Progress State */}
             {isScanning && (
@@ -408,31 +207,16 @@ export function AiMarketScannerWidget({
               <div className="bg-rose-950/40 border border-rose-900/50 rounded-xl p-3 space-y-2.5 text-rose-300 text-[11px]">
                 <div className="flex items-center gap-1.5 font-semibold text-rose-400">
                   <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>Scan Requires Authentication</span>
+                  <span>Scan Failed</span>
                 </div>
-                <p className="text-slate-300 text-[10px] leading-relaxed">
-                  {error.includes('Unauthorized') || error.includes('401') || error.includes('credentials') || error.includes('Authentication required')
-                    ? 'Admin authentication required to trigger manual market scans.'
-                    : error}
-                </p>
+                <p className="text-slate-300 text-[10px] leading-relaxed">{error}</p>
 
                 <div className="flex items-center gap-2 pt-1">
-                  {(error.includes('Unauthorized') || error.includes('401') || error.includes('credentials') || error.includes('Authentication required')) && (
-                    <button
-                      type="button"
-                      id="btn-admin-login-scan"
-                      onClick={() => setIsAdminLoginOpen(true)}
-                      className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-mono font-bold transition cursor-pointer uppercase tracking-wider flex items-center gap-1.5 shadow-sm"
-                    >
-                      <Lock className="w-3 h-3" />
-                      <span>Sign In as Admin</span>
-                    </button>
-                  )}
                   <button
                     type="button"
                     id="btn-retry-ai-scan"
                     onClick={handleScanBestTrades}
-                    className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[10px] border border-slate-700 transition cursor-pointer font-mono font-bold uppercase tracking-wider"
+                    className="px-2.5 py-1.5 bg-rose-900/50 hover:bg-rose-900 text-rose-200 rounded-lg text-[10px] border border-rose-700/50 transition cursor-pointer font-mono font-bold uppercase tracking-wider"
                   >
                     Retry Scan
                   </button>
@@ -702,17 +486,6 @@ export function AiMarketScannerWidget({
         signal={inspectedSignal}
         isOpen={!!inspectedSignal}
         onClose={() => setInspectedSignal(null)}
-      />
-
-      {/* Embedded Admin Login Modal */}
-      <LoginModal
-        isOpen={isAdminLoginOpen}
-        onClose={() => setIsAdminLoginOpen(false)}
-        onSuccess={() => {
-          setIsAdminLoginOpen(false);
-          setError(null);
-          handleScanBestTrades();
-        }}
       />
     </>
   );

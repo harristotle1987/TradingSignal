@@ -6,12 +6,8 @@ import { Router, Request, Response } from 'express';
 import { PushNotificationService } from '../notifications/PushNotificationService.js';
 import { logger } from '../logger.js';
 import { adminAuthMiddleware } from '../middleware/adminAuth.js';
-import { validateRequest } from '../middleware/validateInput.js';
-import {
-  subscribeNotificationSchema,
-  unsubscribeNotificationSchema,
-  testNotificationSchema,
-} from '../validation/schemas.js';
+import { validateInput } from '../middleware/validateInput.js';
+import { pushSubscriptionSchema } from '../validation/schemas.js';
 
 const router = Router();
 
@@ -39,46 +35,45 @@ router.get('/notifications/vapid-public-key', async (_req: Request, res: Respons
 /**
  * POST /api/notifications/subscribe
  * Registers a client's PushSubscription in persistent storage.
- * Binds the subscription to the authenticated user's verified identity to prevent IDOR.
  */
-router.post('/notifications/subscribe', validateRequest({ body: subscribeNotificationSchema }), async (req: Request, res: Response) => {
-  try {
-    const { subscription } = req.body || {};
-    const userAgent = req.headers['user-agent'] || 'Unknown';
-    const userId = req.user?.uid;
-    const result = await PushNotificationService.registerSubscription(subscription, userAgent, userId);
+router.post(
+  '/notifications/subscribe',
+  validateInput(pushSubscriptionSchema, 'body'),
+  async (req: Request, res: Response) => {
+    try {
+      const { subscription } = req.body || {};
+      const userAgent = req.headers['user-agent'] || 'Unknown';
+      const result = await PushNotificationService.registerSubscription(subscription, userAgent);
 
-    res.status(200).json({
-      success: true,
-      message: 'Push subscription registered successfully',
-      id: result.id,
-    });
-  } catch (err: any) {
-    logger.error('Push subscription failed:', { error: String(err) });
-    res.status(500).json({
-      success: false,
-      message: 'Failed to register push subscription',
-      error: err?.message || String(err),
-    });
+      res.status(200).json({
+        success: result.success,
+        id: result.id,
+        message: result.success
+          ? 'Push notification subscription registered successfully'
+          : 'Failed to persist subscription',
+      });
+    } catch (err: any) {
+      logger.error('Push subscription endpoint error:', { error: String(err) });
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error processing push subscription',
+        error: err?.message || String(err),
+      });
+    }
   }
-});
+);
 
 /**
  * POST /api/notifications/unsubscribe
  * Unregisters a client's PushSubscription.
- * Strictly checks that a user cannot unsubscribe another user's subscription (IDOR protection).
  */
-router.post('/notifications/unsubscribe', validateRequest({ body: unsubscribeNotificationSchema }), async (req: Request, res: Response) => {
+router.post('/notifications/unsubscribe', async (req: Request, res: Response) => {
   try {
     const { endpoint } = req.body || {};
-
-    // IDOR verification: Check if subscription exists and belongs to another user
-    const existing = PushNotificationService.getSubscriptionByEndpoint(endpoint);
-    if (existing && existing.userId && req.user && !req.user.admin && existing.userId !== req.user.uid) {
-      logger.warn(`[Notifications] IDOR violation: user ${req.user.uid} tried to unsubscribe subscription of ${existing.userId}`);
-      return res.status(403).json({
+    if (!endpoint) {
+      return res.status(400).json({
         success: false,
-        error: 'Forbidden: Cannot modify or remove a subscription belonging to another user (IDOR violation).',
+        message: 'Endpoint is required to unsubscribe',
       });
     }
 
@@ -100,22 +95,10 @@ router.post('/notifications/unsubscribe', validateRequest({ body: unsubscribeNot
 /**
  * POST /api/notifications/test
  * Triggers a test push notification to verify delivery.
- * IDOR protected: verifies the target endpoint belongs to the authenticated user.
  */
-router.post('/notifications/test', validateRequest({ body: testNotificationSchema }), async (req: Request, res: Response) => {
+router.post('/notifications/test', async (req: Request, res: Response) => {
   try {
     const { subscription } = req.body || {};
-    if (subscription?.endpoint) {
-      const existing = PushNotificationService.getSubscriptionByEndpoint(subscription.endpoint);
-      if (existing && existing.userId && req.user && !req.user.admin && existing.userId !== req.user.uid) {
-        logger.warn(`[Notifications] IDOR violation: user ${req.user.uid} tried to send test to subscription of ${existing.userId}`);
-        return res.status(403).json({
-          success: false,
-          error: 'Forbidden: Cannot test a push subscription belonging to another user (IDOR violation).',
-        });
-      }
-    }
-
     const result = await PushNotificationService.sendTestPush(subscription);
     res.status(result.success ? 200 : 400).json(result);
   } catch (err: any) {

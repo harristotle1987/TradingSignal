@@ -17,39 +17,10 @@ import { AlertTriangle, RefreshCw } from 'lucide-react';
 export default function App() {
   const [activeTab, setActiveTab] = useState<NavigationTab>('SIGNALS');
   const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [isLoginOpen, setIsLoginOpen] = useState<boolean>(false);
 
   const [loadingHealth, setLoadingHealth] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-
-  const [authUser, setAuthUser] = useState<{ uid: string; email: string; admin: boolean; role?: 'ADMIN' | 'USER' } | null>(null);
-  const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
-
-  const checkAuthStatus = useCallback(async () => {
-    try {
-      const res = await api.getAuthMe();
-      if (res.authenticated && res.user) {
-        setAuthUser({
-          uid: res.user.uid,
-          email: res.user.email,
-          admin: res.admin === true,
-          role: res.role || (res.admin ? 'ADMIN' : 'USER'),
-        });
-      } else {
-        setAuthUser(null);
-      }
-    } catch {
-      setAuthUser(null);
-    }
-  }, []);
-
-  const handleLogout = async () => {
-    try {
-      await api.logout();
-      setAuthUser(null);
-    } catch (err) {
-      console.error('Logout error:', err);
-    }
-  };
 
   const fetchHealth = useCallback(async () => {
     setLoadingHealth(true);
@@ -67,30 +38,25 @@ export default function App() {
 
   useEffect(() => {
     fetchHealth();
-    checkAuthStatus();
-  }, [fetchHealth, checkAuthStatus]);
+  }, [fetchHealth]);
 
   return (
     <div className="min-h-screen min-h-[100dvh] w-full max-w-[100vw] overflow-x-hidden bg-slate-950 text-slate-100 font-sans flex flex-col selection:bg-emerald-500/20 selection:text-emerald-200 pt-14 sm:pt-16">
-      {/* Header with Navigation & Auth */}
+      {/* Header with Navigation */}
       <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         health={health}
         loadingHealth={loadingHealth}
         onRefreshHealth={fetchHealth}
-        authUser={authUser}
-        onOpenLoginModal={() => setIsLoginModalOpen(true)}
-        onLogout={handleLogout}
       />
 
-      {/* Admin Login Modal */}
+      {/* Authentication Modal */}
       <LoginModal
-        isOpen={isLoginModalOpen}
-        onClose={() => setIsLoginModalOpen(false)}
-        onSuccess={(user) => {
-          setAuthUser(user);
-          setIsLoginModalOpen(false);
+        isOpen={isLoginOpen}
+        onClose={() => setIsLoginOpen(false)}
+        onLoginSuccess={() => {
+          fetchHealth();
         }}
       />
 
