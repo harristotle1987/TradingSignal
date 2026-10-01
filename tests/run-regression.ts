@@ -1,4 +1,5 @@
 process.env.TEST_MODE = 'true';
+process.env.VERCEL = '1';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Gate31NewsRiskClassification, ScheduledNewsEvent } from '../src/server/signals/Gate31NewsRiskClassification.js';
@@ -43,6 +44,8 @@ import { SignalLifecycleManager } from '../src/server/signals/SignalLifecycleMan
 import { SignalLogger, isProductionRecord } from '../src/server/signals/SignalLogger.js';
 import { SignalOutcomeLogger } from '../src/server/signals/SignalOutcomeLogger.js';
 import { ScannerPersistence, PersistedSentSignal, isValidActiveSignal } from '../src/server/signals/ScannerPersistence.js';
+import { runGate9ActiveSignalRegression } from './gate9-active-signals-regression.test.js';
+import { runVercelEntrypointTests } from './vercel-entrypoint.test.js';
 import { setMockFirestoreAdmin } from '../src/server/firebaseAdmin.js';
 import { setMockNeonPool } from '../src/server/infrastructure/neon/db.js';
 import { mockNeonStore } from '../src/server/infrastructure/neon/mockDb.js';
@@ -4277,29 +4280,22 @@ async function runAll() {
     });
 
     await test('Clear diagnostics returned from getActiveSignalsDetailed when zero active signals exist', async () => {
-      const emptyMockFirestore = {
-        collection: () => ({
-          where: () => ({
-            get: async () => ({ empty: true, docs: [], forEach: () => {} }),
-          }),
-          doc: () => ({
-            get: async () => ({ exists: false, data: () => null }),
-            set: async () => {},
-          }),
-        }),
-      } as any;
-      setMockFirestoreAdmin(emptyMockFirestore);
-      try {
-        const res = await ScannerPersistence.getActiveSignalsDetailed();
-        assert(res.activeCount === 0, 'Active count must be 0');
-        assert(res.signals.length === 0, 'Signals array must be empty');
-        assert(res.persistedActiveCount === 0, 'Persisted active count must be 0');
-        assert(res.filteredCount === 0, 'Filtered count must be 0');
-        assert(res.rejectionReason !== undefined && res.rejectionReason.length > 0, 'Rejection reason must be defined');
-        assert(res.diagnostics.activeCount === 0, 'Diagnostics activeCount must be 0');
-      } finally {
-        setMockFirestoreAdmin(undefined);
-      }
+      ScannerPersistence.localData.sentSignals = [];
+      const res = await ScannerPersistence.getActiveSignalsDetailed();
+      assert(res.activeCount === 0, 'Active count must be 0');
+      assert(res.signals.length === 0, 'Signals array must be empty');
+      assert(res.persistedActiveCount === 0, 'Persisted active count must be 0');
+      assert(res.filteredCount === 0, 'Filtered count must be 0');
+      assert(res.rejectionReason !== undefined && res.rejectionReason.length > 0, 'Rejection reason must be defined');
+      assert(res.diagnostics.activeCount === 0, 'Diagnostics activeCount must be 0');
+    });
+
+    await test('GATE 9: Complete active signal display regression verification', async () => {
+      await runGate9ActiveSignalRegression();
+    });
+
+    await test('Vercel Entrypoint: Guarded serverless handler verification', async () => {
+      await runVercelEntrypointTests();
     });
   });
 

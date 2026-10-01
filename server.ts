@@ -9,8 +9,18 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
 
+const isTestOrVercel =
+  process.env.TEST_MODE === 'true' ||
+  process.env.VERCEL === '1' ||
+  Boolean(process.env.VERCEL_ENV) ||
+  process.env.NODE_ENV === 'test';
+
 // Load environment variables
 dotenv.config();
+
+if (isTestOrVercel) {
+  process.env.TEST_MODE = 'true';
+}
 
 import { logger } from './src/server/logger.js';
 import { corsMiddleware } from './src/server/middleware/cors.js';
@@ -27,8 +37,15 @@ import { SignalLifecycleManager } from './src/server/signals/SignalLifecycleMana
 import { PushNotificationService } from './src/server/notifications/PushNotificationService.js';
 import { SignalSensitivityManager } from './src/server/signals/SignalSensitivityManager.js';
 import { RateLimiter, CSRFProtection, InputValidator } from './src/server/security/SecurityService.js';
+import { verifyProductionReadiness } from './src/server/infrastructure/index.js';
 
 export async function createServer() {
+  // Gate 5: Production Database Readiness Check (Verifies required tables before accepting requests)
+  const readiness = await verifyProductionReadiness();
+  if (!readiness.ready && process.env.NODE_ENV === 'production') {
+    logger.error('[Server Startup] Production readiness check failed:', { missingTables: readiness.missingTables });
+  }
+
   const app = express();
 
   // Initialize Sensitivity and Calibration Manager
@@ -133,39 +150,55 @@ export async function createServer() {
   return app;
 }
 
-// Start listener only when run directly (not as a serverless function)
-if (process.env.VERCEL !== '1' && !process.env.VERCEL_ENV) {
-  const PORT = 3000;
+// Start listener only when run directly (not as a serverless function or in test mode)
+if (
+  process.env.VERCEL !== '1' &&
+  !process.env.VERCEL_ENV &&
+  process.env.TEST_MODE !== 'true' &&
+  process.env.NODE_ENV !== 'test'
+) {
+  const PORT = parseInt(process.env.PORT || '3000', 10);
   const HOST = '0.0.0.0';
-  createServer().then((app) => {
-    app.listen(PORT, HOST, () => {
-      logger.info(`Trading Signal System server running on http://${HOST}:${PORT}`);
-      
-      // Perform startup repair of any active signals with duplicate or invalid TPs
-      RepairService.repairActiveSignals().catch((err) => {
-        logger.error('[StartupRepair] Failed to run active signals repair:', { error: String(err) });
+  createServer()
+    .then((app) => {
+      const server = app.listen(PORT, HOST, () => {
+        logger.info(`Trading Signal System server running on http://${HOST}:${PORT}`);
+
+        // Perform startup repair of any active signals with duplicate or invalid TPs
+        RepairService.repairActiveSignals().catch((err) => {
+          logger.error('[StartupRepair] Failed to run active signals repair:', { error: String(err) });
+        });
+
+        // Perform initial historical outcome backfill across all existing active signals
+        SignalLifecycleManager.backfillHistoricalOutcomesForActiveSignals()
+          .then((backfillRes) => {
+            logger.info('[StartupBackfill] Initial active signals outcome backfill completed:', { ...backfillRes });
+          })
+          .catch((err) => {
+            logger.warn('[StartupBackfill] Failed to run initial outcome backfill on startup:', { error: String(err) });
+          });
+
+        // Initialize Push Notification Service
+        PushNotificationService.init().catch((pushInitErr) => {
+          logger.warn('[Push Notification] Startup initialization warning:', { error: String(pushInitErr) });
+        });
+
+        try {
+          hourlyScanner.start();
+        } catch (scanErr) {
+          logger.error('Failed to start background hourly scanner service:', { error: String(scanErr) });
+        }
       });
 
-      // Perform initial historical outcome backfill across all existing active signals
-      SignalLifecycleManager.backfillHistoricalOutcomesForActiveSignals().then((backfillRes) => {
-        logger.info('[StartupBackfill] Initial active signals outcome backfill completed:', { ...backfillRes });
-      }).catch((err) => {
-        logger.warn('[StartupBackfill] Failed to run initial outcome backfill on startup:', { error: String(err) });
+      server.on('error', (err: any) => {
+        if (err?.code === 'EADDRINUSE') {
+          logger.warn(`Port ${PORT} is already bound. Standalone listener skipped.`);
+        } else {
+          logger.error('Server listener error:', { error: String(err) });
+        }
       });
-
-      // Initialize Push Notification Service
-      PushNotificationService.init().catch((pushInitErr) => {
-        logger.warn('[Push Notification] Startup initialization warning:', { error: String(pushInitErr) });
-      });
-
-      try {
-        hourlyScanner.start();
-      } catch (scanErr) {
-        logger.error('Failed to start background hourly scanner service:', { error: String(scanErr) });
-      }
+    })
+    .catch((err) => {
+      logger.error('Failed to start server:', { error: String(err) });
     });
-  }).catch((err) => {
-    console.error('Failed to start server:', err);
-    process.exit(1);
-  });
 }

@@ -288,25 +288,28 @@ export class SignalLogger {
   public static async init(): Promise<void> {
     if (this.isInitialized) return;
 
-    // 1. Read from local disk file first
-    try {
-      if (fs.existsSync(LOCAL_SIGNAL_LOG_PATH)) {
-        const raw = fs.readFileSync(LOCAL_SIGNAL_LOG_PATH, 'utf-8');
-        const parsed: SignalLogRecord[] = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          for (const item of parsed) {
-            if (item && item.id) {
-              this.logs.set(item.id, item);
+    const isProd = process.env.NODE_ENV === 'production';
+    if (!isProd) {
+      // 1. Read from local disk file in development/testing only
+      try {
+        if (fs.existsSync(LOCAL_SIGNAL_LOG_PATH)) {
+          const raw = fs.readFileSync(LOCAL_SIGNAL_LOG_PATH, 'utf-8');
+          const parsed: SignalLogRecord[] = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            for (const item of parsed) {
+              if (item && item.id) {
+                this.logs.set(item.id, item);
+              }
             }
+            logger.info(`[SignalLogger] Loaded ${this.logs.size} signal records from local storage.`);
           }
-          logger.info(`[SignalLogger] Loaded ${this.logs.size} signal records from local storage.`);
         }
+      } catch (err) {
+        logger.warn('[SignalLogger] Could not read local signal log file:', { error: String(err) });
       }
-    } catch (err) {
-      logger.warn('[SignalLogger] Could not read local signal log file:', { error: String(err) });
     }
 
-    // 2. Sync from Firestore Admin if available
+    // 2. Sync from Neon if available
     await this.syncFromFirestore();
 
     this.isInitialized = true;

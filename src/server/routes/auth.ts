@@ -12,21 +12,28 @@ import { Router, Request, Response } from 'express';
 import { NeonAuthService, SESSION_COOKIE_NAME } from '../auth/NeonAuthService.js';
 import { extractSessionToken } from '../middleware/adminAuth.js';
 import { logger } from '../logger.js';
-import { SEC_AUTH } from '../security/SecurityService.js';
+import { SEC_AUTH, RateLimiter } from '../security/SecurityService.js';
 
 const router = Router();
+
+// Server-Side Rate Limiter for Authentication Endpoints (Brute-Force & Credential Stuffing Defense)
+const authRateLimiter = RateLimiter.create({
+  windowMs: 60 * 1000, // 1 minute window
+  maxRequests: 25, // 25 attempts per minute per IP
+  endpointName: 'AuthEndpoint',
+});
 
 /**
  * POST /api/auth/register
  * Registers a new user. The very first user atomically becomes the ONLY ADMIN.
  */
-router.post('/auth/register', async (req: Request, res: Response) => {
+router.post('/auth/register', authRateLimiter, async (req: Request, res: Response) => {
   try {
     const { email, password, displayName } = req.body || {};
 
     const clientIp = typeof req.headers['x-forwarded-for'] === 'string'
       ? req.headers['x-forwarded-for'].split(',')[0].trim()
-      : req.socket.remoteAddress || '127.0.0.1';
+      : req.socket?.remoteAddress || (req as any).connection?.remoteAddress || '127.0.0.1';
     const userAgent = req.headers['user-agent'] || undefined;
 
     const result = await NeonAuthService.register({
@@ -84,17 +91,13 @@ router.post('/auth/register', async (req: Request, res: Response) => {
   }
 });
 
-/**
- * POST /api/auth/session
- * Authenticates user credentials and issues an HttpOnly session cookie.
- */
-router.post('/auth/session', async (req: Request, res: Response) => {
+const handleLogin = async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body || {};
 
     const clientIp = typeof req.headers['x-forwarded-for'] === 'string'
       ? req.headers['x-forwarded-for'].split(',')[0].trim()
-      : req.socket.remoteAddress || '127.0.0.1';
+      : req.socket?.remoteAddress || (req as any).connection?.remoteAddress || '127.0.0.1';
     const userAgent = req.headers['user-agent'] || undefined;
 
     const result = await NeonAuthService.authenticate({
@@ -147,7 +150,14 @@ router.post('/auth/session', async (req: Request, res: Response) => {
       timestamp: Date.now(),
     });
   }
-});
+};
+
+/**
+ * POST /api/auth/session & POST /api/auth/login
+ * Authenticates user credentials and issues an HttpOnly session cookie.
+ */
+router.post('/auth/session', authRateLimiter, handleLogin);
+router.post('/auth/login', authRateLimiter, handleLogin);
 
 /**
  * GET /api/auth/me

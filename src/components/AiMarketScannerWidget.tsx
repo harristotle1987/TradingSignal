@@ -43,6 +43,7 @@ export function AiMarketScannerWidget({
   const { zoomLevel, zoomIn, zoomOut, resetZoom, setZoom } = useReportZoom(1.0, 0.7, 1.8, 0.15);
   const [inspectedSignal, setInspectedSignal] = useState<TradingSignal | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   const handleScanBestTrades = useCallback(async () => {
     if (isScanning) return;
@@ -207,19 +208,39 @@ export function AiMarketScannerWidget({
               <div className="bg-rose-950/40 border border-rose-900/50 rounded-xl p-3 space-y-2.5 text-rose-300 text-[11px]">
                 <div className="flex items-center gap-1.5 font-semibold text-rose-400">
                   <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>Scan Failed</span>
+                  <span>
+                    {error.toLowerCase().includes('unauthorized') || error.toLowerCase().includes('administrative')
+                      ? 'Admin Authentication Required'
+                      : 'Scan Failed'}
+                  </span>
                 </div>
-                <p className="text-slate-300 text-[10px] leading-relaxed">{error}</p>
+                <p className="text-slate-300 text-[10px] leading-relaxed">
+                  {error.toLowerCase().includes('unauthorized') || error.toLowerCase().includes('administrative')
+                    ? 'Administrative authentication is required to execute on-demand market scans. Please sign in or register.'
+                    : error}
+                </p>
 
                 <div className="flex items-center gap-2 pt-1">
-                  <button
-                    type="button"
-                    id="btn-retry-ai-scan"
-                    onClick={handleScanBestTrades}
-                    className="px-2.5 py-1.5 bg-rose-900/50 hover:bg-rose-900 text-rose-200 rounded-lg text-[10px] border border-rose-700/50 transition cursor-pointer font-mono font-bold uppercase tracking-wider"
-                  >
-                    Retry Scan
-                  </button>
+                  {error.toLowerCase().includes('unauthorized') || error.toLowerCase().includes('administrative') ? (
+                    <button
+                      type="button"
+                      id="btn-login-ai-scan"
+                      onClick={() => setIsAuthModalOpen(true)}
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] transition cursor-pointer font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 shadow-sm"
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      <span>Sign In as Admin</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      id="btn-retry-ai-scan"
+                      onClick={handleScanBestTrades}
+                      className="px-2.5 py-1.5 bg-rose-900/50 hover:bg-rose-900 text-rose-200 rounded-lg text-[10px] border border-rose-700/50 transition cursor-pointer font-mono font-bold uppercase tracking-wider"
+                    >
+                      Retry Scan
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -486,6 +507,16 @@ export function AiMarketScannerWidget({
         signal={inspectedSignal}
         isOpen={!!inspectedSignal}
         onClose={() => setInspectedSignal(null)}
+      />
+
+      {/* Admin Login / Registration Modal */}
+      <LoginModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onLoginSuccess={() => {
+          setIsAuthModalOpen(false);
+          handleScanBestTrades();
+        }}
       />
     </>
   );

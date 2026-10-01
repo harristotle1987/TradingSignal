@@ -101,8 +101,8 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
       return;
     }
 
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
+    if (password.length < 12) {
+      setError('Password must be at least 12 characters.');
       return;
     }
 

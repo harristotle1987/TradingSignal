@@ -29,9 +29,20 @@ import {
   RepositoryContainer,
 } from '../repositories.js';
 
+export class PersistenceUnavailableError extends Error {
+  code = 'PERSISTENCE_UNAVAILABLE';
+  constructor(message = 'Neon PostgreSQL persistence unavailable') {
+    super(message);
+    this.name = 'PersistenceUnavailableError';
+    Object.setPrototypeOf(this, PersistenceUnavailableError.prototype);
+  }
+}
+
 export class NeonSignalRepository implements ISignalRepository {
   async save(signal: Signal): Promise<{ success: boolean; error?: string }> {
-    if (!getNeonPool()) return { success: false, error: 'Neon database unavailable' };
+    if (!getNeonPool()) {
+      throw new PersistenceUnavailableError('Neon database pool is unavailable.');
+    }
 
     try {
       const result = await withNeonTransaction(async (client) => {
@@ -99,12 +110,14 @@ export class NeonSignalRepository implements ISignalRepository {
     } catch (err) {
       const errStr = String(err);
       logger.error('[NeonSignalRepository] Transactional save failed:', { error: errStr, id: signal.id });
-      return { success: false, error: errStr };
+      throw new PersistenceUnavailableError(`Transactional save failed: ${errStr}`);
     }
   }
 
   async findById(id: string): Promise<Signal | null> {
-    if (!getNeonPool()) return null;
+    if (!getNeonPool()) {
+      throw new PersistenceUnavailableError('Neon database pool is unavailable.');
+    }
     try {
       const rows = await queryNeon<{ payload_json: Signal }>(
         `SELECT payload_json FROM signals WHERE id = $1`,
@@ -113,13 +126,15 @@ export class NeonSignalRepository implements ISignalRepository {
       if (rows.length === 0) return null;
       return rows[0].payload_json;
     } catch (err) {
-      logger.warn('[NeonSignalRepository] findById failed:', { error: String(err), id });
-      return null;
+      logger.error('[NeonSignalRepository] findById failed:', { error: String(err), id });
+      throw new PersistenceUnavailableError(`findById failed: ${String(err)}`);
     }
   }
 
   async findActive(): Promise<Signal[]> {
-    if (!getNeonPool()) return [];
+    if (!getNeonPool()) {
+      throw new PersistenceUnavailableError('Neon database pool is unavailable.');
+    }
     try {
       const rows = await queryNeon<{ payload_json: Signal }>(
         `SELECT payload_json FROM signals
@@ -128,13 +143,15 @@ export class NeonSignalRepository implements ISignalRepository {
       );
       return rows.map((r) => r.payload_json);
     } catch (err) {
-      logger.warn('[NeonSignalRepository] findActive failed:', { error: String(err) });
-      return [];
+      logger.error('[NeonSignalRepository] findActive failed:', { error: String(err) });
+      throw new PersistenceUnavailableError(`findActive failed: ${String(err)}`);
     }
   }
 
   async findAll(limit = 200): Promise<Signal[]> {
-    if (!getNeonPool()) return [];
+    if (!getNeonPool()) {
+      throw new PersistenceUnavailableError('Neon database pool is unavailable.');
+    }
     try {
       const rows = await queryNeon<{ payload_json: Signal }>(
         `SELECT payload_json FROM signals ORDER BY timestamp DESC LIMIT $1`,
@@ -143,12 +160,14 @@ export class NeonSignalRepository implements ISignalRepository {
       return rows.map((r) => r.payload_json);
     } catch (err) {
       logger.warn('[NeonSignalRepository] findAll failed:', { error: String(err) });
-      return [];
+      throw new PersistenceUnavailableError(`findAll failed: ${String(err)}`);
     }
   }
 
   async updateStatus(id: string, status: string, metadata?: Partial<Signal>): Promise<void> {
-    if (!getNeonPool()) return;
+    if (!getNeonPool()) {
+      throw new PersistenceUnavailableError('Neon database pool is unavailable.');
+    }
     try {
       await withNeonTransaction(async (client) => {
         const existingRes = await client.query(`SELECT payload_json FROM signals WHERE id = $1`, [id]);
@@ -163,25 +182,32 @@ export class NeonSignalRepository implements ISignalRepository {
         );
       });
     } catch (err) {
-      logger.warn('[NeonSignalRepository] updateStatus failed:', { error: String(err), id, status });
+      logger.error('[NeonSignalRepository] updateStatus failed:', { error: String(err), id, status });
+      throw new PersistenceUnavailableError(`updateStatus failed: ${String(err)}`);
     }
   }
 
   async delete(id: string): Promise<void> {
-    if (!getNeonPool()) return;
+    if (!getNeonPool()) {
+      throw new PersistenceUnavailableError('Neon database pool is unavailable.');
+    }
     try {
       await queryNeon(`DELETE FROM signals WHERE id = $1`, [id]);
     } catch (err) {
       logger.warn('[NeonSignalRepository] delete failed:', { error: String(err), id });
+      throw new PersistenceUnavailableError(`delete failed: ${String(err)}`);
     }
   }
 
   async clear(): Promise<void> {
-    if (!getNeonPool()) return;
+    if (!getNeonPool()) {
+      throw new PersistenceUnavailableError('Neon database pool is unavailable.');
+    }
     try {
       await queryNeon(`DELETE FROM signals`);
     } catch (err) {
       logger.warn('[NeonSignalRepository] clear failed:', { error: String(err) });
+      throw new PersistenceUnavailableError(`clear failed: ${String(err)}`);
     }
   }
 }
@@ -237,7 +263,8 @@ export class NeonSignalOutcomeRepository implements ISignalOutcomeRepository {
         );
       });
     } catch (err) {
-      logger.warn('[NeonSignalOutcomeRepository] save failed:', { error: String(err), id: outcome.id });
+      logger.error('[NeonSignalOutcomeRepository] save failed:', { error: String(err), id: outcome.id });
+      throw new Error('PERSISTENCE_UNAVAILABLE');
     }
   }
 
@@ -641,7 +668,8 @@ export class NeonHistoricalTradeRepository implements IHistoricalTradeRepository
         ]
       );
     } catch (err) {
-      logger.warn('[NeonHistoricalTradeRepository] save failed:', { error: String(err), id: trade.id });
+      logger.error('[NeonHistoricalTradeRepository] save failed:', { error: String(err), id: trade.id });
+      throw new Error('PERSISTENCE_UNAVAILABLE');
     }
   }
 
@@ -654,8 +682,8 @@ export class NeonHistoricalTradeRepository implements IHistoricalTradeRepository
       );
       return rows.map((r) => r.payload_json);
     } catch (err) {
-      logger.warn('[NeonHistoricalTradeRepository] findAll failed:', { error: String(err) });
-      return [];
+      logger.error('[NeonHistoricalTradeRepository] findAll failed:', { error: String(err) });
+      throw new Error('PERSISTENCE_UNAVAILABLE');
     }
   }
 
@@ -669,8 +697,8 @@ export class NeonHistoricalTradeRepository implements IHistoricalTradeRepository
       );
       return rows.map((r) => r.payload_json);
     } catch (err) {
-      logger.warn('[NeonHistoricalTradeRepository] findBySymbol failed:', { error: String(err), symbol });
-      return [];
+      logger.error('[NeonHistoricalTradeRepository] findBySymbol failed:', { error: String(err), symbol });
+      throw new Error('PERSISTENCE_UNAVAILABLE');
     }
   }
 

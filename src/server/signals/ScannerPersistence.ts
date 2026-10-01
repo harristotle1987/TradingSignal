@@ -14,7 +14,6 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { getFirestoreAdmin } from '../firebaseAdmin.js';
 import { getNeonPool, queryNeon, withNeonTransaction } from '../infrastructure/neon/db.js';
 import {
   getSignalRepository,
@@ -361,10 +360,6 @@ export class ScannerPersistence {
   }
 
   public static isProductionPersistenceReady(): boolean {
-    const mock = getFirestoreAdmin();
-    if (mock !== undefined) {
-      return mock !== null;
-    }
     if (!ScannerPersistence.isProductionMode()) {
       return true;
     }
@@ -981,22 +976,6 @@ export class ScannerPersistence {
     this.init();
     const today = new Date().toISOString().split('T')[0];
 
-    const mock = getFirestoreAdmin();
-    if (mock !== undefined) {
-      if (!mock) return [];
-      try {
-        const snapshot = await mock.collection('scanner_sent_signals').where('date', '==', today).get();
-        if (!snapshot.empty) {
-          const list: PersistedSentSignal[] = [];
-          snapshot.forEach((doc: any) => list.push(doc.data()));
-          return list;
-        }
-        return [];
-      } catch {
-        return [];
-      }
-    }
-
     if (getNeonPool()) {
       try {
         const allSignals = (await getSignalRepository().findAll()) as PersistedSentSignal[];
@@ -1264,65 +1243,53 @@ export class ScannerPersistence {
       filteredCount: number;
       rejectionReason?: string;
     };
+    success?: boolean;
+    error?: string;
   }> {
     this.init();
     const isProd = this.isProductionMode();
 
     let candidateSignals: PersistedSentSignal[] = [];
 
-    const mock = getFirestoreAdmin();
-    if (mock !== undefined) {
-      if (!mock) {
-        return {
-          signals: [],
-          activeCount: 0,
-          persistedActiveCount: 0,
-          filteredCount: 0,
-          rejectionReason: 'Mock database empty',
-          diagnostics: { activeCount: 0, persistedActiveCount: 0, filteredCount: 0, rejectionReason: 'Mock database empty' },
-        };
-      }
-      try {
-        const snapshot = await mock.collection('scanner_sent_signals').where('status', 'in', ['ACTIVE', 'WAITING_ENTRY', 'TP1_HIT', 'TP2_HIT']).get();
-        if (snapshot.empty) {
-          candidateSignals = [];
-        } else {
-          candidateSignals = [];
-          snapshot.forEach((doc: any) => candidateSignals.push(doc.data()));
-        }
-      } catch {
-        candidateSignals = [];
-      }
-    } else if (getNeonPool()) {
+    // Production active-signal retrieval must be Neon PostgreSQL -> getSignalRepository() -> findActive()
+    if (getNeonPool()) {
       try {
         candidateSignals = (await getSignalRepository().findActive()) as PersistedSentSignal[];
       } catch (err) {
-        logger.warn('[ScannerPersistence] Neon getActiveSignals failed:', { error: String(err) });
-      }
-    } else if (isProd) {
-      const testFixtures = (this.localData.sentSignals || []).filter((s) => {
-        const stat = s.status || '';
-        const isTest = s.id?.includes('test') || s.id?.startsWith('snap_') || s.id?.startsWith('preserve_test_');
-        return isTest && (stat === 'ACTIVE' || stat === 'TP1_HIT' || stat === 'TP2_HIT' || stat === 'WAITING_ENTRY');
-      });
-      if (testFixtures.length > 0) {
-        candidateSignals = testFixtures;
-      } else {
-        logger.error('[ScannerPersistence] FAIL CLOSED: Cannot read active signals from local disk in production mode.');
+        logger.error('[ScannerPersistence] Neon getActiveSignals failed:', { error: String(err) });
         return {
+          success: false,
+          error: 'PERSISTENCE_UNAVAILABLE',
           signals: [],
           activeCount: 0,
           persistedActiveCount: 0,
           filteredCount: 0,
-          rejectionReason: 'Neon PostgreSQL persistence unavailable in production mode',
+          rejectionReason: 'Neon PostgreSQL persistence unavailable',
           diagnostics: {
             activeCount: 0,
             persistedActiveCount: 0,
             filteredCount: 0,
-            rejectionReason: 'Neon PostgreSQL persistence unavailable in production mode',
+            rejectionReason: 'Neon PostgreSQL persistence unavailable',
           },
         };
       }
+    } else if (isProd) {
+      logger.error('[ScannerPersistence] FAIL CLOSED: Neon database pool is unavailable in production mode.');
+      return {
+        success: false,
+        error: 'PERSISTENCE_UNAVAILABLE',
+        signals: [],
+        activeCount: 0,
+        persistedActiveCount: 0,
+        filteredCount: 0,
+        rejectionReason: 'Neon PostgreSQL persistence unavailable in production mode',
+        diagnostics: {
+          activeCount: 0,
+          persistedActiveCount: 0,
+          filteredCount: 0,
+          rejectionReason: 'Neon PostgreSQL persistence unavailable in production mode',
+        },
+      };
     } else {
       candidateSignals = (this.localData.sentSignals || []).filter((s) => {
         const stat = s.status || '';
@@ -1422,19 +1389,6 @@ export class ScannerPersistence {
   static async getSentSignals(): Promise<PersistedSentSignal[]> {
     this.init();
     const isProd = this.isProductionMode();
-    const mock = getFirestoreAdmin();
-    if (mock !== undefined) {
-      if (!mock) return [];
-      try {
-        const snapshot = await mock.collection('scanner_sent_signals').get();
-        if (snapshot.empty) return [];
-        const res: PersistedSentSignal[] = [];
-        snapshot.forEach((doc: any) => res.push(doc.data()));
-        return res;
-      } catch {
-        return [];
-      }
-    }
 
     if (getNeonPool()) {
       try {

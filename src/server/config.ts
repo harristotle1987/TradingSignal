@@ -7,7 +7,7 @@
  */
 
 import { logger } from './logger.js';
-import { isProductionPersistenceReady } from './firebaseAdmin.js';
+import { isProductionPersistenceReady } from './infrastructure/neon/db.js';
 
 export const TP1_ALLOCATION = 0.30;
 export const TP2_ALLOCATION = 0.30;

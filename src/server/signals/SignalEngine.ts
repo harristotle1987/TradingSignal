@@ -174,8 +174,22 @@ export class SignalEngine {
       filteredCount: number;
       rejectionReason?: string;
     };
+    success?: boolean;
+    error?: string;
   }> {
     const detailed = await ScannerPersistence.getActiveSignalsDetailed();
+    if (detailed.success === false || detailed.error === 'PERSISTENCE_UNAVAILABLE') {
+      return {
+        success: false,
+        error: 'PERSISTENCE_UNAVAILABLE',
+        signals: [],
+        activeCount: 0,
+        persistedActiveCount: 0,
+        filteredCount: 0,
+        rejectionReason: detailed.rejectionReason,
+        diagnostics: detailed.diagnostics,
+      };
+    }
     const persisted = detailed.signals;
 
     this.activeSignals.clear();

@@ -15,12 +15,14 @@ import { NotificationService, NotificationPermissionStatus } from '../utils/noti
 import { SignalHistoryPanel } from './SignalHistoryPanel.js';
 import { AssetClassScanner } from './AssetClassScanner.js';
 import { AiMarketScannerWidget } from './AiMarketScannerWidget.js';
+import { SignalRefreshButton } from './SignalRefreshButton.js';
 import {
   formatLabel,
   formatStrategy,
   formatStatus,
   formatRankTier,
   formatProviderName,
+  getDynamicPrecision,
 } from '../utils/formatters.js';
 import {
   TrendingUp,
@@ -450,6 +452,36 @@ export function SignalsPage({ health }: SignalsPageProps) {
         if (filteredSignals.length > 0) {
           addSignalsToHistory(filteredSignals);
         }
+
+        // CHANGE 6: Diagnostic if active trades exist in API but UI shows zero
+        const activeCount = res.activeCount ?? res.signals.length;
+        const persistedActiveCount = res.persistedActiveCount ?? res.diagnostics?.persistedActiveCount ?? 0;
+        const filteredCount = res.filteredCount ?? res.diagnostics?.filteredCount ?? 0;
+
+        if (
+          activeCount > 0 &&
+          persistedActiveCount > 0 &&
+          filteredCount === activeCount &&
+          filteredSignals.length === 0
+        ) {
+          console.warn(
+            `[SignalsPage] Rendering diagnostic: /api/signals reported activeCount=${activeCount}, persistedActiveCount=${persistedActiveCount}, filteredCount=${filteredCount}, but UI tradeable filter yielded 0 signals for display.`,
+            {
+              activeCount,
+              persistedActiveCount,
+              filteredCount,
+              rawSignalsCount: res.signals.length,
+              rejectionReason: res.rejectionReason || res.diagnostics?.rejectionReason,
+              rawSignals: res.signals.map((s: any) => ({
+                id: s.id,
+                symbol: s.symbol,
+                status: s.status,
+                isTradeableSignal: s.isTradeableSignal,
+                signalClassification: s.signalClassification,
+              })),
+            }
+          );
+        }
       }
     } catch (err) {
       console.warn('[SignalsPage] Polling active signals paused:', err instanceof Error ? err.message : String(err));
@@ -548,6 +580,20 @@ export function SignalsPage({ health }: SignalsPageProps) {
   };
 
   const handleSignalRefreshed = useCallback((updated: TradingSignal) => {
+    // CHANGE 5: Update activeSignals state with authoritative refreshed signal
+    setActiveSignals((prev) =>
+      prev.map((item) => {
+        if (item.id === updated.id || item.snapshotId === updated.snapshotId) {
+          return {
+            ...item,
+            ...updated,
+          };
+        }
+        return item;
+      })
+    );
+
+    // CHANGE 5: Update signalHistory state
     setSignalHistory((prev) =>
       prev.map((item) => {
         if (item.id === updated.id || item.snapshotId === updated.snapshotId) {
@@ -760,6 +806,201 @@ export function SignalsPage({ health }: SignalsPageProps) {
             </button>
           )}
         </div>
+      </div>
+
+      {/* CHANGE 3: Dedicated Authoritative Active Signals Section */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-5 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 bg-emerald-950/80 text-emerald-400 border border-emerald-800/80 rounded-lg">
+              <Zap className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                Active Tradeable Signals
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
+                  {activeSignals.length} ACTIVE
+                </span>
+              </h3>
+              <p className="text-[11px] text-slate-400">
+                Authoritative active signals qualified by the scanner and monitored in real time.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={loadActiveSignals}
+            className="px-2.5 py-1 bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white rounded-lg border border-slate-700 text-xs font-mono flex items-center gap-1.5 transition cursor-pointer"
+            title="Poll authoritative active signals"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Poll Active</span>
+          </button>
+        </div>
+
+        {activeSignals.length > 0 ? (
+          <div className="grid grid-cols-1 gap-3.5">
+            {activeSignals.map((sig) => {
+              const prec = sig.entryPrice ? getDynamicPrecision(sig.entryPrice, sig.symbol) : 2;
+              const tp1 = sig.tp1 ?? sig.takeProfit;
+              const tp2 = sig.tp2;
+              const tp3 = sig.tp3;
+              const sl = sig.stopLoss;
+              const isBuy = sig.direction === 'BUY';
+
+              return (
+                <div
+                  key={sig.id || sig.snapshotId || `${sig.symbol}_${sig.timestamp}`}
+                  className="bg-slate-950 border border-slate-800/90 hover:border-slate-700 rounded-xl p-3.5 sm:p-4 space-y-3 transition shadow-sm font-mono"
+                >
+                  {/* Card Header: Direction, Symbol, Timeframe, Status, Score, Refresh */}
+                  <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-slate-800/80 pb-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {isBuy ? (
+                        <span className="px-2.5 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 text-xs font-bold flex items-center gap-1 shadow-sm">
+                          <TrendingUp className="w-3.5 h-3.5" /> BUY
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-0.5 rounded bg-rose-950 text-rose-400 border border-rose-800 text-xs font-bold flex items-center gap-1 shadow-sm">
+                          <TrendingDown className="w-3.5 h-3.5" /> SELL
+                        </span>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedSymbol(sig.symbol);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="text-base sm:text-lg font-bold text-white hover:text-emerald-400 transition tracking-wide cursor-pointer"
+                        title={`Select ${sig.symbol}`}
+                      >
+                        {sig.symbol}
+                      </button>
+
+                      {sig.timeframe && (
+                        <span className="text-[10px] sm:text-xs text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                          {sig.timeframe}
+                        </span>
+                      )}
+
+                      <span className={`text-[10px] sm:text-xs font-bold px-2 py-0.5 rounded border ${
+                        sig.status === 'ACTIVE'
+                          ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
+                          : sig.status === 'WAITING_ENTRY'
+                          ? 'bg-blue-950 text-blue-300 border-blue-500'
+                          : sig.status === 'TP1_HIT' || sig.status === 'TP2_HIT'
+                          ? 'bg-teal-950 text-teal-300 border-teal-600'
+                          : 'bg-slate-900 text-slate-300 border-slate-700'
+                      }`}>
+                        {formatStatus(sig.status || 'ACTIVE')}
+                      </span>
+
+                      {sig.rankTier && (
+                        <span className="text-[10px] font-bold bg-amber-950/80 text-amber-300 border border-amber-600/60 px-2 py-0.5 rounded">
+                          {formatRankTier(sig.rankTier, sig.rankTier === 'BEST_TRADE')}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-xs text-slate-300 bg-slate-900 px-2.5 py-1 rounded border border-slate-800">
+                        Score: <strong className="text-sky-400 font-bold">{sig.score ?? sig.confidenceScore ?? 75}/100</strong>
+                      </span>
+
+                      <SignalRefreshButton
+                        signal={sig}
+                        onSignalRefreshed={handleSignalRefreshed}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Card Key Price Metrics Grid: Entry, SL, TP1, TP2, TP3, R:R */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-2.5 text-xs">
+                    {/* Entry Price */}
+                    <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2 sm:p-2.5 space-y-0.5">
+                      <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">
+                        ENTRY PRICE
+                      </span>
+                      <strong className="text-sm sm:text-base font-bold text-white block truncate">
+                        {sig.entryPrice ? sig.entryPrice.toFixed(prec) : '--'}
+                      </strong>
+                    </div>
+
+                    {/* Stop Loss */}
+                    <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2 sm:p-2.5 space-y-0.5">
+                      <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">
+                        STOP LOSS
+                      </span>
+                      <strong className="text-sm sm:text-base font-bold text-rose-400 block truncate">
+                        {sl ? sl.toFixed(prec) : '--'}
+                      </strong>
+                    </div>
+
+                    {/* TP1 */}
+                    <div className="bg-slate-900/90 border border-emerald-950 rounded-lg p-2 sm:p-2.5 space-y-0.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">
+                          TP1
+                        </span>
+                        {sig.tp1Status === 'HIT' && (
+                          <span className="text-[9px] text-emerald-300 bg-emerald-950 px-1 rounded">HIT</span>
+                        )}
+                      </div>
+                      <strong className="text-sm sm:text-base font-bold text-emerald-400 block truncate">
+                        {tp1 ? tp1.toFixed(prec) : '--'}
+                      </strong>
+                    </div>
+
+                    {/* TP2 */}
+                    <div className="bg-slate-900/90 border border-emerald-950 rounded-lg p-2 sm:p-2.5 space-y-0.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-emerald-300 uppercase tracking-wider">
+                          TP2
+                        </span>
+                        {sig.tp2Status === 'HIT' && (
+                          <span className="text-[9px] text-emerald-300 bg-emerald-950 px-1 rounded">HIT</span>
+                        )}
+                      </div>
+                      <strong className="text-sm sm:text-base font-bold text-emerald-300 block truncate">
+                        {tp2 ? tp2.toFixed(prec) : '--'}
+                      </strong>
+                    </div>
+
+                    {/* TP3 */}
+                    <div className="bg-slate-900/90 border border-emerald-950 rounded-lg p-2 sm:p-2.5 space-y-0.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-emerald-200 uppercase tracking-wider">
+                          TP3
+                        </span>
+                        {sig.tp3Status === 'HIT' && (
+                          <span className="text-[9px] text-emerald-300 bg-emerald-950 px-1 rounded">HIT</span>
+                        )}
+                      </div>
+                      <strong className="text-sm sm:text-base font-bold text-emerald-200 block truncate">
+                        {tp3 ? tp3.toFixed(prec) : '--'}
+                      </strong>
+                    </div>
+
+                    {/* R:R Ratio */}
+                    <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2 sm:p-2.5 space-y-0.5">
+                      <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">
+                        R:R RATIO
+                      </span>
+                      <strong className="text-sm sm:text-base font-bold text-blue-400 block truncate">
+                        {sig.riskRewardRatio ? `${sig.riskRewardRatio}:1` : '--'}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-center py-6 bg-slate-950/60 rounded-xl border border-slate-800 text-slate-400 text-xs font-mono">
+            No active tradeable signals currently monitored. Signals generated by scans will appear here immediately.
+          </div>
+        )}
       </div>
 
       {/* Consolidated Signal History & Alert Log (30-item Audit Hub) */}

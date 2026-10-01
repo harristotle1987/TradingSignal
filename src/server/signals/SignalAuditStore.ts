@@ -69,24 +69,27 @@ export class SignalAuditStore {
   private static init(): void {
     if (this.isInitialized) return;
 
-    try {
-      if (fs.existsSync(LOCAL_AUDIT_PATH)) {
-        const raw = fs.readFileSync(LOCAL_AUDIT_PATH, 'utf-8');
-        const parsed: SignalAuditRecord[] = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          for (const item of parsed) {
-            this.auditLogs.set(item.id, item);
+    if (process.env.NODE_ENV !== 'production') {
+      try {
+        if (fs.existsSync(LOCAL_AUDIT_PATH)) {
+          const raw = fs.readFileSync(LOCAL_AUDIT_PATH, 'utf-8');
+          const parsed: SignalAuditRecord[] = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            for (const item of parsed) {
+              this.auditLogs.set(item.id, item);
+            }
           }
         }
+      } catch (err) {
+        logger.warn('[SignalAuditStore] Could not load persisted audit records:', err);
       }
-    } catch (err) {
-      logger.warn('[SignalAuditStore] Could not load persisted audit records:', err);
     }
 
     this.isInitialized = true;
   }
 
   private static persistLocal(): void {
+    if (process.env.NODE_ENV === 'production') return;
     try {
       const arr = Array.from(this.auditLogs.values())
         .sort((a, b) => b.timestamp - a.timestamp)

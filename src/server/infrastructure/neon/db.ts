@@ -287,3 +287,81 @@ export async function initializeNeonSchema(): Promise<boolean> {
 
   return schemaInitPromise;
 }
+
+/**
+ * Checks if production persistence requirements are met.
+ * For NODE_ENV=production, DATABASE_URL is REQUIRED.
+ */
+export function isProductionPersistenceReady(): boolean {
+  if (mockPool !== null) {
+    return true;
+  }
+  const isProd = process.env.NODE_ENV === 'production';
+  if (!isProd) {
+    return true; // Local persistence allowed in development/testing
+  }
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl || dbUrl.trim().length === 0) {
+    return false;
+  }
+  return getNeonPool() !== null;
+}
+export const REQUIRED_PRODUCTION_TABLES = [
+  'users',
+  'sessions',
+  'signals',
+  'signal_outcomes',
+  'historical_trades',
+  'audit_events',
+  'scanner_state',
+  'scanner_locks',
+  'signal_fingerprints',
+  'performance_history',
+  'push_subscriptions',
+] as const;
+
+/**
+ * Verifies that all required production tables exist in Neon PostgreSQL.
+ * Fails if any required table is missing, preventing silent partial migrations during request handling.
+ */
+export async function verifyRequiredProductionTables(): Promise<{
+  ready: boolean;
+  missingTables: string[];
+}> {
+  if (mockPool) {
+    return { ready: true, missingTables: [] };
+  }
+
+  const p = getNeonPool();
+  if (!p) {
+    return { ready: false, missingTables: [...REQUIRED_PRODUCTION_TABLES] };
+  }
+
+  try {
+    const res = await p.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = 'public'
+       AND table_name = ANY($1)`,
+      [REQUIRED_PRODUCTION_TABLES]
+    );
+
+    const existingTables = new Set(res.rows.map((r) => r.table_name.toLowerCase()));
+    const missingTables = REQUIRED_PRODUCTION_TABLES.filter(
+      (tbl) => !existingTables.has(tbl.toLowerCase())
+    );
+
+    return {
+      ready: missingTables.length === 0,
+      missingTables,
+    };
+  } catch (err) {
+    logger.error('[Neon DB] Failed to query information_schema for table readiness verification:', {
+      error: String(err),
+    });
+    return {
+      ready: false,
+      missingTables: [...REQUIRED_PRODUCTION_TABLES],
+    };
+  }
+}
+

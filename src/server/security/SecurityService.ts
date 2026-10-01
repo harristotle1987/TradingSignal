@@ -278,7 +278,7 @@ export class RateLimiter {
       const forwarded = req.headers['x-forwarded-for'];
       const clientIp = typeof forwarded === 'string'
         ? forwarded.split(',')[0].trim()
-        : req.socket.remoteAddress || '127.0.0.1';
+        : req.socket?.remoteAddress || (req as any).connection?.remoteAddress || '127.0.0.1';
 
       const key = `${endpointName}:${clientIp}`;
       const now = Date.now();

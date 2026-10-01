@@ -98,14 +98,14 @@ export class NeonAuthService {
     const email = (params.email || '').trim().toLowerCase();
     const password = params.password || '';
 
-    // Validation
+    // Validation: Require at least 12 characters for production password policy
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!email || !emailRegex.test(email)) {
       return { success: false, error: 'Please provide a valid email address.' };
     }
 
-    if (!password || password.length < 6) {
-      return { success: false, error: 'Password must be at least 6 characters long.' };
+    if (!password || password.length < 12) {
+      return { success: false, error: 'Password must be at least 12 characters long.' };
     }
 
     const cleanDisplayName = params.displayName?.trim() || email.split('@')[0];

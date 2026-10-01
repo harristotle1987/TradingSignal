@@ -1028,21 +1028,43 @@ router.delete('/signals/log', adminAuthMiddleware, async (_req: Request, res: Re
 
 /**
  * GET /api/signals
- * Retrieves all currently active validated trading signals from authoritative persistence (Firestore).
+ * Retrieves all currently active validated trading signals from authoritative persistence (Neon PostgreSQL).
  * Returns clear diagnostics when zero active signals exist.
+ * Returns HTTP 503 Service Unavailable with PERSISTENCE_UNAVAILABLE if database is unavailable.
  */
 router.get('/signals', async (_req: Request, res: Response) => {
-  const result = await signalEngine.getActiveSignalsDetailed();
-  res.status(200).json({
-    success: true,
-    signals: result.signals,
-    activeCount: result.activeCount,
-    persistedActiveCount: result.persistedActiveCount,
-    filteredCount: result.filteredCount,
-    rejectionReason: result.rejectionReason,
-    diagnostics: result.diagnostics,
-    timestamp: Date.now(),
-  });
+  try {
+    const result = await signalEngine.getActiveSignalsDetailed();
+    if (result.success === false || result.error === 'PERSISTENCE_UNAVAILABLE') {
+      return res.status(503).json({
+        success: false,
+        error: 'PERSISTENCE_UNAVAILABLE',
+        message: 'Signal persistence service is temporarily unavailable.',
+        timestamp: Date.now(),
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      signals: result.signals || [],
+      activeCount: result.activeCount,
+      persistedActiveCount: result.persistedActiveCount,
+      filteredCount: result.filteredCount,
+      rejectionReason: result.rejectionReason || '',
+      diagnostics: result.diagnostics || {},
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    logger.error('[GET /api/signals] Database failure retrieving active signals:', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return res.status(503).json({
+      success: false,
+      error: 'PERSISTENCE_UNAVAILABLE',
+      message: 'Signal persistence service is temporarily unavailable.',
+      timestamp: Date.now(),
+    });
+  }
 });
 
 /**

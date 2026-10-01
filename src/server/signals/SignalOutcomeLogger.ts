@@ -77,22 +77,25 @@ export class SignalOutcomeLogger {
   private static init(): void {
     if (this.isInitialized) return;
 
-    try {
-      if (fs.existsSync(LOCAL_OUTCOME_LOG_PATH)) {
-        const raw = fs.readFileSync(LOCAL_OUTCOME_LOG_PATH, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          for (const item of parsed) {
-            // Reject any fake 50000/49000/52000 records from memory initialization
-            if (item && item.id && item.entryPrice !== 50000 && item.stopLoss !== 49000 && item.takeProfit !== 52000) {
-              this.localLogs.set(item.id, item);
+    const isProd = serverConfig.getConfig().nodeEnv === 'production';
+    if (!isProd) {
+      try {
+        if (fs.existsSync(LOCAL_OUTCOME_LOG_PATH)) {
+          const raw = fs.readFileSync(LOCAL_OUTCOME_LOG_PATH, 'utf-8');
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            for (const item of parsed) {
+              // Reject any fake 50000/49000/52000 records from memory initialization
+              if (item && item.id && item.entryPrice !== 50000 && item.stopLoss !== 49000 && item.takeProfit !== 52000) {
+                this.localLogs.set(item.id, item);
+              }
             }
           }
+          logger.info('[SignalOutcomeLogger] Loaded persisted outcome logs from disk.');
         }
-        logger.info('[SignalOutcomeLogger] Loaded persisted outcome logs from disk.');
+      } catch (err) {
+        logger.warn('[SignalOutcomeLogger] Failed to read local outcome logs:', { error: String(err) });
       }
-    } catch (err) {
-      logger.warn('[SignalOutcomeLogger] Failed to read local outcome logs:', { error: String(err) });
     }
     this.isInitialized = true;
   }

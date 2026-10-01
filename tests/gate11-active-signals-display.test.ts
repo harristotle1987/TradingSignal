@@ -1,7 +1,8 @@
 import assert from 'assert';
 import { ScannerPersistence, isValidActiveSignal, PersistedSentSignal } from '../src/server/signals/ScannerPersistence.js';
 import { signalEngine } from '../src/server/signals/SignalEngine.js';
-import { setMockFirestoreAdmin } from '../src/server/firebaseAdmin.js';
+import { getSignalRepository } from '../src/server/infrastructure/index.js';
+import { setMockNeonPool } from '../src/server/infrastructure/neon/db.js';
 import { serverConfig } from '../src/server/config.js';
 import { TradingSignal } from '../src/types/index.js';
 
@@ -108,19 +109,6 @@ async function runGate11Tests() {
 
   // Test 3: Clear diagnostics returned when zero active signals exist
   console.log('Test 3: Clear diagnostics returned when zero active signals exist');
-  const emptyMockFirestore = {
-    collection: () => ({
-      where: () => ({
-        get: async () => ({ empty: true, docs: [], forEach: () => {} }),
-      }),
-      doc: () => ({
-        get: async () => ({ exists: false, data: () => null }),
-        set: async () => {},
-      }),
-    }),
-  } as any;
-  setMockFirestoreAdmin(emptyMockFirestore);
-
   // In-memory local sent signals cleared
   ScannerPersistence.localData.sentSignals = [];
   signalEngine.clearSignals();
@@ -149,33 +137,6 @@ async function runGate11Tests() {
     entryPrice: 50000,
     status: 'ACTIVE',
   };
-  const testCandidateDocs = new Map<string, any>();
-  testCandidateDocs.set('sig_expired_1', expiredSig);
-  testCandidateDocs.set('sig_fake_price', fakePriceSig);
-
-  const filteredMockFirestore = {
-    collection: () => ({
-      where: (field: string, op: string, val: any) => ({
-        get: async () => {
-          const matching: any[] = [];
-          for (const doc of testCandidateDocs.values()) {
-            if (field === 'status' && doc.status === val) {
-              matching.push({ id: doc.id, data: () => doc });
-            }
-          }
-          return { empty: matching.length === 0, docs: matching, forEach: (cb: any) => matching.forEach(cb) };
-        },
-      }),
-      doc: (docId: string) => ({
-        get: async () => ({ exists: testCandidateDocs.has(docId), data: () => testCandidateDocs.get(docId) }),
-        set: async (data: any, options?: any) => {
-          const ex = testCandidateDocs.get(docId) || {};
-          testCandidateDocs.set(docId, options?.merge ? { ...ex, ...data } : data);
-        },
-      }),
-    }),
-  } as any;
-  setMockFirestoreAdmin(filteredMockFirestore);
 
   ScannerPersistence.localData.sentSignals = [expiredSig, fakePriceSig];
   signalEngine.clearSignals();
@@ -189,36 +150,6 @@ async function runGate11Tests() {
 
   // Test 5: Immediate availability when new signal is persisted (no 5s race)
   console.log('Test 5: Newly persisted signal is immediately available without 5-second race');
-  const dynamicMockDocs = new Map<string, any>();
-  const dynamicMockFirestore = {
-    collection: () => ({
-      get: async () => {
-        const all = Array.from(dynamicMockDocs.values()).map((d) => ({ id: d.id, data: () => d }));
-        return { empty: all.length === 0, docs: all, forEach: (cb: any) => all.forEach(cb) };
-      },
-      where: (field: string, op: string, val: any) => ({
-        get: async () => {
-          const matching: any[] = [];
-          for (const doc of dynamicMockDocs.values()) {
-            if (op === '==' && doc[field] === val) {
-              matching.push({ id: doc.id, data: () => doc });
-            } else if (op === 'in' && Array.isArray(val) && val.includes(doc[field])) {
-              matching.push({ id: doc.id, data: () => doc });
-            }
-          }
-          return { empty: matching.length === 0, docs: matching, forEach: (cb: any) => matching.forEach(cb) };
-        },
-      }),
-      doc: (docId: string) => ({
-        get: async () => ({ exists: dynamicMockDocs.has(docId), data: () => dynamicMockDocs.get(docId) }),
-        set: async (data: any, options?: any) => {
-          const ex = dynamicMockDocs.get(docId) || {};
-          dynamicMockDocs.set(docId, options?.merge ? { ...ex, ...data } : data);
-        },
-      }),
-    }),
-  } as any;
-  setMockFirestoreAdmin(dynamicMockFirestore);
   ScannerPersistence.localData.sentSignals = [];
   signalEngine.clearSignals();
 
@@ -309,12 +240,12 @@ async function runGate11Tests() {
   assert.strictEqual(foundInHistory?.status, 'TP3_HIT', 'Status in history must be TP3_HIT');
   console.log('✓ Test 7 passed: Terminal signal removed from active display but preserved in persistence history.');
 
-  // Test 8: Mock Firestore authoritative retrieval
-  console.log('Test 8: Authoritative retrieval from Firestore mock');
-  const mockDocs = new Map<string, any>();
+  // Test 8: Authoritative Neon PostgreSQL retrieval
+  console.log('Test 8: Authoritative retrieval from Neon signal repository');
+  const mockNeonStore = new Map<string, any>();
   const mockSignal = {
     ...baseValidSignal,
-    id: 'sig_firestore_authoritative_1',
+    id: 'sig_neon_authoritative_1',
     symbol: 'ETHUSDT',
     entryPrice: 3200,
     stopLoss: 3100,
@@ -323,53 +254,33 @@ async function runGate11Tests() {
     tp2: 3350,
     tp3: 3450,
   };
-  mockDocs.set('sig_firestore_authoritative_1', mockSignal);
+  mockNeonStore.set('sig_neon_authoritative_1', mockSignal);
 
-  const mockFirestoreInstance = {
-    collection: (colName: string) => ({
-      where: (field: string, op: string, val: any) => ({
-        get: async () => {
-          const matching: any[] = [];
-          for (const doc of mockDocs.values()) {
-            if (field === 'status' && doc.status === val) {
-              matching.push({ id: doc.id, data: () => doc });
-            }
-          }
-          return {
-            empty: matching.length === 0,
-            docs: matching,
-            forEach: (cb: any) => matching.forEach(cb),
-          };
-        },
-      }),
-      doc: (docId: string) => ({
-        get: async () => ({
-          exists: mockDocs.has(docId),
-          data: () => mockDocs.get(docId),
-        }),
-        set: async (data: any, options?: any) => {
-          const existing = mockDocs.get(docId) || {};
-          mockDocs.set(docId, options?.merge ? { ...existing, ...data } : data);
-        },
-      }),
-    }),
+  const mockNeonInstance = {
+    query: async (sql: string, params: any[] = []) => {
+      if (sql.includes('FROM signals')) {
+        const rows = Array.from(mockNeonStore.values()).map((s) => ({ payload_json: s }));
+        return { rows, rowCount: rows.length };
+      }
+      return { rows: [], rowCount: 0 };
+    },
   } as any;
 
-  setMockFirestoreAdmin(mockFirestoreInstance);
+  setMockNeonPool(mockNeonInstance);
   try {
-    const firestoreActive = await ScannerPersistence.getActiveSignalsDetailed();
-    assert.strictEqual(firestoreActive.activeCount, 1, 'Must find 1 active signal in mock Firestore');
-    assert.strictEqual(firestoreActive.signals[0].id, 'sig_firestore_authoritative_1', 'Must return mock Firestore signal');
+    const activeResult = await ScannerPersistence.getActiveSignalsDetailed();
+    assert.strictEqual(activeResult.activeCount, 1, 'Must find 1 active signal in authoritative Neon repository');
+    assert.strictEqual(activeResult.signals[0].id, 'sig_neon_authoritative_1', 'Must return Neon signal');
 
-    // Update to SL_HIT in mock Firestore
-    mockDocs.get('sig_firestore_authoritative_1').status = 'SL_HIT';
-    const firestoreAfterSl = await ScannerPersistence.getActiveSignalsDetailed();
-    assert.strictEqual(firestoreAfterSl.activeCount, 0, 'SL_HIT signal in Firestore must not be active');
-    assert.strictEqual(firestoreAfterSl.signals.length, 0, '0 active signals after SL_HIT');
+    // Update to SL_HIT in mock Neon store
+    mockNeonStore.get('sig_neon_authoritative_1').status = 'SL_HIT';
+    const afterSlResult = await ScannerPersistence.getActiveSignalsDetailed();
+    assert.strictEqual(afterSlResult.activeCount, 0, 'SL_HIT signal must not be active');
+    assert.strictEqual(afterSlResult.signals.length, 0, '0 active signals after SL_HIT');
   } finally {
-    setMockFirestoreAdmin(undefined);
+    setMockNeonPool(null);
   }
-  console.log('✓ Test 8 passed: Firestore authoritative querying operates seamlessly.');
+  console.log('✓ Test 8 passed: Authoritative Neon querying operates seamlessly.');
 
   console.log('\n\x1b[32m[GATE 11 SUCCESS] All Gate 11 active signals display regression checks passed perfectly!\x1b[0m\n');
 }
