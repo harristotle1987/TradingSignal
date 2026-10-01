@@ -164,6 +164,8 @@ export interface TradingSignal {
   signalClassification?: 'TRADEABLE' | 'WATCHING' | 'QUALIFIED_CANDIDATE' | 'CANDIDATE' | 'REJECTED' | 'FILTERED' | 'BLOCKED' | 'INVALID' | 'EXPIRED_BEFORE_ENTRY' | 'NON_TRADEABLE' | 'ANALYTICS_ONLY' | 'DIAGNOSTIC';
   provenance?: 'LIVE' | 'HISTORICAL' | 'BACKTEST' | 'SIMULATION' | 'TEST';
   isSynthetic?: boolean;
+  isTest?: boolean;
+  isSimulation?: boolean;
   isActionableSignal?: boolean;
   executionEvidence?: ExecutionEvidenceState;
   historicalEntryPolicy?: HistoricalEntryPolicy;

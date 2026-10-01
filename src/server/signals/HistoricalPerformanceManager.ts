@@ -15,7 +15,7 @@
 import { SignalLogger, SignalLogRecord, isTradeableLogRecord, isProductionRecord } from './SignalLogger.js';
 import { SignalOutcomeLogger, SignalOutcomeRecord } from './SignalOutcomeLogger.js';
 import { ScannerPersistence } from './ScannerPersistence.js';
-import { getFirestoreAdmin } from '../firebaseAdmin.js';
+import { getNeonPool } from '../infrastructure/neon/db.js';
 import { serverConfig } from '../config.js';
 import {
   HistoricalPerformanceRange,
@@ -129,10 +129,9 @@ export class HistoricalPerformanceManager {
    * Retrieves and consolidates unique stored signals across persistence layers.
    */
   public static async getConsolidatedSignals(): Promise<NormalizedSignalOutcome[]> {
-    const isProd = serverConfig.getConfig().nodeEnv === 'production';
-    const firestore = getFirestoreAdmin();
-    if (isProd && !firestore) {
-      logger.warn('[HistoricalPerformance] FAIL SAFELY: Firestore unavailable in production mode. Returning empty list without local fallback.');
+    const isProd = process.env.NODE_ENV === 'production' || serverConfig.getConfig().nodeEnv === 'production';
+    if (isProd && (!getNeonPool() || !ScannerPersistence.isProductionPersistenceReady())) {
+      logger.warn('[HistoricalPerformance] FAIL SAFELY: Neon PostgreSQL unavailable in production mode. Returning empty list without local fallback.');
       return [];
     }
 

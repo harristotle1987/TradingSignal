@@ -5,7 +5,7 @@
  * Converts between Firestore document structures and domain models without leaking Firestore types.
  */
 
-import { getFirestoreAdmin, getAuthAdmin } from '../../firebaseAdmin.js';
+import { getFirestoreAdmin } from '../../firebaseAdmin.js';
 import { logger } from '../../logger.js';
 import {
   User,
@@ -32,6 +32,7 @@ import {
   MemorySessionRepository,
   MemoryHistoricalTradeRepository,
   MemoryAuditEventRepository,
+  MemoryAuthRepository,
 } from '../memory/MemoryAdapter.js';
 
 const SIGNALS_COL = 'scanner_sent_signals';
@@ -316,63 +317,13 @@ export class FirebaseScannerStateRepository implements IScannerStateRepository {
   }
 }
 
-export class FirebaseAuthRepository implements IAuthRepository {
-  async verifyToken(token: string): Promise<{ valid: boolean; user?: User; error?: string }> {
-    const authAdmin = getAuthAdmin();
-    if (!authAdmin) {
-      // If authAdmin not configured, verify token structure
-      if (token && token.length >= 8) {
-        return {
-          valid: true,
-          user: {
-            id: 'admin_user',
-            email: 'admin@system.local',
-            role: 'admin',
-            createdAt: Date.now(),
-          },
-        };
-      }
-      return { valid: false, error: 'Auth service not initialized' };
-    }
-
-    try {
-      const decoded = await authAdmin.verifyIdToken(token);
-      const user: User = {
-        id: decoded.uid,
-        email: decoded.email || 'authenticated@firebase.local',
-        role: (decoded.admin === true || decoded.role === 'admin') ? 'admin' : 'user',
-        displayName: decoded.name || undefined,
-        createdAt: Date.now(),
-      };
-      return { valid: true, user };
-    } catch (err) {
-      return { valid: false, error: String(err) };
-    }
-  }
-
-  async createSession(userId: string, ttlMs = 24 * 60 * 60 * 1000): Promise<Session> {
-    return {
-      id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      userId,
-      token: `tok_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`,
-      createdAt: Date.now(),
-      expiresAt: Date.now() + ttlMs,
-      isValid: true,
-    };
-  }
-
-  async revokeSession(_sessionId: string): Promise<void> {
-    // Stateless token revocation
-  }
-}
-
 export function createFirebaseRepositories(): RepositoryContainer {
   const signal = new FirebaseSignalRepository();
   const signalOutcome = new FirebaseSignalOutcomeRepository();
   const scannerState = new FirebaseScannerStateRepository();
-  const auth = new FirebaseAuthRepository();
   const user = new MemoryUserRepository();
   const session = new MemorySessionRepository();
+  const auth = new MemoryAuthRepository(user, session);
   const historicalTrade = new MemoryHistoricalTradeRepository();
   const auditEvent = new MemoryAuditEventRepository();
 

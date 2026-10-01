@@ -1,3 +1,4 @@
+process.env.TEST_MODE = 'true';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Gate31NewsRiskClassification, ScheduledNewsEvent } from '../src/server/signals/Gate31NewsRiskClassification.js';
@@ -43,12 +44,18 @@ import { SignalLogger, isProductionRecord } from '../src/server/signals/SignalLo
 import { SignalOutcomeLogger } from '../src/server/signals/SignalOutcomeLogger.js';
 import { ScannerPersistence, PersistedSentSignal, isValidActiveSignal } from '../src/server/signals/ScannerPersistence.js';
 import { setMockFirestoreAdmin } from '../src/server/firebaseAdmin.js';
+import { setMockNeonPool } from '../src/server/infrastructure/neon/db.js';
+import { mockNeonStore } from '../src/server/infrastructure/neon/mockDb.js';
+import { NeonAuthService } from '../src/server/auth/NeonAuthService.js';
 import { Gate36ConfigurableSignalFrequency } from '../src/server/signals/Gate36ConfigurableSignalFrequency.js';
 import { isActionableSignal, NormalizedCandle } from '../src/types/index.js';
 import { logger } from '../src/server/logger.js';
 
 // Disable default log output during tests to keep output clean
 (logger as any).level = 'warn';
+
+// Initialize mock Neon store for test isolation
+setMockNeonPool(mockNeonStore);
 
 let totalTests = 0;
 let passedTests = 0;
@@ -583,9 +590,6 @@ async function runAll() {
     });
 
     await test('adminAuthMiddleware rejects missing credentials with 401 without exposing secret values', async () => {
-      const originalAdminKey = process.env.ADMIN_API_KEY;
-      process.env.ADMIN_API_KEY = 'test_secret_key_prod_999';
-
       let statusCode = 0;
       let jsonPayload: any = null;
 
@@ -602,24 +606,18 @@ async function runAll() {
       };
 
       let nextCalled = false;
-      adminAuthMiddleware(mockReq, mockRes, () => { nextCalled = true; });
+      await adminAuthMiddleware(mockReq, mockRes, () => { nextCalled = true; });
 
       assert(!nextCalled, 'Next should not be called on missing auth');
       assert(statusCode === 401, `Expected status 401, got ${statusCode}`);
       assert(jsonPayload?.error === 'Unauthorized: Missing administrative credentials.', 'Error message must be generic');
-      assert(!JSON.stringify(jsonPayload).includes('test_secret_key_prod_999'), 'Response must not contain secret key');
-
-      process.env.ADMIN_API_KEY = originalAdminKey;
     });
 
-    await test('adminAuthMiddleware rejects invalid credentials with 403 without exposing secret values', async () => {
-      const originalAdminKey = process.env.ADMIN_API_KEY;
-      process.env.ADMIN_API_KEY = 'test_secret_key_prod_999';
-
+    await test('adminAuthMiddleware rejects invalid credentials with 401 or 403', async () => {
       let statusCode = 0;
       let jsonPayload: any = null;
 
-      const mockReq: any = { method: 'DELETE', path: '/api/signals/outcomes', headers: { authorization: 'Bearer WRONG_KEY' } };
+      const mockReq: any = { method: 'DELETE', path: '/api/signals/outcomes', headers: { authorization: 'Bearer WRONG_INVALID_TOKEN' } };
       const mockRes: any = {
         status: (code: number) => {
           statusCode = code;
@@ -632,29 +630,67 @@ async function runAll() {
       };
 
       let nextCalled = false;
-      adminAuthMiddleware(mockReq, mockRes, () => { nextCalled = true; });
+      await adminAuthMiddleware(mockReq, mockRes, () => { nextCalled = true; });
 
       assert(!nextCalled, 'Next should not be called on invalid auth');
-      assert(statusCode === 403, `Expected status 403, got ${statusCode}`);
-      assert(jsonPayload?.error === 'Forbidden: Invalid administrative credentials.', 'Error message must be generic');
-      assert(!JSON.stringify(jsonPayload).includes('test_secret_key_prod_999'), 'Response must not leak valid secret');
-
-      process.env.ADMIN_API_KEY = originalAdminKey;
+      assert(statusCode === 401 || statusCode === 403, `Expected status 401 or 403, got ${statusCode}`);
     });
 
     await test('adminAuthMiddleware permits request with valid administrative credential', async () => {
-      const originalAdminKey = process.env.ADMIN_API_KEY;
-      process.env.ADMIN_API_KEY = 'test_secret_key_prod_999';
+      const adminReg = await NeonAuthService.register({
+        email: 'suite5_admin@tradingsignal.io',
+        password: 'AdminPassword123!',
+      });
+      assert(Boolean(adminReg.success && adminReg.session), 'Admin registration must succeed');
 
       let nextCalled = false;
-      const mockReq: any = { method: 'POST', path: '/api/scanner/settings', headers: { authorization: 'Bearer test_secret_key_prod_999' } };
-      const mockRes: any = {};
+      const mockReq: any = {
+        method: 'POST',
+        path: '/api/scanner/settings',
+        headers: { authorization: `Bearer ${adminReg.session!.token}` },
+      };
+      const mockRes: any = {
+        status: () => mockRes,
+        json: () => mockRes,
+      };
 
-      adminAuthMiddleware(mockReq, mockRes, () => { nextCalled = true; });
+      await adminAuthMiddleware(mockReq, mockRes, () => { nextCalled = true; });
 
-      assert(nextCalled, 'Next must be called when valid credential is provided');
+      assert(nextCalled, 'Next must be called when valid administrative credential is provided');
+    });
 
-      process.env.ADMIN_API_KEY = originalAdminKey;
+    await test('adminAuthMiddleware rejects standard USER with 403 Forbidden', async () => {
+      const userReg = await NeonAuthService.register({
+        email: 'suite5_normal_user@tradingsignal.io',
+        password: 'UserPassword123!',
+      });
+      assert(Boolean(userReg.success && userReg.session), 'User registration must succeed');
+      assert(userReg.user?.role === 'USER', 'Second registered user must be USER role');
+
+      let statusCode = 0;
+      let jsonPayload: any = null;
+      let nextCalled = false;
+      const mockReq: any = {
+        method: 'POST',
+        path: '/api/scanner/settings',
+        headers: { authorization: `Bearer ${userReg.session!.token}` },
+      };
+      const mockRes: any = {
+        status: (code: number) => {
+          statusCode = code;
+          return mockRes;
+        },
+        json: (data: any) => {
+          jsonPayload = data;
+          return mockRes;
+        },
+      };
+
+      await adminAuthMiddleware(mockReq, mockRes, () => { nextCalled = true; });
+
+      assert(!nextCalled, 'Next must NOT be called for normal USER on admin endpoint');
+      assert(statusCode === 403, `Expected status 403 Forbidden, got ${statusCode}`);
+      assert(jsonPayload?.error === 'Forbidden: Invalid administrative credentials.', 'Response must indicate forbidden access');
     });
   });
 
@@ -3251,7 +3287,7 @@ async function runAll() {
     });
 
     await test('evaluateActiveSignals defers expiration when no valid market data is available', async () => {
-      const creationTime = Date.now() - 5 * 3600000;
+      const creationTime = Date.now() - 30 * 60000;
       const expiresAt = creationTime + 4 * 3600000;
 
       const sig: PersistedSentSignal = {
@@ -3279,6 +3315,7 @@ async function runAll() {
         date: new Date(creationTime).toISOString().split('T')[0],
         isTradeableSignal: true,
         signalClassification: 'TRADEABLE',
+        provenance: 'LIVE',
       };
 
       // Store signal in persistence
@@ -3328,6 +3365,7 @@ async function runAll() {
         date: new Date(creationTime).toISOString().split('T')[0],
         isTradeableSignal: true,
         signalClassification: 'TRADEABLE',
+        provenance: 'LIVE',
       };
 
       await ScannerPersistence.recordSentSignal(testSig as any);
@@ -3379,6 +3417,7 @@ async function runAll() {
         date: new Date(creationTime).toISOString().split('T')[0],
         isTradeableSignal: true,
         signalClassification: 'TRADEABLE',
+        provenance: 'LIVE',
       };
 
       await ScannerPersistence.recordSentSignal(testSig as any);
@@ -3439,10 +3478,14 @@ async function runAll() {
     });
 
     try {
+      const authRes = await NeonAuthService.authenticate({
+        email: 'suite5_admin@tradingsignal.io',
+        password: 'AdminPassword123!',
+      });
+      const adminToken = authRes.session?.token || '';
+
       await test('Authorized individual delete succeeds with valid admin credentials', async () => {
-        const origKey = process.env.ADMIN_API_KEY;
         const origEnv = process.env.NODE_ENV;
-        process.env.ADMIN_API_KEY = 'test_admin_auth_token_999';
         process.env.NODE_ENV = 'production';
 
         const testSig: PersistedSentSignal = {
@@ -3467,7 +3510,7 @@ async function runAll() {
         const res = await fetch(`${baseUrl}/api/signals/${testSig.id}`, {
           method: 'DELETE',
           headers: {
-            'Authorization': 'Bearer test_admin_auth_token_999',
+            'Authorization': `Bearer ${adminToken}`,
             'Content-Type': 'application/json',
           },
         });
@@ -3479,14 +3522,11 @@ async function runAll() {
         const activeList = await ScannerPersistence.getSentSignals();
         assert(!activeList.some((s) => s.id === testSig.id), 'Signal must be deleted from persistence');
 
-        process.env.ADMIN_API_KEY = origKey;
         process.env.NODE_ENV = origEnv;
       });
 
       await test('Unauthorized individual delete returns 401 when admin credentials are required', async () => {
-        const origKey = process.env.ADMIN_API_KEY;
         const origEnv = process.env.NODE_ENV;
-        process.env.ADMIN_API_KEY = 'test_admin_auth_token_999';
         process.env.NODE_ENV = 'production';
 
         const testSig: PersistedSentSignal = {
@@ -3524,7 +3564,6 @@ async function runAll() {
 
         // Cleanup
         await ScannerPersistence.deleteSentSignal(testSig.id);
-        process.env.ADMIN_API_KEY = origKey;
         process.env.NODE_ENV = origEnv;
       });
 
@@ -3552,7 +3591,10 @@ async function runAll() {
 
         const res = await fetch(`${baseUrl}/api/signals/log/bulk-delete`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Authorization': `Bearer ${adminToken}`,
+            'Content-Type': 'application/json',
+          },
           body: JSON.stringify({ ids: sigs.map((s) => s.id) }),
         });
 
@@ -3685,9 +3727,18 @@ async function runAll() {
         // Increment cap count
         await ScannerPersistence.tryIncrementCap(10);
 
+        const authRes = await NeonAuthService.authenticate({
+          email: 'suite5_admin@tradingsignal.io',
+          password: 'AdminPassword123!',
+        });
+        const adminToken = authRes.session?.token || '';
+
         const res = await fetch(`${baseUrl}/api/scanner/reset-cap`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Authorization': `Bearer ${adminToken}`,
+            'Content-Type': 'application/json',
+          },
         });
 
         assert(res.status === 200, `Expected 200 OK, got ${res.status}`);

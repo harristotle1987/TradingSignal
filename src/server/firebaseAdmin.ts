@@ -1,88 +1,40 @@
-import { initializeApp, cert, getApps } from 'firebase-admin/app';
-import { getFirestore, Firestore } from 'firebase-admin/firestore';
-import { getAuth, Auth } from 'firebase-admin/auth';
 import { logger } from './logger.js';
 import { ScannerPersistence, DailyCapState } from './signals/ScannerPersistence.js';
+import { getNeonPool } from './infrastructure/neon/db.js';
 
-let db: Firestore | null = null;
-let authInstance: Auth | null = null;
-let mockDb: Firestore | null | undefined = undefined;
+let mockDb: any = undefined;
 
 /**
- * Allows tests to mock Firestore availability (e.g. simulate Firestore outage/unavailability).
+ * Allows tests to mock persistence availability (e.g. simulate outage/unavailability).
  */
-export function setMockFirestoreAdmin(mock: Firestore | null | undefined): void {
+export function setMockFirestoreAdmin(mock: any): void {
   mockDb = mock;
 }
 
 /**
  * Checks if production persistence requirements are met.
- * For NODE_ENV=production, FIREBASE_SERVICE_ACCOUNT is REQUIRED.
+ * For NODE_ENV=production, DATABASE_URL is REQUIRED.
  */
 export function isProductionPersistenceReady(): boolean {
+  if (mockDb !== undefined) {
+    return mockDb !== null;
+  }
   const isProd = process.env.NODE_ENV === 'production';
   if (!isProd) {
     return true; // Local persistence allowed in development/testing
   }
-  const saJson = process.env.FIREBASE_SERVICE_ACCOUNT;
-  if (!saJson || saJson.trim().length === 0) {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl || dbUrl.trim().length === 0) {
     return false;
   }
-  const firestore = getFirestoreAdmin();
-  return firestore !== null;
+  return getNeonPool() !== null;
 }
 
 /**
- * Returns the Firestore admin instance.
- * Initializes Firebase Admin lazily if process.env.FIREBASE_SERVICE_ACCOUNT is available.
- * Handles missing credentials gracefully without crashing the server.
+ * Legacy stub for Firestore Admin instance (Disabled for production - Neon PostgreSQL is single source).
  */
-export function getFirestoreAdmin(): Firestore | null {
-  if (mockDb !== undefined) return mockDb;
-  if (db) return db;
-
-  const saJson = process.env.FIREBASE_SERVICE_ACCOUNT;
-  if (!saJson) {
-    return null;
-  }
-
-  try {
-    const serviceAccount = JSON.parse(saJson);
-    if (serviceAccount.private_key) {
-      serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
-    }
-
-    // Initialize with a unique name or check if already initialized
-    const apps = getApps();
-    if (apps.length === 0) {
-      initializeApp({
-        credential: cert(serviceAccount),
-      });
-      logger.info('[Firebase Admin] Successfully initialized Firebase Admin.');
-    }
-
-    db = getFirestore();
-    return db;
-  } catch (err: unknown) {
-    logger.warn('[Firebase Admin] Initialization failed:', { error: err instanceof Error ? err.message : String(err) });
-    return null;
-  }
-}
-
-/**
- * Returns the Firebase Auth admin instance.
- */
-export function getAuthAdmin(): Auth | null {
-  const firestore = getFirestoreAdmin();
-  if (!firestore) return null;
-  if (!authInstance) {
-    try {
-      authInstance = getAuth();
-    } catch {
-      authInstance = null;
-    }
-  }
-  return authInstance;
+export function getFirestoreAdmin(): any {
+  return mockDb;
 }
 
 export type CapState = DailyCapState;

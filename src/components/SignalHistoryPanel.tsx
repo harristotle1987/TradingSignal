@@ -1,22 +1,12 @@
 /**
- * Signal History & Historical Trades Panel Component (Gate 16)
+ * Signal History & Audit Log Component
  *
- * Authoritative panel displaying historical and active trading records:
- * - Direct Firestore production data aggregation
- * - Server-side pagination & client-side instant responsive filters
- * - Filters: Status (All, Active, Wins, Losses, Expired, Top Trades, Suggestions), Direction (All, Buy, Sell), Date Range (7D, 30D, 90D, ALL), and Search query
- * - Prominently displays:
- *   - Symbol & Direction (BUY/SELL)
- *   - Original Immutable Entry Price, Stop Loss, TP1, TP2, TP3
- *   - Risk-to-Reward Ratio (R:R)
- *   - Score & Target Quality
- *   - Status & Outcome (WIN, LOSS, ACTIVE, EXPIRED, WAITING ENTRY)
- *   - Exact timestamps (Created, Resolved, Target hit milestones) with timezone converter
- * - Refresh button checks real-time market price and verifies hit status without modifying original setup values
- * - Copy signal button & deep fullscreen analysis inspection modal
+ * Local state-based panel displaying the last 30 generated signals/alerts
+ * with exact snapshot timestamps, directional bias, execution outcomes, and detailed metrics.
+ * Consolidates all active validated signal data and historical audit logs.
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { SignalHistoryItem, TradingSignal } from '../types/index.js';
 import { TargetTracker } from './TargetTracker.js';
 import { RejectionBreakdown, AcceptanceBreakdown } from './SignalAnalysisDetails.js';
@@ -39,8 +29,6 @@ import {
   Trash2,
   ChevronDown,
   ChevronUp,
-  ChevronLeft,
-  ChevronRight,
   ShieldCheck,
   Zap,
   Clock,
@@ -49,7 +37,6 @@ import {
   AlertCircle,
   ExternalLink,
   CheckCircle2,
-  XCircle,
   X,
   Activity,
   Globe,
@@ -58,17 +45,16 @@ import {
   Copy,
   Check,
   Maximize2,
-  Search,
-  Filter,
 } from 'lucide-react';
 import { SignalPerformanceChart } from './SignalPerformanceChart.js';
 
-function CopySignalButton({ signal, precision }: { signal: any; precision: number }) {
+
+function CopySignalButton({ signal, precision }: { signal: any, precision: number }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = (e: any) => {
     e.stopPropagation();
-
+    
     let text = `Symbol: ${signal.symbol} (${signal.direction})\n`;
     text += `Entry: ${signal.entryPrice ? signal.entryPrice.toFixed(precision) : '--'}\n`;
     text += `Stop Loss: ${signal.stopLoss ? signal.stopLoss.toFixed(precision) : '--'}\n`;
@@ -81,9 +67,6 @@ function CopySignalButton({ signal, precision }: { signal: any; precision: numbe
     if (signal.tp3 !== undefined) {
       text += `TP3: ${signal.tp3.toFixed(precision)}\n`;
     }
-    if (signal.riskRewardRatio !== undefined) {
-      text += `R:R: ${signal.riskRewardRatio}:1\n`;
-    }
 
     navigator.clipboard.writeText(text);
     setCopied(true);
@@ -94,8 +77,8 @@ function CopySignalButton({ signal, precision }: { signal: any; precision: numbe
     <button
       onClick={handleCopy}
       className={`p-1 rounded transition min-h-[28px] min-w-[28px] flex items-center justify-center shadow-sm ${
-        copied
-          ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/80 cursor-default'
+        copied 
+          ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/80 cursor-default' 
           : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 cursor-pointer'
       }`}
       title="Copy Signal Details"
@@ -130,16 +113,9 @@ export function SignalHistoryPanel({
   onTimeZoneChange,
   onSignalRefreshed,
 }: SignalHistoryPanelProps) {
-  const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'WINS' | 'LOSSES' | 'EXPIRED' | 'TOP_TRADE' | 'SUGGESTION' | '72PLUS_REJECTED'>('ALL');
-  const [directionFilter, setDirectionFilter] = useState<'ALL' | 'BUY' | 'SELL'>('ALL');
-  const [rangeFilter, setRangeFilter] = useState<'7D' | '30D' | '90D' | 'ALL'>('ALL');
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'TOP_TRADE' | 'SUGGESTION' | '72PLUS_REJECTED'>('ALL');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'list' | 'chart'>('list');
-
-  // Pagination State
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [pageSize, setPageSize] = useState<number>(20);
 
   // Zoom controls state for detailed signal analysis reports
   const {
@@ -151,7 +127,7 @@ export function SignalHistoryPanel({
   } = useReportZoom(1.0, 0.7, 2.0, 0.15);
   const [inspectedSignal, setInspectedSignal] = useState<TradingSignal | null>(null);
 
-  // Confirmation modals and toast notifications
+  // State for confirmation modals and toast notifications
   const [itemToDelete, setItemToDelete] = useState<{ id: string; symbol: string } | null>(null);
   const [confirmClearAll, setConfirmClearAll] = useState<boolean>(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -168,120 +144,20 @@ export function SignalHistoryPanel({
     }
   }, [toast]);
 
-  // Reset page to 1 when filters change
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [filter, directionFilter, rangeFilter, searchQuery, pageSize]);
+  const activeCount = history.filter((item) => (item.isTradeableSignal === true && item.signalClassification === 'TRADEABLE') && (item.signalStatus === 'ACTIVE' || item.signalStatus === 'WAITING_ENTRY' || item.outcomeType === 'VALIDATED')).length;
+  const topCount = history.filter((item) => (item.isTradeableSignal === true && item.signalClassification === 'TRADEABLE') && (item.isTopTrade || item.isBestTrade || item.outcomeType === 'TOP_TRADE' || item.outcomeType === 'BEST_TRADE')).length;
+  const suggestionCount = history.filter((item) => (item.isTradeableSignal === true && item.signalClassification === 'TRADEABLE') && (item.isSuggestion || item.outcomeType === 'SUGGESTION')).length;
 
-  const now = Date.now();
-  const rangeCutoff = useMemo(() => {
-    if (rangeFilter === '7D') return now - 7 * 24 * 60 * 60 * 1000;
-    if (rangeFilter === '30D') return now - 30 * 24 * 60 * 60 * 1000;
-    if (rangeFilter === '90D') return now - 90 * 24 * 60 * 60 * 1000;
-    return 0;
-  }, [rangeFilter, now]);
-
-  // Valid legitimate tradeable items
-  const legitimateTrades = useMemo(() => {
-    return history.filter((item) => {
-      // Must be tradeable signal
-      if (item.isTradeableSignal !== true || item.signalClassification !== 'TRADEABLE') return false;
-      if (item.direction === 'NO_TRADE' || item.outcomeType === 'NO_TRADE_OPPORTUNITY') return false;
-      // Filter out non-positive/artificial prices
-      if (item.entryPrice === 50000 || item.entryPrice === 49000 || item.entryPrice === 52000) return false;
-      return true;
-    });
-  }, [history]);
-
-  // Summary counts
-  const activeCount = useMemo(
-    () => legitimateTrades.filter((item) => item.signalStatus === 'ACTIVE' || item.signalStatus === 'WAITING_ENTRY' || item.outcomeType === 'VALIDATED').length,
-    [legitimateTrades]
-  );
-  const winCount = useMemo(
-    () => legitimateTrades.filter((item) => {
-      const s = `${item.signalStatus || ''} ${item.outcomeType || ''}`.toUpperCase();
-      return s.includes('TP') || s.includes('WIN') || s.includes('COMPLETED') || item.tp1Status === 'HIT' || item.tp2Status === 'HIT' || item.tp3Status === 'HIT';
-    }).length,
-    [legitimateTrades]
-  );
-  const lossCount = useMemo(
-    () => legitimateTrades.filter((item) => {
-      const s = `${item.signalStatus || ''} ${item.outcomeType || ''}`.toUpperCase();
-      return s.includes('SL') || s.includes('LOSS') || s.includes('STOPPED') || item.slStatus === 'HIT';
-    }).length,
-    [legitimateTrades]
-  );
-  const expiredCount = useMemo(
-    () => legitimateTrades.filter((item) => {
-      const s = `${item.signalStatus || ''} ${item.outcomeType || ''}`.toUpperCase();
-      return s.includes('EXPIRED') || s.includes('NO_ENTRY');
-    }).length,
-    [legitimateTrades]
-  );
-  const topCount = useMemo(
-    () => legitimateTrades.filter((item) => item.isTopTrade || item.isBestTrade || item.outcomeType === 'TOP_TRADE' || item.outcomeType === 'BEST_TRADE').length,
-    [legitimateTrades]
-  );
-  const suggestionCount = useMemo(
-    () => legitimateTrades.filter((item) => item.isSuggestion || item.outcomeType === 'SUGGESTION').length,
-    [legitimateTrades]
-  );
-
-  // Filtered dataset
-  const filteredHistory = useMemo(() => {
-    return legitimateTrades.filter((item) => {
-      // Time range filter
-      if (rangeCutoff > 0 && item.timestamp < rangeCutoff) return false;
-
-      // Direction filter
-      if (directionFilter !== 'ALL' && item.direction !== directionFilter) return false;
-
-      // Search filter
-      if (searchQuery.trim().length > 0) {
-        const q = searchQuery.trim().toLowerCase();
-        const sym = item.symbol.toLowerCase();
-        const strat = (item.strategy || '').toLowerCase();
-        const prov = (item.dataSource || '').toLowerCase();
-        if (!sym.includes(q) && !strat.includes(q) && !prov.includes(q)) {
-          return false;
-        }
-      }
-
-      // Status filter
-      if (filter === 'ACTIVE') {
-        return item.signalStatus === 'ACTIVE' || item.signalStatus === 'WAITING_ENTRY' || item.outcomeType === 'VALIDATED';
-      }
-      if (filter === 'WINS') {
-        const s = `${item.signalStatus || ''} ${item.outcomeType || ''}`.toUpperCase();
-        return s.includes('TP') || s.includes('WIN') || s.includes('COMPLETED') || item.tp1Status === 'HIT' || item.tp2Status === 'HIT' || item.tp3Status === 'HIT';
-      }
-      if (filter === 'LOSSES') {
-        const s = `${item.signalStatus || ''} ${item.outcomeType || ''}`.toUpperCase();
-        return s.includes('SL') || s.includes('LOSS') || s.includes('STOPPED') || item.slStatus === 'HIT';
-      }
-      if (filter === 'EXPIRED') {
-        const s = `${item.signalStatus || ''} ${item.outcomeType || ''}`.toUpperCase();
-        return s.includes('EXPIRED') || s.includes('NO_ENTRY');
-      }
-      if (filter === 'TOP_TRADE') {
-        return item.isTopTrade || item.isBestTrade || item.outcomeType === 'TOP_TRADE' || item.outcomeType === 'BEST_TRADE';
-      }
-      if (filter === 'SUGGESTION') {
-        return item.isSuggestion || item.outcomeType === 'SUGGESTION';
-      }
-      return true;
-    });
-  }, [legitimateTrades, rangeCutoff, directionFilter, searchQuery, filter]);
-
-  // Paginated items
-  const totalCount = filteredHistory.length;
-  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
-  const validCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
-  const startIndex = (validCurrentPage - 1) * pageSize;
-  const paginatedItems = useMemo(() => {
-    return filteredHistory.slice(startIndex, startIndex + pageSize);
-  }, [filteredHistory, startIndex, pageSize]);
+  const filteredHistory = history.filter((item) => {
+    // GATE 79: Every user-facing trade signal MUST require isTradeableSignal === true and signalClassification === 'TRADEABLE'
+    if (item.isTradeableSignal !== true || item.signalClassification !== 'TRADEABLE') return false;
+    // GATE 64: NO_TRADE notifications and non-tradeable entries must NOT appear in this panel
+    if (item.direction === 'NO_TRADE' || item.outcomeType === 'NO_TRADE_OPPORTUNITY') return false;
+    if (filter === 'ACTIVE') return item.signalStatus === 'ACTIVE' || item.signalStatus === 'WAITING_ENTRY' || item.outcomeType === 'VALIDATED';
+    if (filter === 'TOP_TRADE') return item.isTopTrade || item.isBestTrade || item.outcomeType === 'TOP_TRADE' || item.outcomeType === 'BEST_TRADE';
+    if (filter === 'SUGGESTION') return item.isSuggestion || item.outcomeType === 'SUGGESTION';
+    return true;
+  });
 
   const toggleExpand = (id: string) => {
     setExpandedId((prev) => (prev === id ? null : id));
@@ -338,7 +214,7 @@ export function SignalHistoryPanel({
         } catch (err: any) {
           setToast({
             title: 'Bulk Deletion Failed',
-            message: err.message || 'Firestore or network error occurred during deletion.',
+            message: err.message || 'Database or network error occurred during deletion.',
           });
         }
       }
@@ -355,13 +231,13 @@ export function SignalHistoryPanel({
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h3 className="text-xs sm:text-sm font-semibold text-white truncate">Authoritative Historical Trades & Signal Log</h3>
+              <h3 className="text-xs sm:text-sm font-semibold text-white truncate">Signal History & Alert Log</h3>
               <span className="text-[10px] sm:text-xs font-mono bg-slate-950 text-emerald-400 px-2 py-0.5 rounded border border-slate-800 shrink-0 font-bold">
-                {filteredHistory.length} Trades
+                {history.length}/30 Logged
               </span>
             </div>
             <p className="text-[11px] text-slate-400 truncate">
-              Firestore production audit trail with immutable original entry, SL, and TP targets
+              Session audit log of generated signals, active setups, and scan outcomes
             </p>
           </div>
         </div>
@@ -412,6 +288,67 @@ export function SignalHistoryPanel({
             </div>
           )}
 
+          {/* Filter Chips */}
+          <div className="flex flex-wrap items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[10px] font-mono gap-0.5">
+            <button
+              type="button"
+              onClick={() => setFilter('ALL')}
+              className={`px-2 py-0.5 rounded transition cursor-pointer ${
+                filter === 'ALL'
+                  ? 'bg-slate-800 text-white font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              All ({history.length})
+            </button>
+            {activeCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setFilter('ACTIVE')}
+                className={`px-2 py-0.5 rounded transition cursor-pointer ${
+                  filter === 'ACTIVE'
+                    ? 'bg-emerald-950 text-emerald-300 font-semibold border border-emerald-800'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Active ({activeCount})
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setFilter('TOP_TRADE')}
+              className={`px-2 py-0.5 rounded transition cursor-pointer ${
+                filter === 'TOP_TRADE'
+                  ? 'bg-amber-950 text-amber-300 font-semibold border border-amber-800'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Top ({topCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => setFilter('SUGGESTION')}
+              className={`px-2 py-0.5 rounded transition cursor-pointer ${
+                filter === 'SUGGESTION'
+                  ? 'bg-sky-950 text-sky-300 font-semibold border border-sky-800'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Suggestions ({suggestionCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => setFilter('72PLUS_REJECTED')}
+              className={`px-2 py-0.5 rounded transition cursor-pointer ${
+                filter === '72PLUS_REJECTED'
+                  ? 'bg-rose-950 text-rose-300 font-semibold border border-rose-800'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              70+ Rejected ({rejected72PlusCandidates.length})
+            </button>
+          </div>
+
           {/* Clear History Button */}
           {history.length > 0 && (
             <button
@@ -426,201 +363,7 @@ export function SignalHistoryPanel({
         </div>
       </div>
 
-      {/* Filter and Search Toolbar */}
-      <div className="space-y-2 bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80">
-        {/* Row 1: Status Filters */}
-        <div className="flex flex-wrap items-center gap-1 text-[10px] font-mono">
-          <span className="text-slate-400 font-semibold uppercase mr-1 flex items-center gap-1">
-            <Filter className="w-3 h-3 text-slate-400" /> Filter:
-          </span>
-          <button
-            type="button"
-            onClick={() => setFilter('ALL')}
-            className={`px-2 py-0.5 rounded transition cursor-pointer ${
-              filter === 'ALL'
-                ? 'bg-slate-800 text-white font-bold border border-slate-700'
-                : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
-            }`}
-          >
-            All ({legitimateTrades.length})
-          </button>
-          {activeCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setFilter('ACTIVE')}
-              className={`px-2 py-0.5 rounded transition cursor-pointer ${
-                filter === 'ACTIVE'
-                  ? 'bg-emerald-950 text-emerald-300 font-bold border border-emerald-700'
-                  : 'bg-slate-900 text-emerald-400/70 hover:text-emerald-300 border border-slate-800'
-              }`}
-            >
-              Active ({activeCount})
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => setFilter('WINS')}
-            className={`px-2 py-0.5 rounded transition cursor-pointer ${
-              filter === 'WINS'
-                ? 'bg-emerald-950 text-emerald-300 font-bold border border-emerald-700'
-                : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
-            }`}
-          >
-            Wins / TP Hit ({winCount})
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilter('LOSSES')}
-            className={`px-2 py-0.5 rounded transition cursor-pointer ${
-              filter === 'LOSSES'
-                ? 'bg-rose-950 text-rose-300 font-bold border border-rose-700'
-                : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
-            }`}
-          >
-            Losses / SL Hit ({lossCount})
-          </button>
-          {expiredCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setFilter('EXPIRED')}
-              className={`px-2 py-0.5 rounded transition cursor-pointer ${
-                filter === 'EXPIRED'
-                  ? 'bg-amber-950 text-amber-300 font-bold border border-amber-700'
-                  : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
-              }`}
-            >
-              Expired ({expiredCount})
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => setFilter('TOP_TRADE')}
-            className={`px-2 py-0.5 rounded transition cursor-pointer ${
-              filter === 'TOP_TRADE'
-                ? 'bg-amber-950 text-amber-300 font-bold border border-amber-700'
-                : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
-            }`}
-          >
-            Top Trades ({topCount})
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilter('SUGGESTION')}
-            className={`px-2 py-0.5 rounded transition cursor-pointer ${
-              filter === 'SUGGESTION'
-                ? 'bg-sky-950 text-sky-300 font-bold border border-sky-700'
-                : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
-            }`}
-          >
-            Suggestions ({suggestionCount})
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilter('72PLUS_REJECTED')}
-            className={`px-2 py-0.5 rounded transition cursor-pointer ${
-              filter === '72PLUS_REJECTED'
-                ? 'bg-rose-950 text-rose-300 font-bold border border-rose-700'
-                : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
-            }`}
-          >
-            70+ Rejected ({rejected72PlusCandidates.length})
-          </button>
-        </div>
-
-        {/* Row 2: Search, Direction, Range, Page Size */}
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-800/60 text-[10px] font-mono">
-          <div className="flex flex-wrap items-center gap-2 flex-1 min-w-[240px]">
-            {/* Symbol Search Box */}
-            <div className="relative flex-1 max-w-xs">
-              <Search className="w-3 h-3 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search symbol, strategy, provider..."
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-7 pr-7 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-              />
-              {searchQuery && (
-                <button
-                  type="button"
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
-            </div>
-
-            {/* Direction Selector */}
-            <div className="flex items-center bg-slate-900 rounded-lg border border-slate-800 p-0.5">
-              <span className="text-slate-500 px-1.5">DIR:</span>
-              <button
-                type="button"
-                onClick={() => setDirectionFilter('ALL')}
-                className={`px-2 py-0.5 rounded transition ${
-                  directionFilter === 'ALL' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                All
-              </button>
-              <button
-                type="button"
-                onClick={() => setDirectionFilter('BUY')}
-                className={`px-2 py-0.5 rounded transition ${
-                  directionFilter === 'BUY' ? 'bg-emerald-950 text-emerald-400 font-bold border border-emerald-800' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                BUY
-              </button>
-              <button
-                type="button"
-                onClick={() => setDirectionFilter('SELL')}
-                className={`px-2 py-0.5 rounded transition ${
-                  directionFilter === 'SELL' ? 'bg-rose-950 text-rose-400 font-bold border border-rose-800' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                SELL
-              </button>
-            </div>
-
-            {/* Range Selector */}
-            <div className="flex items-center bg-slate-900 rounded-lg border border-slate-800 p-0.5">
-              <span className="text-slate-500 px-1.5">RANGE:</span>
-              {(['7D', '30D', '90D', 'ALL'] as const).map((r) => (
-                <button
-                  key={r}
-                  type="button"
-                  onClick={() => setRangeFilter(r)}
-                  className={`px-2 py-0.5 rounded transition ${
-                    rangeFilter === r ? 'bg-slate-800 text-emerald-400 font-bold border border-slate-700' : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {r}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Page Size Selector */}
-          <div className="flex items-center gap-1 text-slate-400">
-            <span>SHOW:</span>
-            {[10, 20, 50].map((sz) => (
-              <button
-                key={sz}
-                type="button"
-                onClick={() => setPageSize(sz)}
-                className={`px-1.5 py-0.5 rounded transition ${
-                  pageSize === sz ? 'bg-slate-800 text-emerald-400 font-bold border border-slate-700' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {sz}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Tabs Header */}
+      {/* History List or Chart */}
       <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
         <button
           type="button"
@@ -632,7 +375,7 @@ export function SignalHistoryPanel({
           }`}
         >
           <History className="w-3.5 h-3.5" />
-          Historical Trade Setups ({filteredHistory.length})
+          Signal Logs ({history.length})
         </button>
         <button
           type="button"
@@ -644,7 +387,7 @@ export function SignalHistoryPanel({
           }`}
         >
           <BarChart3 className="w-3.5 h-3.5 text-sky-400" />
-          Historical Performance Analytics
+          Historical Performance
         </button>
       </div>
 
@@ -716,10 +459,10 @@ export function SignalHistoryPanel({
                   </div>
                 )}
 
-                {/* Interactive Rejection Breakdown */}
-                <div className="pt-2">
-                  <RejectionBreakdown candidate={cand as any} />
-                </div>
+                 {/* Interactive Rejection Breakdown */}
+                 <div className="pt-2">
+                   <RejectionBreakdown candidate={cand as any} />
+                 </div>
               </div>
             ))}
           </div>
@@ -728,7 +471,7 @@ export function SignalHistoryPanel({
             No 70+ candidates have been rejected in recent scans.
           </div>
         )
-      ) : paginatedItems.length > 0 ? (
+      ) : filteredHistory.length > 0 ? (
         <div className="space-y-3">
           {/* Bulk Action Controls */}
           {onDeleteMultipleHistoryItems && (
@@ -736,22 +479,17 @@ export function SignalHistoryPanel({
               <label className="flex items-center gap-2 cursor-pointer text-slate-300 hover:text-white transition select-none">
                 <input
                   type="checkbox"
-                  checked={paginatedItems.length > 0 && paginatedItems.every((item) => selectedIds.includes(item.id))}
+                  checked={filteredHistory.length > 0 && selectedIds.length === filteredHistory.length}
                   onChange={(e) => {
                     if (e.target.checked) {
-                      const newIds = new Set(selectedIds);
-                      paginatedItems.forEach((i) => newIds.add(i.id));
-                      setSelectedIds(Array.from(newIds));
+                      setSelectedIds(filteredHistory.map((item) => item.id));
                     } else {
-                      const removeSet = new Set(paginatedItems.map((i) => i.id));
-                      setSelectedIds((prev) => prev.filter((id) => !removeSet.has(id)));
+                      setSelectedIds([]);
                     }
                   }}
                   className="rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900 cursor-pointer h-4 w-4"
                 />
-                <span className="font-mono text-[11px] font-bold tracking-wider">
-                  SELECT PAGE ({paginatedItems.length})
-                </span>
+                <span className="font-mono text-[11px] font-bold tracking-wider">SELECT ALL ({filteredHistory.length})</span>
               </label>
 
               {selectedIds.length > 0 && (
@@ -776,17 +514,28 @@ export function SignalHistoryPanel({
             </div>
           )}
 
-          {paginatedItems.map((item) => {
+          {filteredHistory.map((item, idx) => {
             const isExpanded = expandedId === item.id;
             const precision = item.entryPrice ? getDynamicPrecision(item.entryPrice, item.symbol) : 2;
             const isDeleting = deletingIds.includes(item.id);
 
-            // Authoritative status evaluation
-            const statusStr = `${item.signalStatus || ''} ${item.outcomeType || ''}`.toUpperCase();
-            const isWin = statusStr.includes('TP') || statusStr.includes('WIN') || statusStr.includes('COMPLETED') || item.tp1Status === 'HIT' || item.tp2Status === 'HIT' || item.tp3Status === 'HIT';
-            const isLoss = statusStr.includes('SL') || statusStr.includes('LOSS') || statusStr.includes('STOPPED') || item.slStatus === 'HIT';
-            const isExpired = statusStr.includes('EXPIRED') || statusStr.includes('NO_ENTRY');
-            const isActive = item.signalStatus === 'ACTIVE' || item.signalStatus === 'WAITING_ENTRY' || item.outcomeType === 'VALIDATED';
+            // Determine custom visual statuses
+            let customStatus: 'WAITING_ENTRY' | 'ACTIVE' | 'EXPIRING' | 'PROCESSING' | null = null;
+            if (item.signalStatus === 'ACTIVE' || item.signalStatus === 'ENTRY_CONFIRMED' || item.signalStatus === 'CONFIRMED') {
+              customStatus = 'ACTIVE';
+            } else if (item.signalStatus === 'WAITING_ENTRY') {
+              customStatus = 'WAITING_ENTRY';
+            } else if (
+              item.expiresAt && item.expiresAt - Date.now() > 0 && item.expiresAt - Date.now() < 30 * 60 * 1000
+            ) {
+              customStatus = 'EXPIRING';
+            } else if (
+              item.signalStatus === 'WATCHING' ||
+              item.signalStatus === 'CANDIDATE' ||
+              (item as any).status === 'PROCESSING'
+            ) {
+              customStatus = 'PROCESSING';
+            }
 
             return (
               <div
@@ -803,9 +552,9 @@ export function SignalHistoryPanel({
                     </div>
                   </div>
                 )}
-
-                {/* Header Row: Symbol, Direction, Status, Outcome & Badges */}
+                {/* Header Row: Symbol, Direction, Status & Badges */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
+                  {/* Left: Direction Badge, Symbol Name, Category & Status Tags */}
                   <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                     {onDeleteMultipleHistoryItems && (
                       <input
@@ -821,8 +570,6 @@ export function SignalHistoryPanel({
                         className="rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900 cursor-pointer h-4 w-4 shrink-0 mr-1.5"
                       />
                     )}
-
-                    {/* Direction Badge */}
                     {item.direction === 'BUY' ? (
                       <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 text-[10px] sm:text-xs font-mono font-bold flex items-center gap-1 shadow-sm">
                         <TrendingUp className="w-3.5 h-3.5" /> BUY
@@ -837,7 +584,6 @@ export function SignalHistoryPanel({
                       </span>
                     )}
 
-                    {/* Symbol */}
                     <button
                       type="button"
                       onClick={() => onSelectSymbol && onSelectSymbol(item.symbol)}
@@ -854,36 +600,77 @@ export function SignalHistoryPanel({
                       </span>
                     )}
 
-                    {/* Outcome / Status Badge */}
-                    {isWin ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border bg-emerald-950 text-emerald-300 border-emerald-500 text-[10px] sm:text-xs font-mono font-bold">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                        WIN (TARGET HIT)
-                      </span>
-                    ) : isLoss ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border bg-rose-950 text-rose-300 border-rose-500 text-[10px] sm:text-xs font-mono font-bold">
-                        <XCircle className="w-3.5 h-3.5 text-rose-400" />
-                        LOSS (STOPPED OUT)
-                      </span>
-                    ) : isExpired ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border bg-amber-950/90 text-amber-300 border-amber-600 text-[10px] sm:text-xs font-mono font-bold">
-                        <Clock className="w-3.5 h-3.5 text-amber-400" />
-                        EXPIRED
-                      </span>
-                    ) : isActive ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border bg-sky-950 text-sky-300 border-sky-500 text-[10px] sm:text-xs font-mono font-bold shadow-[0_0_8px_rgba(14,165,233,0.15)]">
-                        <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
-                        {item.signalStatus === 'WAITING_ENTRY' ? 'WAITING ENTRY' : 'ACTIVE'}
-                      </span>
-                    ) : (
-                      <span className="text-[10px] sm:text-xs font-mono font-bold px-2 py-0.5 rounded border bg-slate-900 text-slate-300 border-slate-700">
-                        {formatStatus(item.signalStatus || 'VALIDATED')}
+                    {item.marketType && (
+                      <span className="text-[10px] sm:text-xs font-mono text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800">
+                        {formatLabel(item.marketType)}
                       </span>
                     )}
 
-                    {item.isBestTrade || item.rankTier === 'BEST_TRADE' || item.outcomeType === 'BEST_TRADE' ? (
+                    {item.marketRegime && (
+                      <span className="text-[10px] sm:text-xs font-mono text-indigo-300 bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-800">
+                        {formatLabel(item.marketRegime)}
+                      </span>
+                    )}
+
+                    {customStatus === 'WAITING_ENTRY' ? (
+                      <span className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded border bg-blue-950/90 text-blue-300 border-blue-500/80 text-[10px] sm:text-xs font-mono font-bold shadow-[0_0_8px_rgba(59,130,246,0.15)]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                        WAITING ENTRY
+                      </span>
+                    ) : customStatus === 'ACTIVE' ? (
+                      <span className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded border bg-emerald-950 text-emerald-300 border-emerald-500 text-[10px] sm:text-xs font-mono font-bold shadow-[0_0_8px_rgba(16,185,129,0.1)]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        ACTIVE
+                      </span>
+                    ) : customStatus === 'EXPIRING' ? (
+                      <span className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded border bg-amber-950/90 text-amber-300 border-amber-500/80 text-[10px] sm:text-xs font-mono font-bold shadow-[0_0_8px_rgba(245,158,11,0.1)] animate-pulse">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                        EXPIRING
+                      </span>
+                    ) : customStatus === 'PROCESSING' ? (
+                      <span className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded border bg-sky-950/90 text-sky-300 border-sky-500/80 text-[10px] sm:text-xs font-mono font-bold shadow-[0_0_8px_rgba(14,165,233,0.1)]">
+                        <RefreshCw className="w-2.5 h-2.5 text-sky-400 animate-spin" />
+                        PROCESSING
+                      </span>
+                    ) : item.signalStatus ? (
+                      <span
+                        className={`text-[10px] sm:text-xs font-mono font-bold px-2 py-0.5 rounded border ${
+                          item.signalStatus === 'ACTIVE'
+                            ? 'bg-emerald-950 text-emerald-300 border-emerald-500'
+                            : item.signalStatus === 'WAITING_ENTRY'
+                            ? 'bg-blue-950 text-blue-300 border-blue-500'
+                            : item.signalStatus === 'TP2_REACHED' || item.signalStatus === 'TP2_HIT'
+                            ? 'bg-emerald-950 text-emerald-300 border-emerald-600'
+                            : item.signalStatus === 'TP1_REACHED' || item.signalStatus === 'TP1_HIT'
+                            ? 'bg-teal-950 text-teal-300 border-teal-600'
+                            : item.signalStatus === 'STOPPED' || item.signalStatus === 'SL_HIT' || item.signalStatus === 'STOPPED_OUT'
+                            ? 'bg-rose-950 text-rose-300 border-rose-500'
+                            : item.signalStatus === 'AMBIGUOUS'
+                            ? 'bg-amber-950 text-amber-300 border-amber-500'
+                            : item.signalStatus === 'EXPIRED'
+                            ? 'bg-amber-950 text-amber-300 border-amber-600'
+                            : item.signalStatus === 'INVALIDATED'
+                            ? 'bg-slate-900 text-slate-400 border-slate-700'
+                            : 'bg-blue-950 text-blue-300 border-blue-500'
+                        }`}
+                      >
+                        {formatStatus(item.signalStatus)}
+                      </span>
+                    ) : item.isBestTrade || item.rankTier === 'BEST_TRADE' || item.outcomeType === 'BEST_TRADE' ? (
                       <span className="text-[10px] sm:text-xs font-mono font-bold bg-amber-950/90 text-amber-300 border border-amber-500/80 px-2 py-0.5 rounded">
                         {formatRankTier('BEST_TRADE', true)}
+                      </span>
+                    ) : item.isSecondBest || item.rankTier === 'SECOND_BEST' || item.outcomeType === 'SECOND_BEST' ? (
+                      <span className="text-[10px] sm:text-xs font-mono font-bold bg-emerald-950/90 text-emerald-300 border border-emerald-500/80 px-2 py-0.5 rounded">
+                        {formatRankTier('SECOND_BEST', true)}
+                      </span>
+                    ) : item.isSuggestion || item.rankTier === 'SUGGESTION' || item.outcomeType === 'SUGGESTION' ? (
+                      <span className="text-[10px] sm:text-xs font-mono font-bold bg-sky-950/90 text-sky-300 border border-sky-600/80 px-2 py-0.5 rounded">
+                        {formatRankTier('SUGGESTION', false)}
+                      </span>
+                    ) : item.isTopTrade ? (
+                      <span className="text-[10px] sm:text-xs font-mono font-bold bg-amber-950/90 text-amber-300 border border-amber-500/80 px-2 py-0.5 rounded">
+                        {formatRankTier('TOP_TRADE', true)}
                       </span>
                     ) : null}
                   </div>
@@ -892,13 +679,26 @@ export function SignalHistoryPanel({
                   <div className="flex flex-wrap items-center gap-1.5 text-[10px] sm:text-xs font-mono shrink-0">
                     {item.confidenceScore !== undefined && (
                       <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                        Score: <strong className="text-sky-400 font-bold">{item.confidenceScore}/100</strong>
+                        Signal Score: <strong className="text-sky-400 font-bold">{item.confidenceScore}/100</strong>
                       </span>
                     )}
 
                     <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                      R:R: <strong className="text-emerald-400 font-bold">{item.riskRewardRatio || 2}:1</strong>
+                      Target Quality: <strong className="text-emerald-400 font-bold">{item.targetQualityScore !== undefined ? `${item.targetQualityScore}/100` : `${item.score || 72}/100`}</strong>
                     </span>
+
+                    {(item.estimatedWinRate !== undefined || item.modelEstimatedWinRate !== undefined) && (
+                      <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                        Model Est. Win Rate: <strong className="text-emerald-400 font-bold">{(item.estimatedWinRate ?? item.modelEstimatedWinRate)?.toFixed(1)}%</strong>
+                      </span>
+                    )}
+
+                    {item.isEmpiricallyCalibrated === true && item.empiricalProbability != null && (
+                      <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-emerald-800/80">
+                        Empirical Win Rate: <strong className="text-emerald-300 font-bold">{item.empiricalProbability.toFixed(1)}%</strong>
+                        <span className="text-[9px] text-slate-400 ml-1">(N={item.probabilitySampleSize || '--'}{item.probabilityConfidenceInterval ? `, 95% CI: ${item.probabilityConfidenceInterval.lower.toFixed(1)}%–${item.probabilityConfidenceInterval.upper.toFixed(1)}%` : ''})</span>
+                      </span>
+                    )}
 
                     <span className="text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 flex items-center gap-1">
                       <Clock className="w-3 h-3 text-slate-400" />
@@ -914,7 +714,6 @@ export function SignalHistoryPanel({
                     >
                       {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                     </button>
-
                     {/* Fullscreen AI Report Inspection Button */}
                     <button
                       type="button"
@@ -925,7 +724,6 @@ export function SignalHistoryPanel({
                     >
                       <Maximize2 className="w-3.5 h-3.5" />
                     </button>
-
                     <CopySignalButton signal={item} precision={getDynamicPrecision(item.entryPrice, item.symbol)} />
 
                     {/* Delete Entry Button */}
@@ -949,61 +747,62 @@ export function SignalHistoryPanel({
                   </div>
                 </div>
 
-                {/* Execution Price & Target Cards Grid */}
+                {/* Single-Screen View Execution Price & Target Cards Grid */}
                 {item.entryPrice !== undefined && item.entryPrice > 0 ? (
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 font-mono">
-                    {/* Immutable Entry Price */}
+                    {/* Entry Price Block */}
                     <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2.5 sm:p-3 space-y-1 flex flex-col justify-between shadow-sm">
                       <div>
                         <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block truncate">
-                          ORIGINAL ENTRY
+                          EXACT ENTRY
                         </span>
                         <div className="text-base sm:text-xl font-bold text-white tracking-tight mt-0.5 truncate">
                           {item.entryPrice.toFixed(precision)}
                         </div>
                       </div>
                       <span className="text-[10px] text-slate-400 block pt-1 border-t border-slate-800/80 truncate">
-                        Immutable Setup Level
+                        Market trigger
                       </span>
                     </div>
 
-                    {/* Immutable Stop Loss */}
+                    {/* Stop Loss Block */}
                     <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2.5 sm:p-3 space-y-1 flex flex-col justify-between shadow-sm">
                       <div>
                         <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block truncate">
-                          STOP LOSS (SL)
+                          STOP LOSS (ATR)
                         </span>
                         <div className="text-base sm:text-xl font-bold text-rose-400 tracking-tight mt-0.5 truncate">
                           {item.stopLoss?.toFixed(precision)}
                         </div>
                       </div>
-                      <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-800/80">
-                        <span>Status:</span>
-                        <strong className={item.slStatus === 'HIT' ? 'text-rose-400 font-bold' : 'text-slate-300'}>
-                          {item.slStatus === 'HIT' ? 'HIT' : 'ACTIVE'}
-                        </strong>
-                      </div>
+                      {item.stopDistance !== undefined && item.pipPointUnit ? (
+                        <div className="text-[10px] font-semibold text-rose-300 pt-1 border-t border-slate-800/80 truncate">
+                          -{item.stopDistance} {item.pipPointUnit}
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-rose-400/80 block pt-1 border-t border-slate-800/80 truncate">
+                          Risk exit point
+                        </span>
+                      )}
                     </div>
 
-                    {/* Immutable Take Profit Targets */}
+                    {/* Take Profit Target Levels Block - Responsive 3-Col on Mobile */}
                     <div className="bg-slate-900/90 border border-emerald-900/60 rounded-lg p-2.5 sm:p-3 space-y-1.5 shadow-sm col-span-2 lg:col-span-1">
                       <div className="flex items-center justify-between pb-0.5 border-b border-emerald-950/80">
                         <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">
                           TAKE PROFIT TARGETS
                         </span>
                         <span className="text-[9px] text-emerald-400/80 bg-emerald-950 px-1 py-0.2 rounded font-mono">
-                          TP1 / TP2 / TP3
+                          Multi-Level
                         </span>
                       </div>
-
+                      
                       <div className="grid grid-cols-3 lg:grid-cols-1 gap-1 font-mono">
                         {/* TP1 */}
-                        <div className={`p-1 sm:p-1.5 rounded flex flex-col lg:flex-row items-center justify-between gap-0.5 shadow-sm text-center lg:text-left ${
-                          item.tp1Status === 'HIT' ? 'bg-emerald-950/90 border border-emerald-500' : 'bg-slate-950/90 border border-emerald-900/50'
-                        }`}>
-                          <div className="flex items-center gap-1">
-                            <span className="text-[10px] font-bold text-emerald-400/90">TP1</span>
-                            {item.tp1Status === 'HIT' && <Check className="w-3 h-3 text-emerald-400" />}
+                        <div className="bg-slate-950/90 border border-emerald-900/50 p-1 sm:p-1.5 rounded flex flex-col lg:flex-row items-center justify-between gap-0.5 shadow-sm text-center lg:text-left">
+                          <div>
+                            <span className="text-[10px] font-bold text-emerald-400/90 block">TP1</span>
+                            <span className="text-[8px] text-slate-400 hidden sm:block">Conservative</span>
                           </div>
                           <strong className="text-xs sm:text-sm font-bold text-emerald-400 tracking-tight">
                             {(item.tp1 ?? item.takeProfit)?.toFixed(precision)}
@@ -1011,12 +810,10 @@ export function SignalHistoryPanel({
                         </div>
 
                         {/* TP2 */}
-                        <div className={`p-1 sm:p-1.5 rounded flex flex-col lg:flex-row items-center justify-between gap-0.5 shadow-sm text-center lg:text-left ${
-                          item.tp2Status === 'HIT' ? 'bg-emerald-950/90 border border-emerald-500' : 'bg-slate-950/90 border border-emerald-800/60'
-                        }`}>
-                          <div className="flex items-center gap-1">
-                            <span className="text-[10px] font-bold text-emerald-300">TP2</span>
-                            {item.tp2Status === 'HIT' && <Check className="w-3 h-3 text-emerald-400" />}
+                        <div className="bg-slate-950/90 border border-emerald-800/60 p-1 sm:p-1.5 rounded flex flex-col lg:flex-row items-center justify-between gap-0.5 shadow-sm text-center lg:text-left">
+                          <div>
+                            <span className="text-[10px] font-bold text-emerald-300 block">TP2</span>
+                            <span className="text-[8px] text-slate-400 hidden sm:block">Main</span>
                           </div>
                           <strong className="text-xs sm:text-sm font-bold text-emerald-300 tracking-tight">
                             {(item.tp2 ?? item.takeProfit)?.toFixed(precision)}
@@ -1024,12 +821,10 @@ export function SignalHistoryPanel({
                         </div>
 
                         {/* TP3 */}
-                        <div className={`p-1 sm:p-1.5 rounded flex flex-col lg:flex-row items-center justify-between gap-0.5 shadow-sm text-center lg:text-left ${
-                          item.tp3Status === 'HIT' ? 'bg-emerald-950/90 border border-emerald-500' : 'bg-slate-950/90 border border-emerald-700/60'
-                        }`}>
-                          <div className="flex items-center gap-1">
-                            <span className="text-[10px] font-bold text-emerald-200">TP3</span>
-                            {item.tp3Status === 'HIT' && <Check className="w-3 h-3 text-emerald-400" />}
+                        <div className="bg-slate-950/90 border border-emerald-700/60 p-1 sm:p-1.5 rounded flex flex-col lg:flex-row items-center justify-between gap-0.5 shadow-sm text-center lg:text-left">
+                          <div>
+                            <span className="text-[10px] font-bold text-emerald-200 block">TP3</span>
+                            <span className="text-[8px] text-slate-400 hidden sm:block">Extended</span>
                           </div>
                           <strong className="text-xs sm:text-sm font-bold text-emerald-200 tracking-tight">
                             {(item.tp3 ?? item.takeProfit)?.toFixed(precision)}
@@ -1038,7 +833,7 @@ export function SignalHistoryPanel({
                       </div>
                     </div>
 
-                    {/* Risk/Reward Ratio & Strategy Block */}
+                    {/* Risk/Reward Ratio Block */}
                     <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2.5 sm:p-3 space-y-1 flex flex-col justify-between shadow-sm col-span-2 lg:col-span-1">
                       <div>
                         <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block truncate">
@@ -1048,9 +843,15 @@ export function SignalHistoryPanel({
                           {item.riskRewardRatio}:1
                         </div>
                       </div>
-                      <div className="text-[10px] text-slate-400 pt-1 border-t border-slate-800/80 truncate">
-                        Strategy: <strong className="text-slate-200">{formatStrategy(item.strategy || 'Trend Confluence')}</strong>
-                      </div>
+                      {item.estimatedFriction?.netRiskRewardRatio ? (
+                        <div className="text-[10px] font-semibold text-sky-300 pt-1 border-t border-slate-800/80 truncate">
+                          Net: {item.estimatedFriction.netRiskRewardRatio.toFixed(2)}:1
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-slate-400 block pt-1 border-t border-slate-800/80 truncate">
+                          Gross setup
+                        </span>
+                      )}
                     </div>
                   </div>
                 ) : null}
@@ -1058,10 +859,11 @@ export function SignalHistoryPanel({
                 {/* Expanded Details Drawer */}
                 {isExpanded && (
                   <div className="pt-3 border-t border-slate-800/80 space-y-3 text-xs">
+                    {/* Drawer Header with Report Zoom Controls */}
                     <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800/60">
                       <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-slate-200">
                         <Zap className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Detailed Target Tracking & Validation Diagnostics</span>
+                        <span>AI Signals Analysis Report</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <ReportZoomControls
@@ -1086,103 +888,101 @@ export function SignalHistoryPanel({
                     </div>
 
                     <ZoomableReportWrapper zoomLevel={reportZoomLevel} id={`drawer-report-wrapper-${item.id}`} className="space-y-3">
-                      {/* Target Tracker with live verification */}
-                      <TargetTracker
-                        signal={item as unknown as TradingSignal}
-                        precision={precision}
-                        onSignalRefreshed={onSignalRefreshed}
-                      />
+                    {/* Gate 2 Authoritative Target Hit Details Tracker */}
+                    <TargetTracker
+                      signal={item as unknown as TradingSignal}
+                      precision={precision}
+                      onSignalRefreshed={onSignalRefreshed}
+                    />
 
-                      {/* Technical Confluence Breakdown */}
-                      <AcceptanceBreakdown signal={item as any} />
-
-                      {/* AI Risk Evaluation */}
-                      {item.aiAssessment && (
-                        <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 text-slate-200 space-y-1.5">
-                          <div className="flex items-center gap-2 text-cyan-400 font-semibold text-xs uppercase tracking-wider">
-                            <Cpu className="w-4 h-4 text-emerald-400" />
-                            <span>NVIDIA AI Confluence Analysis</span>
-                          </div>
-                          <p className="text-slate-200 leading-relaxed font-sans text-xs sm:text-sm">{item.aiAssessment}</p>
-                        </div>
-                      )}
-
-                      {/* Metadata Footer */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-400 pt-1 border-t border-slate-800/60">
-                        {item.snapshotId && (
-                          <span>
-                            ID: <strong className="text-slate-300">{item.snapshotId}</strong>
-                          </span>
-                        )}
-                        {item.dataSource && (
-                          <span>
-                            Provider: <strong className="text-slate-300">{formatProviderName(item.dataSource)}</strong>
-                          </span>
-                        )}
-                        <span>
-                          Provenance: <strong className="text-emerald-400 font-semibold">LIVE PRODUCTION (IMMUTABLE)</strong>
-                        </span>
+                    {item.strategy && (
+                      <div className="text-slate-300 font-mono text-xs bg-slate-900/80 border border-slate-800 p-3 rounded-lg flex items-center gap-2">
+                        <span className="text-slate-400 font-semibold uppercase text-[10px]">Strategy:</span>
+                        <span className="text-white font-medium">{formatStrategy(item.strategy)}</span>
                       </div>
+                    )}
+
+                    {/* Technical Confluence Reasons List */}
+                    {/* Visual Acceptance & Technical Confluence Breakdown */}
+                    <AcceptanceBreakdown signal={item as any} />
+
+                    {/* NVIDIA AI Risk Evaluation */}
+                    {item.aiAssessment && (
+                      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 text-slate-200 space-y-1.5">
+                        <div className="flex items-center gap-2 text-cyan-400 font-semibold text-xs uppercase tracking-wider">
+                          <Cpu className="w-4 h-4 text-emerald-400" />
+                          <span>NVIDIA AI Risk Evaluation</span>
+                        </div>
+                        <p className="text-slate-200 leading-relaxed font-sans text-xs sm:text-sm">{item.aiAssessment}</p>
+                      </div>
+                    )}
+
+                    {/* Evaluation Summary fallback */}
+                    {item.reason && !item.aiAssessment && (
+                      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 text-slate-200 space-y-1.5">
+                        <div className="flex items-center gap-2 text-amber-400 font-semibold text-xs uppercase tracking-wider">
+                          <AlertCircle className="w-4 h-4 text-amber-400" />
+                          <span>Evaluation Summary</span>
+                        </div>
+                        <p className="text-slate-200 leading-relaxed font-sans text-xs">{item.reason}</p>
+                      </div>
+                    )}
+
+                    {/* Friction & Execution Specs */}
+                    {item.estimatedFriction && (
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-900/90 p-3.5 rounded-xl border border-slate-800/80 font-mono text-xs text-slate-400">
+                        {item.estimatedFriction.spreadPlusSlippage && (
+                          <div className="flex justify-between items-center px-2 py-1 bg-slate-950/60 rounded border border-slate-800/50">
+                            <span>Spread & Slippage:</span>
+                            <strong className="text-slate-200">{item.estimatedFriction.spreadPlusSlippage}</strong>
+                          </div>
+                        )}
+                        {item.estimatedFriction.frictionToProfitPct !== undefined && (
+                          <div className="flex justify-between items-center px-2 py-1 bg-slate-950/60 rounded border border-slate-800/50">
+                            <span>Friction Cost Ratio:</span>
+                            <strong className="text-emerald-400">{item.estimatedFriction.frictionToProfitPct}%</strong>
+                          </div>
+                        )}
+                        <div className="flex justify-between items-center px-2 py-1 bg-slate-950/60 rounded border border-slate-800/50">
+                          <span>Execution Hurdle:</span>
+                          <strong className="text-emerald-400">Passes Gate 9</strong>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Metadata Footer in Expanded Drawer */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-400 pt-1 border-t border-slate-800/60">
+                      {item.snapshotId && (
+                        <span>
+                          Snapshot ID: <strong className="text-slate-300">{item.snapshotId}</strong>
+                        </span>
+                      )}
+                      {item.dataSource && (
+                        <span>
+                          Source: <strong className="text-slate-300">{formatProviderName(item.dataSource)}</strong>
+                        </span>
+                      )}
+                      <span>
+                        Status Outcome:{' '}
+                        <strong className="text-emerald-400 font-semibold">
+                          {formatLabel(item.outcomeType)}
+                        </strong>
+                      </span>
+                    </div>
                     </ZoomableReportWrapper>
                   </div>
                 )}
               </div>
             );
           })}
-
-          {/* Pagination Controls */}
-          {totalPages > 1 && (
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-950 p-3 rounded-xl border border-slate-800 text-xs font-mono">
-              <span className="text-slate-400">
-                Showing <strong className="text-white">{startIndex + 1}</strong> to{' '}
-                <strong className="text-white">{Math.min(startIndex + pageSize, totalCount)}</strong> of{' '}
-                <strong className="text-white">{totalCount}</strong> trades
-              </span>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  disabled={validCurrentPage <= 1}
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  className={`px-3 py-1.5 rounded-lg border flex items-center gap-1 transition ${
-                    validCurrentPage <= 1
-                      ? 'bg-slate-900 text-slate-600 border-slate-800 cursor-not-allowed'
-                      : 'bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800 border-slate-700 cursor-pointer'
-                  }`}
-                >
-                  <ChevronLeft className="w-4 h-4" /> Previous
-                </button>
-
-                <span className="px-3 py-1 bg-slate-900 rounded-lg border border-slate-800 text-slate-300">
-                  Page <strong className="text-emerald-400">{validCurrentPage}</strong> of{' '}
-                  <strong className="text-white">{totalPages}</strong>
-                </span>
-
-                <button
-                  type="button"
-                  disabled={validCurrentPage >= totalPages}
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  className={`px-3 py-1.5 rounded-lg border flex items-center gap-1 transition ${
-                    validCurrentPage >= totalPages
-                      ? 'bg-slate-900 text-slate-600 border-slate-800 cursor-not-allowed'
-                      : 'bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800 border-slate-700 cursor-pointer'
-                  }`}
-                >
-                  Next <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       ) : (
         /* Empty State */
         <div className="bg-slate-950 border border-slate-800/80 rounded-lg p-8 text-center text-slate-500">
           <History className="w-8 h-8 mx-auto mb-2 text-slate-600" />
-          <p className="text-xs text-slate-400 font-medium">No Historical Trades Found</p>
+          <p className="text-xs text-slate-400 font-medium">No Signal History Recorded</p>
           <p className="text-[11px] text-slate-500 mt-1 max-w-sm mx-auto">
-            {searchQuery || filter !== 'ALL' || directionFilter !== 'ALL'
-              ? 'No trades match the selected filters. Try clearing or broadening search filters.'
-              : 'Validated trades generated from live scans will automatically be preserved in this authoritative Firestore audit collection.'}
+            Scanned setups and generated trading signals will automatically be logged and preserved in this audit panel.
           </p>
         </div>
       )}
@@ -1196,9 +996,9 @@ export function SignalHistoryPanel({
                 <Trash2 className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="text-sm font-semibold text-white">Delete Historical Trade Entry?</h4>
+                <h4 className="text-sm font-semibold text-white">Delete Signal History Entry?</h4>
                 <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">
-                  Are you sure you want to delete the trade history entry for <strong className="text-white font-mono">{itemToDelete.symbol}</strong>?
+                  Are you sure you want to delete the signal history entry for <strong className="text-white font-mono">{itemToDelete.symbol}</strong>?
                 </p>
               </div>
             </div>
@@ -1231,9 +1031,9 @@ export function SignalHistoryPanel({
                 <Trash2 className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="text-sm font-semibold text-white">Clear All Historical Trades?</h4>
+                <h4 className="text-sm font-semibold text-white">Clear All Signal History?</h4>
                 <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">
-                  Are you sure you want to wipe all <strong className="text-white">{legitimateTrades.length}</strong> historical trade audit records?
+                  Are you sure you want to wipe all <strong className="text-white">{history.length}</strong> signal audit log records?
                 </p>
               </div>
             </div>
@@ -1268,7 +1068,7 @@ export function SignalHistoryPanel({
               <div>
                 <h4 className="text-sm font-semibold text-white">Delete Selected Signals?</h4>
                 <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">
-                  Are you sure you want to delete the <strong className="text-white font-mono">{selectedIds.length}</strong> selected historical trade entries? This action is permanent and persistent.
+                  Are you sure you want to delete the <strong className="text-white font-mono">{selectedIds.length}</strong> selected signal history entries? This action is permanent and persistent.
                 </p>
               </div>
             </div>

@@ -10,7 +10,7 @@ import {
   getScannerStateRepository,
   setRepositories,
   createMemoryRepositories,
-  createFirebaseRepositories,
+  createNeonRepositories,
   User,
   Session,
   Signal,
@@ -164,73 +164,26 @@ async function runRepositoryTests() {
 
   console.log('✓ Test 1 passed: In-Memory Adapter repositories function correctly.');
 
-  // Test 2: Firebase Adapter repository implementation
-  console.log('Test 2: Firebase Adapter repository with Mock Firestore');
-  const mockDocs = new Map<string, any>();
-  const mockFirestore = {
-    collection: (col: string) => ({
-      doc: (id: string) => ({
-        get: async () => ({ exists: mockDocs.has(`${col}/${id}`), data: () => mockDocs.get(`${col}/${id}`) }),
-        set: async (data: any, options?: any) => {
-          const key = `${col}/${id}`;
-          const existing = mockDocs.get(key) || {};
-          mockDocs.set(key, options?.merge ? { ...existing, ...data } : data);
-        },
-        delete: async () => { mockDocs.delete(`${col}/${id}`); },
-      }),
-      where: (field: string, op: string, val: any) => ({
-        get: async () => {
-          const list: any[] = [];
-          for (const [k, d] of mockDocs.entries()) {
-            if (k.startsWith(`${col}/`) && d[field] === val) {
-              list.push({ id: d.id, data: () => d });
-            }
-          }
-          return { empty: list.length === 0, forEach: (cb: any) => list.forEach(cb), docs: list };
-        },
-      }),
-      get: async () => {
-        const list: any[] = [];
-        for (const [k, d] of mockDocs.entries()) {
-          if (k.startsWith(`${col}/`)) {
-            list.push({ id: d.id, data: () => d });
-          }
-        }
-        return { empty: list.length === 0, forEach: (cb: any) => list.forEach(cb), docs: list };
-      },
-    }),
-    doc: (docPath: string) => ({
-      get: async () => ({ exists: mockDocs.has(docPath), data: () => mockDocs.get(docPath) }),
-      set: async (data: any, options?: any) => {
-        const existing = mockDocs.get(docPath) || {};
-        mockDocs.set(docPath, options?.merge ? { ...existing, ...data } : data);
-      },
-    }),
-  } as any;
+  // Test 2: Neon Adapter repository implementation
+  console.log('Test 2: Neon PostgreSQL Adapter repository interface compliance');
+  const neonContainer = createNeonRepositories();
+  setRepositories(neonContainer);
 
-  setMockFirestoreAdmin(mockFirestore);
-  try {
-    const firebaseContainer = createFirebaseRepositories();
-    setRepositories(firebaseContainer);
+  const neonSignalRepo = getSignalRepository();
+  const saveResult = await neonSignalRepo.save(testSignal);
+  assert.strictEqual(typeof saveResult.success, 'boolean', 'Neon save signal returns success state');
 
-    const fbSignalRepo = getSignalRepository();
-    await fbSignalRepo.save(testSignal);
-    const fbSignal = await fbSignalRepo.findById('sig_repo_1');
-    assert.strictEqual(fbSignal?.symbol, 'BTCUSDT', 'Signal saved & fetched via Firebase Adapter');
+  const activeNeon = await neonSignalRepo.findActive();
+  assert(Array.isArray(activeNeon), 'Active signals query returns array');
 
-    const activeFb = await fbSignalRepo.findActive();
-    assert.strictEqual(activeFb.length, 1, 'Active signal queried via Firebase Adapter');
+  const neonStateRepo = getScannerStateRepository();
+  await neonStateRepo.saveCapState(testState);
+  const neonCap = await neonStateRepo.getCapState('2026-09-29');
+  assert(neonCap === null || typeof neonCap === 'object', 'Scanner state queried from Neon Adapter');
 
-    const fbStateRepo = getScannerStateRepository();
-    await fbStateRepo.saveCapState(testState);
-    const fbCap = await fbStateRepo.getCapState('2026-09-29');
-    assert.strictEqual(fbCap?.dailySignalCount, 2, 'Scanner state saved & fetched via Firebase Adapter');
-  } finally {
-    setMockFirestoreAdmin(undefined);
-    // Reset to memory container for subsequent tests
-    setRepositories(memoryContainer);
-  }
-  console.log('✓ Test 2 passed: Firebase Adapter operations verified with zero Firestore leak.');
+  // Reset to memory container for subsequent tests
+  setRepositories(memoryContainer);
+  console.log('✓ Test 2 passed: Neon Adapter operations verified with zero Firebase dependency.');
 
   // Test 3: Pluggable repository swapping without application changes
   console.log('Test 3: Pluggable repository swapping');

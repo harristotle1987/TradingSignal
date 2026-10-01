@@ -28,7 +28,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { getFirestoreAdmin } from '../firebaseAdmin.js';
+import { queryNeon, getNeonPool } from '../infrastructure/neon/db.js';
 import { logger } from '../logger.js';
 import { MarketRegime } from './StrategyEngine.js';
 
@@ -156,18 +156,10 @@ export class StrategyPerformanceTracker {
     if (this.isInitialized) return;
 
     try {
-      if (process.env.NODE_ENV !== 'production' && fs.existsSync(LOCAL_PERFORMANCE_PATH)) {
+      if (fs.existsSync(LOCAL_PERFORMANCE_PATH)) {
         const raw = fs.readFileSync(LOCAL_PERFORMANCE_PATH, 'utf-8');
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
-          const rawTrades = Array.isArray(parsed.recentTrades) ? parsed.recentTrades : [];
-          const cleanTrades = rawTrades.filter((t: any) => {
-            if (!t || typeof t !== 'object') return false;
-            if (t.entryPrice === 50000 || (t.symbol === 'BTCUSDT' && t.entryPrice === 50000)) return false;
-            if (typeof t.entryPrice === 'number' && (!Number.isFinite(t.entryPrice) || t.entryPrice <= 0)) return false;
-            return true;
-          });
-
           this.state = {
             version: parsed.version || 2,
             lastUpdated: parsed.lastUpdated || Date.now(),
@@ -179,7 +171,7 @@ export class StrategyPerformanceTracker {
             byTimeframe: parsed.byTimeframe || {},
             byRegime: parsed.byRegime || {},
             byConfidenceRange: parsed.byConfidenceRange || {},
-            recentTrades: cleanTrades,
+            recentTrades: Array.isArray(parsed.recentTrades) ? parsed.recentTrades : [],
           };
           logger.info('[StrategyPerformanceTracker] Loaded strategy performance state from disk.');
         }
@@ -288,14 +280,17 @@ export class StrategyPerformanceTracker {
       logger.warn('[StrategyPerformanceTracker] Failed to write performance state to disk:', { error: String(err) });
     }
 
-    const firestore = getFirestoreAdmin();
-    if (firestore) {
-      firestore
-        .doc(FIRESTORE_PERFORMANCE_DOC)
-        .set(this.state, { merge: true })
-        .catch((err) => {
-          logger.debug('[StrategyPerformanceTracker] Firestore sync deferred', { reason: String(err) });
-        });
+    if (getNeonPool()) {
+      queryNeon(
+        `INSERT INTO performance_history (id, period_key, metrics_json, updated_at)
+         VALUES ('perf_strategy_tracker', 'ALL', $1, $2)
+         ON CONFLICT (id) DO UPDATE SET
+           metrics_json = EXCLUDED.metrics_json,
+           updated_at = EXCLUDED.updated_at`,
+        [JSON.stringify(this.state), Date.now()]
+      ).catch((err) => {
+        logger.debug('[StrategyPerformanceTracker] Neon sync deferred', { reason: String(err) });
+      });
     }
   }
 

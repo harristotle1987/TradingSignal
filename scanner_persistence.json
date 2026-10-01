@@ -1,77 +1,12 @@
 {
   "capState": {
-    "date": "2026-09-29",
+    "date": "2026-10-01",
     "dailySignalCount": 0,
     "dailySignalCap": 10,
     "lastScanTime": 1790706606762,
-    "lastCronExecution": 0,
-    "lastAutomatedScan": 1790706606762,
-    "lastScanCompletedAt": 0,
-    "lastScanDuration": 0,
-    "lastCandidatesEvaluated": 0,
-    "lastSignalsFound": 0,
-    "lastAcceptedSignals": 0,
-    "lastCronTriggerTime": 0,
     "reservations": []
   },
-  "sentSignals": [
-    {
-      "id": "sig_live_immed_1",
-      "snapshotId": "snap_immed_1",
-      "symbol": "BTCUSDT",
-      "direction": "BUY",
-      "entryPrice": 85200.5,
-      "stopLoss": 84300,
-      "takeProfit": 87500,
-      "tp1": 85800,
-      "tp2": 86500,
-      "tp3": 87500,
-      "riskRewardRatio": 2.55,
-      "score": 88,
-      "rankTier": "BEST_TRADE",
-      "strategy": "Intraday Breakout",
-      "timeframe": "H1",
-      "dataSource": "Bitget Live Feed",
-      "status": "SUPERSEDED",
-      "timestamp": 1790714485625,
-      "expiresAt": 1790728885625,
-      "notificationSent": true,
-      "notificationTimestamp": 1790714485625,
-      "date": "2026-09-29",
-      "marketRegime": "UNKNOWN",
-      "isTradeableSignal": true,
-      "signalClassification": "TRADEABLE",
-      "provenance": "LIVE"
-    },
-    {
-      "id": "sig_btc_fresh_2",
-      "snapshotId": "snap_immed_1",
-      "symbol": "BTCUSDT",
-      "direction": "BUY",
-      "entryPrice": 85500,
-      "stopLoss": 84600,
-      "takeProfit": 87800,
-      "tp1": 86100,
-      "tp2": 86800,
-      "tp3": 87800,
-      "riskRewardRatio": 2.55,
-      "score": 88,
-      "rankTier": "BEST_TRADE",
-      "strategy": "Intraday Breakout",
-      "timeframe": "H1",
-      "dataSource": "Bitget Live Feed",
-      "status": "TP3_HIT",
-      "timestamp": 1790714485627,
-      "expiresAt": 1790728885627,
-      "notificationSent": true,
-      "notificationTimestamp": 1790714485627,
-      "date": "2026-09-29",
-      "marketRegime": "UNKNOWN",
-      "isTradeableSignal": true,
-      "signalClassification": "TRADEABLE",
-      "provenance": "LIVE"
-    }
-  ],
+  "sentSignals": [],
   "rejectedCandidates": [
     {
       "id": "rej_1787224048739_vv27f",
@@ -779,6 +714,13 @@
     "enabled": true,
     "notificationsEnabled": true,
     "notifyOnNoTrade": false,
-    "intervalMinutes": 30
-  }
+    "intervalMinutes": 15,
+    "sensitivityProfile": "BALANCED"
+  },
+  "deletedSignals": [
+    "test_delete_auth_1|TESTUSD|BUY",
+    "bulk_test_1|BULKPAIR|BUY",
+    "bulk_test_2||",
+    "bulk_test_3||"
+  ]
 }

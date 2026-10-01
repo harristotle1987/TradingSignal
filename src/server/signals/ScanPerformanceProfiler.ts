@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from '../logger.js';
-import { getFirestoreAdmin } from '../firebaseAdmin.js';
+import { queryNeon, getNeonPool } from '../infrastructure/neon/db.js';
 import { quotaManager } from '../market/QuotaManager.js';
 
 const LOCAL_HISTORY_PATH = path.join(process.cwd(), 'scan_performance_history.json');
@@ -367,39 +367,42 @@ export class ScanPerformanceProfiler {
 
   public static persistProfile(profile: ScanPerformanceProfile): void {
     try {
-      if (process.env.NODE_ENV !== 'production') {
-        let history: ScanPerformanceProfile[] = [];
-        if (fs.existsSync(LOCAL_HISTORY_PATH)) {
-          try {
-            const raw = fs.readFileSync(LOCAL_HISTORY_PATH, 'utf-8');
-            history = JSON.parse(raw);
-          } catch {
-            history = [];
-          }
+      let history: ScanPerformanceProfile[] = [];
+      if (fs.existsSync(LOCAL_HISTORY_PATH)) {
+        try {
+          const raw = fs.readFileSync(LOCAL_HISTORY_PATH, 'utf-8');
+          history = JSON.parse(raw);
+        } catch {
+          history = [];
         }
-        history.push(profile);
-        if (history.length > 100) {
-          history = history.slice(-100);
-        }
-        fs.writeFileSync(LOCAL_HISTORY_PATH, JSON.stringify(history, null, 2), 'utf-8');
       }
+      history.push(profile);
+      if (history.length > 100) {
+        history = history.slice(-100);
+      }
+      fs.writeFileSync(LOCAL_HISTORY_PATH, JSON.stringify(history, null, 2), 'utf-8');
     } catch (err) {
       logger.warn('[ScanPerformanceProfiler] Failed to write profile history to disk:', { error: String(err) });
     }
 
     try {
-      const firestore = getFirestoreAdmin();
-      if (firestore) {
-        firestore
-          .collection(FIRESTORE_COL)
-          .doc(profile.scanId)
-          .set(profile)
-          .catch((err) => {
-            logger.debug('[ScanPerformanceProfiler] Firestore scan history sync deferred', { reason: String(err) });
-          });
+      if (getNeonPool()) {
+        queryNeon(
+          `INSERT INTO audit_events (id, security_id, action, timestamp, severity, details_json)
+           VALUES ($1, 'SCAN_PROFILE', $2, $3, 'INFO', $4)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            `scan_${profile.scanId}`,
+            `Scan profile completed with totalDurationMs=${profile.totalDurationMs}`,
+            profile.startTime || Date.now(),
+            JSON.stringify(profile),
+          ]
+        ).catch((err) => {
+          logger.debug('[ScanPerformanceProfiler] Neon scan history sync deferred', { reason: String(err) });
+        });
       }
     } catch {
-      // ignore firestore sync errors in dev/unconfigured environment
+      // ignore database sync errors in dev/unconfigured environment
     }
   }
 
@@ -412,7 +415,7 @@ export class ScanPerformanceProfiler {
     healthWarnings: string[];
   } {
     let history: ScanPerformanceProfile[] = [];
-    if (process.env.NODE_ENV !== 'production' && fs.existsSync(LOCAL_HISTORY_PATH)) {
+    if (fs.existsSync(LOCAL_HISTORY_PATH)) {
       try {
         const raw = fs.readFileSync(LOCAL_HISTORY_PATH, 'utf-8');
         history = JSON.parse(raw);

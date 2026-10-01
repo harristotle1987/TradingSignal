@@ -276,12 +276,12 @@ export class HourlyScannerService {
     logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime} | deadline: ${globalScanDeadlineMs}`);
 
     if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
-      logger.error('[Hourly Scanner] AUTOMATED SCANNER DISPATCH DISABLED: Production persistence is unavailable (FIREBASE_SERVICE_ACCOUNT required).');
+      logger.error('[Hourly Scanner] AUTOMATED SCANNER DISPATCH DISABLED: Production persistence is unavailable (DATABASE_URL required for Neon PostgreSQL).');
       const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
       return {
         success: false,
         status: 'PERSISTENCE_UNAVAILABLE_DEGRADED',
-        message: 'REJECTED: PRODUCTION_PERSISTENCE_UNAVAILABLE. Firebase Service Account required for automated scanner dispatch in production.',
+        message: 'REJECTED: PRODUCTION_PERSISTENCE_UNAVAILABLE. Neon PostgreSQL (DATABASE_URL) required for automated scanner dispatch in production.',
         timestamp: Date.now(),
         lastScanTime: capState.lastScanTime,
         candidatesEvaluated: 0,
@@ -290,7 +290,7 @@ export class HourlyScannerService {
         signalsFound: 0,
         qualifiedSetups: [],
         rejectedCount: 0,
-        rejectionReasons: ['REJECTED: PRODUCTION_PERSISTENCE_UNAVAILABLE. FIREBASE_SERVICE_ACCOUNT is required in production mode.'],
+        rejectionReasons: ['REJECTED: PRODUCTION_PERSISTENCE_UNAVAILABLE. DATABASE_URL is required in production mode.'],
         capState,
       };
     }

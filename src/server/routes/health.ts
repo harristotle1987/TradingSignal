@@ -64,7 +64,7 @@ router.get('/health', async (_req: Request, res: Response) => {
       activeSignalsCount: activeSignals.length,
       marketDataConnected: health.marketDataConnected,
       marketFeedsActive: health.marketFeedsActive,
-      persistenceStatus: persistenceReady ? 'OPERATIONAL' : 'DEGRADED_FIREBASE_REQUIRED',
+      persistenceStatus: persistenceReady ? 'OPERATIONAL' : 'DEGRADED_DATABASE_URL_REQUIRED',
       scannerStatus: health.scannerReady ? 'OPERATIONAL' : 'DISABLED_OR_DEGRADED',
     },
     marketData: health,

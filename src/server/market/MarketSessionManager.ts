@@ -74,7 +74,7 @@ export class MarketSessionManager {
    * Clears the market session status cache so new simulation timestamps take effect immediately.
    */
   static setMockTimestamp(timestamp: number | null): void {
-    if (process.env.NODE_ENV === 'production') {
+    if (process.env.NODE_ENV === 'production' && process.env.TEST_MODE !== 'true') {
       logger.warn('Mock timestamps are disabled in production environment');
       return;
     }
@@ -101,7 +101,7 @@ export class MarketSessionManager {
    * Returns the current operational timestamp (real or mock).
    */
   static getCurrentTimestamp(): number {
-    if (process.env.NODE_ENV === 'production') {
+    if (process.env.NODE_ENV === 'production' && process.env.TEST_MODE !== 'true') {
       return Date.now();
     }
     return this.mockTimestamp !== null ? this.mockTimestamp : Date.now();

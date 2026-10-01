@@ -7,6 +7,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
+import cookieParser from 'cookie-parser';
 
 // Load environment variables
 dotenv.config();
@@ -19,6 +20,7 @@ import configStatusRouter from './src/server/routes/configStatus.js';
 import marketRouter from './src/server/routes/market.js';
 import signalsRouter from './src/server/routes/signals.js';
 import notificationsRouter from './src/server/routes/notifications.js';
+import authRouter from './src/server/routes/auth.js';
 import { hourlyScanner } from './src/server/signals/HourlyScanner.js';
 import { RepairService } from './src/server/signals/RepairService.js';
 import { SignalLifecycleManager } from './src/server/signals/SignalLifecycleManager.js';
@@ -48,6 +50,9 @@ export async function createServer() {
   // Parse JSON payloads with bounded size (SEC-INPUT)
   app.use(express.json({ limit: '1mb' }));
 
+  // Parse Cookie header and populate req.cookies
+  app.use(cookieParser());
+
   // Global Rate Limiting Middleware (SEC-RATE)
   app.use(RateLimiter.create({ windowMs: 60000, maxRequests: 300, endpointName: 'GlobalAPI' }));
 
@@ -66,6 +71,7 @@ export async function createServer() {
   });
 
   // Backend API Routes
+  app.use('/api', authRouter);
   app.use('/api', healthRouter);
   app.use('/api', configStatusRouter);
   app.use('/api', marketRouter);

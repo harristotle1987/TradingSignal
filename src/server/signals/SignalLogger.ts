@@ -30,7 +30,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { TradingSignal } from '../../types/index.js';
 import { serverConfig } from '../config.js';
-import { getFirestoreAdmin } from '../firebaseAdmin.js';
+import { queryNeon, getNeonPool } from '../infrastructure/neon/db.js';
 import { logger } from '../logger.js';
 import { Gate35SignalFunnelAnalytics } from './Gate35SignalFunnelAnalytics.js';
 import { ScannerPersistence, PersistedSentSignal } from './ScannerPersistence.js';
@@ -253,42 +253,32 @@ export class SignalLogger {
   }
 
   /**
-   * Re-synchronizes in-memory and local disk cache with master Firestore logs collection.
+   * Re-synchronizes in-memory and local disk cache with master Neon PostgreSQL logs collection.
    */
   public static async syncFromFirestore(): Promise<void> {
-    const firestore = getFirestoreAdmin();
-    if (!firestore) return;
+    if (!getNeonPool()) return;
 
     try {
-      const snapshot = await firestore.collection(FIRESTORE_COLLECTION).get();
-      const firestoreIds = new Set<string>();
+      const rows = await queryNeon<{ payload_json: SignalLogRecord }>(`SELECT payload_json FROM signals`);
+      const dbIds = new Set<string>();
 
-      snapshot.forEach((doc) => {
-        const data = doc.data() as SignalLogRecord;
+      for (const r of rows) {
+        const data = r.payload_json;
         if (data && data.id) {
-          firestoreIds.add(data.id);
+          dbIds.add(data.id);
           const existing = this.logs.get(data.id);
           if (!existing || (data.updatedAt || data.timestamp) >= (existing.updatedAt || existing.timestamp)) {
             this.logs.set(data.id, data);
           }
         }
-      });
-
-      // Only reconcile deletions if Firestore returned documents
-      if (firestoreIds.size > 0) {
-        for (const id of this.logs.keys()) {
-          if (!firestoreIds.has(id)) {
-            this.logs.delete(id);
-          }
-        }
       }
 
       this.lastFirestoreSync = Date.now();
-      if (firestoreIds.size > 0) {
+      if (dbIds.size > 0) {
         this.flushToDisk();
       }
     } catch (err) {
-      logger.debug('[SignalLogger] Firestore synchronization deferred:', { reason: String(err) });
+      logger.debug('[SignalLogger] Neon synchronization deferred:', { reason: String(err) });
     }
   }
 
@@ -335,24 +325,40 @@ export class SignalLogger {
   }
 
   /**
-   * Persists a record into Firestore asynchronously
+   * Persists a record into Neon PostgreSQL asynchronously
    */
   private static syncToFirestore(record: SignalLogRecord): void {
-    const firestore = getFirestoreAdmin();
-    if (!firestore) return;
+    if (!getNeonPool()) return;
 
-    // Clean undefined values for Firestore
-    const cleanRecord = Object.fromEntries(
-      Object.entries(record).filter(([_, v]) => v !== undefined)
-    );
-
-    firestore
-      .collection(FIRESTORE_COLLECTION)
-      .doc(record.id)
-      .set(cleanRecord, { merge: true })
-      .catch((err) => {
-        logger.debug(`[SignalLogger] Firestore sync deferred for signal ${record.id}`, { error: String(err) });
-      });
+    const cleanRecord = JSON.parse(JSON.stringify(record));
+    queryNeon(
+      `INSERT INTO signals (id, snapshot_id, symbol, direction, entry_price, stop_loss, take_profit, risk_reward_ratio, score, rank_tier, strategy, timeframe, data_source, status, timestamp, payload_json)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       ON CONFLICT (id) DO UPDATE SET
+         status = EXCLUDED.status,
+         score = EXCLUDED.score,
+         payload_json = EXCLUDED.payload_json`,
+      [
+        record.id,
+        record.snapshotId || record.id,
+        record.symbol,
+        record.direction,
+        record.entryPrice || 0,
+        record.stopLoss || 0,
+        record.takeProfit || 0,
+        record.riskRewardRatio || 0,
+        record.score || 0,
+        (record as any).rankTier || 'QUALIFIED',
+        record.strategy || 'NVIDIA_ENHANCED',
+        record.timeframe || '1h',
+        record.provider || 'REALTIME',
+        record.status || 'ACTIVE',
+        record.timestamp || Date.now(),
+        JSON.stringify(cleanRecord),
+      ]
+    ).catch((err) => {
+      logger.debug(`[SignalLogger] Neon sync deferred for signal ${record.id}`, { error: String(err) });
+    });
   }
 
   /**
@@ -489,10 +495,9 @@ export class SignalLogger {
     this.logs.set(id, record);
     this.flushToDisk();
 
-    const firestore = getFirestoreAdmin();
-    if (!firestore) {
+    if (!getNeonPool()) {
       if (serverConfig.getConfig().nodeEnv === 'production') {
-        const errStr = '[SignalLogger] FAIL CLOSED: Firestore required for signal log persistence in production mode.';
+        const errStr = '[SignalLogger] FAIL CLOSED: DATABASE_URL required for signal log persistence in production mode.';
         logger.error(errStr);
         return {
           success: false,
@@ -508,37 +513,12 @@ export class SignalLogger {
       };
     }
 
-    const cleanRecord = Object.fromEntries(
-      Object.entries(record).filter(([_, v]) => v !== undefined)
-    );
-
-    try {
-      await firestore
-        .collection(FIRESTORE_COLLECTION)
-        .doc(record.id)
-        .set(cleanRecord, { merge: true });
-      return {
-        success: true,
-        status: 'TRADEABLE_RECORD_PERSISTED',
-        record,
-      };
-    } catch (err) {
-      const errStr = String(err);
-      logger.error(`[SignalLogger] Firestore signal log persistence failed for ${record.id}`, { error: errStr });
-      if (serverConfig.getConfig().nodeEnv === 'production') {
-        return {
-          success: false,
-          status: 'PERSISTENCE_FAILED',
-          record,
-          error: errStr,
-        };
-      }
-      return {
-        success: true,
-        status: 'TRADEABLE_RECORD_PERSISTED',
-        record,
-      };
-    }
+    this.syncToFirestore(record);
+    return {
+      success: true,
+      status: 'TRADEABLE_RECORD_PERSISTED',
+      record,
+    };
   }
 
   /**
@@ -629,9 +609,8 @@ export class SignalLogger {
     productionOnly = true
   ): Promise<SignalLogRecord[]> {
     const isProd = serverConfig.getConfig().nodeEnv === 'production';
-    const firestore = getFirestoreAdmin();
-    if (isProd && !firestore) {
-      logger.warn('[SignalLogger] FAIL SAFELY: Firestore is unavailable in production. Returning empty list instead of local fallback.');
+    if (isProd && !getNeonPool()) {
+      logger.warn('[SignalLogger] FAIL SAFELY: Neon database is unavailable in production. Returning empty list instead of local fallback.');
       return [];
     }
 
@@ -815,24 +794,14 @@ export class SignalLogger {
       this.flushToDisk();
     }
 
-    const firestore = getFirestoreAdmin();
-    if (firestore) {
+    if (getNeonPool()) {
       try {
-        await firestore.collection(FIRESTORE_COLLECTION).doc(id).delete();
+        await queryNeon(`DELETE FROM signals WHERE id = $1 OR snapshot_id = $1`, [id]);
         if (targetKey && targetKey !== id) {
-          await firestore.collection(FIRESTORE_COLLECTION).doc(targetKey).delete();
-        }
-        const snapQuery = await firestore
-          .collection(FIRESTORE_COLLECTION)
-          .where('snapshotId', '==', id)
-          .get();
-        if (!snapQuery.empty) {
-          const batch = firestore.batch();
-          snapQuery.docs.forEach((doc) => batch.delete(doc.ref));
-          await batch.commit();
+          await queryNeon(`DELETE FROM signals WHERE id = $1 OR snapshot_id = $1`, [targetKey]);
         }
       } catch (err) {
-        logger.error(`[SignalLogger] Firestore delete error for ${id}:`, { error: String(err) });
+        logger.error(`[SignalLogger] Neon delete error for ${id}:`, { error: String(err) });
       }
     }
 
@@ -847,27 +816,11 @@ export class SignalLogger {
     this.logs.clear();
     this.flushToDisk();
 
-    const firestore = getFirestoreAdmin();
-    if (firestore) {
+    if (getNeonPool()) {
       try {
-        const snapshot = await firestore.collection(FIRESTORE_COLLECTION).get();
-        if (!snapshot.empty) {
-          let count = 0;
-          let batch = firestore.batch();
-          for (const doc of snapshot.docs) {
-            batch.delete(doc.ref);
-            count++;
-            if (count % 400 === 0) {
-              await batch.commit();
-              batch = firestore.batch();
-            }
-          }
-          if (count % 400 !== 0) {
-            await batch.commit();
-          }
-        }
+        await queryNeon(`DELETE FROM signals`);
       } catch (err) {
-        logger.debug('[SignalLogger] Firestore clear logs deferred:', { error: String(err) });
+        logger.debug('[SignalLogger] Neon clear logs deferred:', { error: String(err) });
       }
     }
   }

@@ -159,7 +159,7 @@ export class SignalEngine {
   }
 
   /**
-   * Retrieves active signals list directly from authoritative persistence (Firestore).
+   * Retrieves active signals list directly from authoritative Neon PostgreSQL persistence.
    * Refreshes in-memory cache synchronously, eliminating any 5-second race condition.
    */
   async getActiveSignalsDetailed(): Promise<{
@@ -204,6 +204,12 @@ export class SignalEngine {
         dataSource: s.dataSource,
         status: s.status as any,
         isActionableSignal: isActionableSignal(s),
+        isTradeableSignal: s.isTradeableSignal === true,
+        signalClassification: s.signalClassification as any,
+        provenance: s.provenance as any,
+        isSynthetic: s.isSynthetic,
+        isTest: (s as any).isTest,
+        isSimulation: (s as any).isSimulation,
         timestamp: s.timestamp,
         validatedAt: s.timestamp,
         confluenceReasons: [],

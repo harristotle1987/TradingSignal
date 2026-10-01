@@ -32,8 +32,8 @@ router.get('/config/status', async (_req: Request, res: Response) => {
     status: overallStatus,
     persistence: {
       ready: persistenceReady,
-      type: isProd ? 'FIRESTORE_MANDATORY' : 'LOCAL_OR_FIRESTORE',
-      status: persistenceReady ? 'OPERATIONAL' : 'DEGRADED_FIREBASE_REQUIRED',
+      type: isProd ? 'NEON_POSTGRES_MANDATORY' : 'LOCAL_OR_NEON',
+      status: persistenceReady ? 'OPERATIONAL' : 'DEGRADED_DATABASE_URL_REQUIRED',
     },
     providers: {
       nvidia: {

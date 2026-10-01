@@ -16,7 +16,7 @@ import webpush from 'web-push';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { getFirestoreAdmin } from '../firebaseAdmin.js';
+import { queryNeon, getNeonPool } from '../infrastructure/neon/db.js';
 import { logger } from '../logger.js';
 import { serverConfig } from '../config.js';
 import { TradingSignal } from '../../types/index.js';
@@ -25,7 +25,6 @@ import { getDynamicPrecision } from '../../utils/formatters.js';
 export interface StoredPushSubscription {
   id: string;
   endpoint: string;
-  userId?: string;
   keys: {
     p256dh: string;
     auth: string;
@@ -64,8 +63,8 @@ export class PushNotificationService {
     // 2. Load cached subscriptions from local disk
     this.loadLocalSubscriptions();
 
-    // 3. Sync from Firestore if available
-    await this.syncSubscriptionsFromFirestore();
+    // 3. Sync from Neon PostgreSQL if available
+    await this.syncSubscriptionsFromNeon();
 
     this.isInitialized = true;
     logger.info(`[Push Notification Service] Initialized successfully. Active subscribers: ${this.subscriptions.size}`);
@@ -168,25 +167,37 @@ export class PushNotificationService {
   }
 
   /**
-   * Synchronizes subscriptions with Firestore if available.
+   * Synchronizes subscriptions with Neon PostgreSQL if available.
    */
-  private static async syncSubscriptionsFromFirestore(): Promise<void> {
-    const db = getFirestoreAdmin();
-    if (!db) return;
+  private static async syncSubscriptionsFromNeon(): Promise<void> {
+    if (!getNeonPool()) return;
 
     try {
-      const snapshot = await db.collection(FIRESTORE_SUBSCRIPTIONS_COL).where('active', '==', true).get();
-      if (!snapshot.empty) {
-        snapshot.forEach((doc) => {
-          const data = doc.data() as StoredPushSubscription;
-          if (data && data.endpoint && data.keys) {
-            this.subscriptions.set(doc.id, { ...data, id: doc.id });
-          }
-        });
-        this.saveLocalSubscriptions();
+      const rows = await queryNeon<{
+        id: string;
+        endpoint: string;
+        p256dh: string;
+        auth: string;
+        active: boolean;
+        user_agent: string;
+        created_at: string;
+      }>(`SELECT * FROM push_subscriptions WHERE active = true`);
+
+      for (const r of rows) {
+        if (r.endpoint && r.p256dh && r.auth) {
+          this.subscriptions.set(r.id, {
+            id: r.id,
+            endpoint: r.endpoint,
+            keys: { p256dh: r.p256dh, auth: r.auth },
+            createdAt: Number(r.created_at),
+            userAgent: r.user_agent,
+            active: r.active,
+          });
+        }
       }
+      this.saveLocalSubscriptions();
     } catch (err) {
-      logger.warn('[Push Notification Service] Firestore subscriptions sync skipped:', { error: String(err) });
+      logger.warn('[Push Notification Service] Neon subscriptions sync skipped:', { error: String(err) });
     }
   }
 
@@ -195,8 +206,7 @@ export class PushNotificationService {
    */
   static async registerSubscription(
     subscription: { endpoint: string; keys: { p256dh: string; auth: string } },
-    userAgent?: string,
-    userId?: string
+    userAgent?: string
   ): Promise<{ success: boolean; id: string }> {
     await this.init();
 
@@ -205,40 +215,38 @@ export class PushNotificationService {
     }
 
     const id = this.getSubscriptionId(subscription.endpoint);
-    const existing = this.subscriptions.get(id);
     const record: StoredPushSubscription = {
       id,
       endpoint: subscription.endpoint,
-      userId: userId || existing?.userId,
       keys: subscription.keys,
-      createdAt: existing?.createdAt || Date.now(),
-      userAgent: userAgent || existing?.userAgent || 'Unknown Client',
+      createdAt: Date.now(),
+      userAgent: userAgent || 'Unknown Client',
       active: true,
     };
 
     this.subscriptions.set(id, record);
     this.saveLocalSubscriptions();
 
-    // Persist to Firestore
-    const db = getFirestoreAdmin();
-    if (db) {
+    // Persist to Neon PostgreSQL
+    if (getNeonPool()) {
       try {
-        await db.collection(FIRESTORE_SUBSCRIPTIONS_COL).doc(id).set(record, { merge: true });
+        await queryNeon(
+          `INSERT INTO push_subscriptions (id, endpoint, p256dh, auth, active, user_agent, created_at)
+           VALUES ($1, $2, $3, $4, true, $5, $6)
+           ON CONFLICT (endpoint) DO UPDATE SET
+             p256dh = EXCLUDED.p256dh,
+             auth = EXCLUDED.auth,
+             active = true,
+             user_agent = EXCLUDED.user_agent`,
+          [id, record.endpoint, record.keys.p256dh, record.keys.auth, record.userAgent, record.createdAt]
+        );
       } catch (err) {
-        logger.warn('[Push Notification Service] Firestore subscription write failed:', { error: String(err) });
+        logger.warn('[Push Notification Service] Neon subscription write failed:', { error: String(err) });
       }
     }
 
     logger.info(`[Push Notification Service] Registered push subscription [${id}]. Total active: ${this.subscriptions.size}`);
     return { success: true, id };
-  }
-
-  /**
-   * Retrieves an in-memory subscription by endpoint.
-   */
-  static getSubscriptionByEndpoint(endpoint: string): StoredPushSubscription | undefined {
-    const id = this.getSubscriptionId(endpoint);
-    return this.subscriptions.get(id);
   }
 
   /**
@@ -249,12 +257,11 @@ export class PushNotificationService {
     this.subscriptions.delete(id);
     this.saveLocalSubscriptions();
 
-    const db = getFirestoreAdmin();
-    if (db) {
+    if (getNeonPool()) {
       try {
-        await db.collection(FIRESTORE_SUBSCRIPTIONS_COL).doc(id).delete();
+        await queryNeon(`DELETE FROM push_subscriptions WHERE endpoint = $1 OR id = $2`, [endpoint, id]);
       } catch (err) {
-        logger.warn('[Push Notification Service] Firestore subscription removal error:', { error: String(err) });
+        logger.warn('[Push Notification Service] Neon subscription removal error:', { error: String(err) });
       }
     }
 
@@ -388,10 +395,9 @@ export class PushNotificationService {
         this.subscriptions.delete(id);
       }
       this.saveLocalSubscriptions();
-      const db = getFirestoreAdmin();
-      if (db) {
+      if (getNeonPool()) {
         for (const id of deadSubscriptions) {
-          db.collection(FIRESTORE_SUBSCRIPTIONS_COL).doc(id).delete().catch(() => {});
+          queryNeon(`DELETE FROM push_subscriptions WHERE id = $1`, [id]).catch(() => {});
         }
       }
     }

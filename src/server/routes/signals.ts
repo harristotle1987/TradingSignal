@@ -94,6 +94,33 @@ router.post('/scanner/settings', adminAuthMiddleware, async (req: Request, res: 
 });
 
 /**
+ * POST /api/scanner/reload
+ * [Access Boundary: Administrative] (Protected by adminAuthMiddleware)
+ * Reloads scanner configurations, persistence layer, and sensitivity profiles.
+ */
+router.post('/scanner/reload', adminAuthMiddleware, async (_req: Request, res: Response) => {
+  try {
+    ScannerPersistence.init();
+    SignalSensitivityManager.init();
+    const settings = await hourlyScanner.getSettingsAsync();
+    res.status(200).json({
+      success: true,
+      message: 'Scanner reloaded and synchronized successfully.',
+      settings,
+      timestamp: Date.now(),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to reload scanner',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
  * POST /api/scanner/reset-cap & POST /api/signals/reset-cap
  * Resets the current day's automated signal cap counter to 0.
  * Preserves all signals, historical records, and scan telemetry.
@@ -105,8 +132,14 @@ const resetDailyCapHandler = async (_req: Request, res: Response) => {
     res.status(200).json({
       success: true,
       message: `Daily signal cap counter successfully reset to 0 / ${updatedCapState.dailySignalCap || settings.limit || 10}.`,
-      settings,
-      capState: updatedCapState,
+      settings: {
+        ...settings,
+        dailySignalCount: 0,
+      },
+      capState: {
+        ...updatedCapState,
+        dailySignalCount: 0,
+      },
       timestamp: Date.now(),
     });
   } catch (err: unknown) {
@@ -120,8 +153,8 @@ const resetDailyCapHandler = async (_req: Request, res: Response) => {
   }
 };
 
-router.post('/scanner/reset-cap', resetDailyCapHandler);
-router.post('/signals/reset-cap', resetDailyCapHandler);
+router.post('/scanner/reset-cap', adminAuthMiddleware, resetDailyCapHandler);
+router.post('/signals/reset-cap', adminAuthMiddleware, resetDailyCapHandler);
 
 /**
  * GET /api/scanner/history
@@ -369,7 +402,7 @@ router.get('/scanner/trigger', handleScannerTrigger);
  * [Access Boundary: Manual Signal Generation]
  * Endpoint for in-app UI manual scanner execution. Accessible without administrative token so users can initiate scans on demand.
  */
-router.post('/scanner/manual-trigger', async (_req: Request, res: Response) => {
+router.post('/scanner/manual-trigger', adminAuthMiddleware, async (_req: Request, res: Response) => {
   try {
     const result = await hourlyScanner.triggerManualScan();
     const httpCode = result.status === 'ERROR' ? 500 : 200;
@@ -499,7 +532,7 @@ router.post('/signals/monitor', async (_req: Request, res: Response) => {
  * Manually checks the latest verified market price for an individual active signal.
  * Guarantees idempotency, target pricing preservation, and correct status outcomes.
  */
-router.post('/signals/refresh', async (req: Request, res: Response) => {
+router.post('/signals/refresh', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const { id } = req.body || {};
     if (!id || typeof id !== 'string') {
@@ -887,7 +920,7 @@ router.get('/signals/log', async (_req: Request, res: Response) => {
  * DELETE /api/signals/log/:id
  * Deletes an individual dedicated signal log entry by ID.
  */
-router.delete('/signals/log/:id', async (req: Request, res: Response) => {
+router.delete('/signals/log/:id', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
     
@@ -924,7 +957,7 @@ router.delete('/signals/log/:id', async (req: Request, res: Response) => {
  * POST /api/signals/log/bulk-delete
  * Deletes multiple signal log entries by IDs.
  */
-router.post('/signals/log/bulk-delete', async (req: Request, res: Response) => {
+router.post('/signals/log/bulk-delete', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const { ids } = req.body || {};
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -971,7 +1004,7 @@ router.post('/signals/log/bulk-delete', async (req: Request, res: Response) => {
  * DELETE /api/signals/log
  * Clears dedicated signal log records.
  */
-router.delete('/signals/log', async (_req: Request, res: Response) => {
+router.delete('/signals/log', adminAuthMiddleware, async (_req: Request, res: Response) => {
   try {
     await SignalLogger.clearLogs();
     await SignalOutcomeLogger.clearLogs();
@@ -1017,7 +1050,7 @@ router.get('/signals', async (_req: Request, res: Response) => {
  * [Access Boundary: Manual Signal Generation]
  * Triggers on-demand multi-timeframe signal analysis using the unified scan engine. Publicly accessible for manual user queries.
  */
-router.post('/signals/generate', async (req: Request, res: Response) => {
+router.post('/signals/generate', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const requestedSymbol = (req.body?.symbol as string) || 'EURUSD';
     const generationResult = await signalEngine.generateSignal(requestedSymbol, undefined, true);
@@ -1027,6 +1060,27 @@ router.post('/signals/generate', async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       message: 'Signal generation endpoint internal error',
+      error: msg,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+/**
+ * POST /api/signals/trade-search
+ * [Access Boundary: Administrative / Specific Trade Search] (Protected by adminAuthMiddleware)
+ * Specific trade search & qualification pipeline (Gate 14).
+ */
+router.post('/signals/trade-search', adminAuthMiddleware, async (req: Request, res: Response) => {
+  try {
+    const requestedSymbol = (req.body?.symbol as string) || 'EURUSD';
+    const generationResult = await signalEngine.generateSignal(requestedSymbol, undefined, true);
+    return res.status(200).json(generationResult);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return res.status(500).json({
+      success: false,
+      message: 'Specific trade search endpoint internal error',
       error: msg,
       timestamp: Date.now(),
     });
@@ -1798,7 +1852,7 @@ router.put('/signals/frequency-config', adminAuthMiddleware, updateFrequencyHand
  * Evaluates cheap preliminary screening factors (Liquidity, Volume, Trend, Momentum, Volatility, Spread).
  * Does NOT generate a trade signal or request full MTF history.
  */
-router.get('/signals/gate3/screen/:symbol', async (req: Request, res: Response) => {
+router.get('/signals/gate3/screen/:symbol', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const symbol = (req.params.symbol || 'BTCUSDT').toUpperCase();
     const htf1h = await marketDataManager.getCandles(symbol, undefined, '1h', 50, false);

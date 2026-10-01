@@ -13,17 +13,38 @@ import {
   PerformanceMetricsResponse,
   HistoricalPerformanceResponse,
   HistoricalPerformanceRange,
-  HistoricalTradesQueryOptions,
-  HistoricalTradesResponse,
   SensitivityProfileName,
   SensitivityProfileConfig,
 } from '../types/index.js';
 
+export interface HistoricalTradesQueryOptions {
+  page?: number;
+  limit?: number;
+  status?: string;
+  symbol?: string;
+  direction?: string;
+  range?: string;
+  search?: string;
+}
+
+export interface HistoricalTradesResponse {
+  success: boolean;
+  trades: any[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
 export interface AuthUser {
   uid: string;
+  id?: string;
   email: string;
   admin: boolean;
   role: 'ADMIN' | 'USER';
+  displayName?: string;
+  createdAt?: number;
+  lastLoginAt?: number;
 }
 
 export class ApiClient {
@@ -48,7 +69,7 @@ export class ApiClient {
   /**
    * Registers a user account enforcing First-User Admin logic.
    */
-  public async register(params: { idToken?: string; email?: string; password?: string }): Promise<{
+  public async register(params: { idToken?: string; email?: string; password?: string; displayName?: string }): Promise<{
     success: boolean;
     authenticated?: boolean;
     user?: AuthUser;
@@ -68,10 +89,10 @@ export class ApiClient {
   }
 
   /**
-   * Authenticates session via Firebase ID Token or credentials.
+   * Authenticates session via email and password credentials against Neon Auth.
    * Sets HttpOnly secure cookie on successful login.
    */
-  public async createAuthSession(params: { idToken?: string; email?: string; password?: string }): Promise<{
+  public async createAuthSession(params: { email?: string; password?: string }): Promise<{
     success: boolean;
     authenticated?: boolean;
     user?: AuthUser;

@@ -17,7 +17,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { getFirestoreAdmin } from '../firebaseAdmin.js';
+import { queryNeon, getNeonPool } from '../infrastructure/neon/db.js';
 import { logger } from '../logger.js';
 
 export interface SignalAuditRecord {
@@ -57,10 +57,6 @@ export class SignalAuditStore {
   // bounded.
   private static readonly MAX_IN_MEMORY_RECORDS = 1000;
 
-  public static isProductionMode(): boolean {
-    return process.env.NODE_ENV === 'production';
-  }
-
   /**
    * Keeps the in-memory audit map bounded to the most recent records.
    */
@@ -74,15 +70,12 @@ export class SignalAuditStore {
     if (this.isInitialized) return;
 
     try {
-      if (!this.isProductionMode() && fs.existsSync(LOCAL_AUDIT_PATH)) {
+      if (fs.existsSync(LOCAL_AUDIT_PATH)) {
         const raw = fs.readFileSync(LOCAL_AUDIT_PATH, 'utf-8');
         const parsed: SignalAuditRecord[] = JSON.parse(raw);
         if (Array.isArray(parsed)) {
           for (const item of parsed) {
-            if (item && item.id) {
-              if ((item as any).entryPrice === 50000 || (item.symbol === 'BTCUSDT' && (item as any).entryPrice === 50000)) continue;
-              this.auditLogs.set(item.id, item);
-            }
+            this.auditLogs.set(item.id, item);
           }
         }
       }
@@ -94,9 +87,6 @@ export class SignalAuditStore {
   }
 
   private static persistLocal(): void {
-    if (this.isProductionMode()) {
-      return; // Local JSON forbidden in production
-    }
     try {
       const arr = Array.from(this.auditLogs.values())
         .sort((a, b) => b.timestamp - a.timestamp)
@@ -109,14 +99,23 @@ export class SignalAuditStore {
 
   private static async persistFirestore(record: SignalAuditRecord): Promise<void> {
     try {
-      const db = getFirestoreAdmin();
-      if (db) {
-        await db.collection(FIRESTORE_COLLECTION).doc(record.id).set(record);
-      } else if (this.isProductionMode()) {
-        logger.error(`[SignalAuditStore] FAIL CLOSED: Firestore unavailable in production for audit record ${record.id}`);
+      if (getNeonPool()) {
+        await queryNeon(
+          `INSERT INTO audit_events (id, security_id, action, timestamp, severity, details_json)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            record.id,
+            'SIGNAL_AUDIT',
+            `Candidate ${record.symbol} (${record.status}): ${record.rejectionReason || 'Accepted'}`,
+            record.timestamp,
+            record.status === 'ACCEPTED' ? 'INFO' : 'WARN',
+            JSON.stringify(record),
+          ]
+        );
       }
     } catch (err) {
-      logger.debug('[SignalAuditStore] Firestore sync error:', { error: String(err) });
+      logger.debug('[SignalAuditStore] Neon sync omitted:', { error: String(err) });
     }
   }
 
@@ -137,9 +136,7 @@ export class SignalAuditStore {
 
     this.auditLogs.set(id, record);
     this.pruneInMemory();
-    if (!this.isProductionMode()) {
-      this.persistLocal();
-    }
+    this.persistLocal();
     this.persistFirestore(record).catch(() => {});
 
     logger.info(`[Signal Audit Logged] ${input.symbol} (${input.status}): ${input.rejectionReason || 'Accepted for Signal Dispatch'}`);
@@ -149,31 +146,8 @@ export class SignalAuditStore {
   /**
    * Returns recent audit logs for debugging or backend review
    */
-  public static async getAuditLogs(limit: number = 100): Promise<SignalAuditRecord[]> {
+  public static getAuditLogs(limit: number = 100): SignalAuditRecord[] {
     this.init();
-    const firestore = getFirestoreAdmin();
-    if (firestore) {
-      try {
-        const query = await firestore
-          .collection(FIRESTORE_COLLECTION)
-          .orderBy('timestamp', 'desc')
-          .limit(limit)
-          .get();
-        if (!query.empty) {
-          const list: SignalAuditRecord[] = [];
-          query.forEach((doc) => list.push(doc.data() as SignalAuditRecord));
-          return list;
-        }
-      } catch (err) {
-        logger.debug('[SignalAuditStore] Firestore getAuditLogs failed:', err);
-      }
-    }
-
-    if (this.isProductionMode()) {
-      logger.error('[SignalAuditStore] FAIL CLOSED: Cannot read audit logs from local cache in production mode.');
-      return [];
-    }
-
     return Array.from(this.auditLogs.values())
       .sort((a, b) => b.timestamp - a.timestamp)
       .slice(0, limit);
@@ -182,33 +156,9 @@ export class SignalAuditStore {
   /**
    * Returns audit logs for a specific symbol
    */
-  public static async getAuditLogsBySymbol(symbol: string, limit: number = 20): Promise<SignalAuditRecord[]> {
+  public static getAuditLogsBySymbol(symbol: string, limit: number = 20): SignalAuditRecord[] {
     this.init();
     const sym = symbol.toUpperCase();
-    const firestore = getFirestoreAdmin();
-    if (firestore) {
-      try {
-        const query = await firestore
-          .collection(FIRESTORE_COLLECTION)
-          .where('symbol', '==', sym)
-          .orderBy('timestamp', 'desc')
-          .limit(limit)
-          .get();
-        if (!query.empty) {
-          const list: SignalAuditRecord[] = [];
-          query.forEach((doc) => list.push(doc.data() as SignalAuditRecord));
-          return list;
-        }
-      } catch (err) {
-        logger.debug('[SignalAuditStore] Firestore getAuditLogsBySymbol failed:', err);
-      }
-    }
-
-    if (this.isProductionMode()) {
-      logger.error('[SignalAuditStore] FAIL CLOSED: Cannot read audit logs from local cache in production mode.');
-      return [];
-    }
-
     return Array.from(this.auditLogs.values())
       .filter((r) => r.symbol === sym)
       .sort((a, b) => b.timestamp - a.timestamp)

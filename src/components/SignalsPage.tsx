@@ -65,7 +65,7 @@ export function SignalsPage({ health }: SignalsPageProps) {
   const [rejected72PlusCandidates, setRejected72PlusCandidates] = useState<any[]>([]);
   const isInitialLoad = useRef<boolean>(true);
 
-  // Authoritative Firestore-Backed Historical Trades & Signal Logs (Gate 16)
+  // Authoritative Neon-Backed Historical Trades & Signal Logs (Gate 16)
   const [signalHistory, setSignalHistory] = useState<SignalHistoryItem[]>([]);
 
   // Helper to add signals to state

@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { getFirestoreAdmin } from '../firebaseAdmin.js';
+import { queryNeon, getNeonPool } from '../infrastructure/neon/db.js';
 import { logger } from '../logger.js';
 import { serverConfig } from '../config.js';
 import { ExecutionEvidenceState, HistoricalEntryPolicy } from '../../types/index.js';
@@ -157,15 +157,31 @@ export class SignalOutcomeLogger {
       this.saveLocal();
     }
 
-    const firestore = getFirestoreAdmin();
-    if (firestore) {
+    if (getNeonPool()) {
       try {
-        const cleaned = Object.fromEntries(
-          Object.entries(record).filter(([_, v]) => v !== undefined)
+        const cleanJson = JSON.parse(JSON.stringify(record));
+        await queryNeon(
+          `INSERT INTO signal_outcomes (id, signal_id, symbol, direction, status, pnl, r_multiple, timestamp, payload_json)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (id) DO UPDATE SET
+             status = EXCLUDED.status,
+             pnl = EXCLUDED.pnl,
+             r_multiple = EXCLUDED.r_multiple,
+             payload_json = EXCLUDED.payload_json`,
+          [
+            record.id,
+            record.id,
+            record.symbol,
+            record.direction || 'BUY',
+            record.status || record.finalOutcome || 'CLOSED',
+            0,
+            0,
+            record.timestamp || Date.now(),
+            JSON.stringify(cleanJson),
+          ]
         );
-        await firestore.collection(FIRESTORE_OUTCOME_COL).doc(record.id).set(cleaned);
       } catch (err) {
-        logger.warn('[SignalOutcomeLogger] Firestore failed to save record:', { error: String(err) });
+        logger.warn('[SignalOutcomeLogger] Neon failed to save record:', { error: String(err) });
       }
     }
   }
@@ -175,23 +191,25 @@ export class SignalOutcomeLogger {
    */
   public static async getOutcome(id: string): Promise<SignalOutcomeRecord | null> {
     const isProd = serverConfig.getConfig().nodeEnv === 'production';
-    const firestore = getFirestoreAdmin();
 
     if (isProd) {
-      if (!firestore) {
+      if (!getNeonPool()) {
         // Fail safely in production
         return null;
       }
       try {
-        const doc = await firestore.collection(FIRESTORE_OUTCOME_COL).doc(id).get();
-        if (doc.exists) {
-          const remote = doc.data() as SignalOutcomeRecord;
+        const rows = await queryNeon<{ payload_json: SignalOutcomeRecord }>(
+          `SELECT payload_json FROM signal_outcomes WHERE id = $1`,
+          [id]
+        );
+        if (rows.length > 0 && rows[0].payload_json) {
+          const remote = rows[0].payload_json;
           if (isProductionRecord(remote as any)) {
             return remote;
           }
         }
       } catch (err) {
-        logger.warn('[SignalOutcomeLogger] Firestore failed to get record in production:', { error: String(err) });
+        logger.warn('[SignalOutcomeLogger] Neon failed to get record in production:', { error: String(err) });
       }
       return null;
     }
@@ -200,16 +218,19 @@ export class SignalOutcomeLogger {
     const local = this.localLogs.get(id);
     if (local && local.entryPrice !== 50000) return local;
 
-    if (firestore) {
+    if (getNeonPool()) {
       try {
-        const doc = await firestore.collection(FIRESTORE_OUTCOME_COL).doc(id).get();
-        if (doc.exists) {
-          const remote = doc.data() as SignalOutcomeRecord;
+        const rows = await queryNeon<{ payload_json: SignalOutcomeRecord }>(
+          `SELECT payload_json FROM signal_outcomes WHERE id = $1`,
+          [id]
+        );
+        if (rows.length > 0 && rows[0].payload_json) {
+          const remote = rows[0].payload_json;
           this.localLogs.set(id, remote);
           return remote;
         }
       } catch (err) {
-        logger.warn('[SignalOutcomeLogger] Firestore failed to get record:', { error: String(err) });
+        logger.warn('[SignalOutcomeLogger] Neon failed to get record:', { error: String(err) });
       }
     }
     return null;
@@ -217,9 +238,6 @@ export class SignalOutcomeLogger {
 
   /**
    * Retrieves all outcome logs. Options enable filtering by production status or exact provenance.
-   * "signal_outcome_logs.json" MUST NOT be used as a production source or fallback for LIVE/HISTORICAL signals.
-   * Firestore is the production source of truth.
-   * If Firestore is unavailable in production, fails safely instead of loading fake/stale local signal data.
    */
   public static async getOutcomeLogs(
     limit = 100,
@@ -229,54 +247,42 @@ export class SignalOutcomeLogger {
     const isProd = serverConfig.getConfig().nodeEnv === 'production';
     const isProductionQuery = productionOnly || isProd || (provenanceFilter && provenanceFilter.toUpperCase() === 'LIVE');
 
-    const firestore = getFirestoreAdmin();
-
-    // In production or when querying production records:
-    // Firestore is authoritative source of truth.
-    // signal_outcome_logs.json MUST NOT be used as production source or fallback!
     if (isProductionQuery) {
-      if (!firestore) {
-        logger.warn('[SignalOutcomeLogger] FAIL SAFELY: Firestore unavailable for production outcome logs query. Returning empty list without local fallback.');
+      if (!getNeonPool()) {
+        logger.warn('[SignalOutcomeLogger] FAIL SAFELY: Neon database unavailable for production outcome logs query. Returning empty list without local fallback.');
         return [];
       }
 
       try {
-        const query = await firestore
-          .collection(FIRESTORE_OUTCOME_COL)
-          .orderBy('updatedAt', 'desc')
-          .limit(limit * 2)
-          .get();
+        const rows = await queryNeon<{ payload_json: SignalOutcomeRecord }>(
+          `SELECT payload_json FROM signal_outcomes ORDER BY timestamp DESC LIMIT $1`,
+          [limit * 2]
+        );
 
         const records: SignalOutcomeRecord[] = [];
-        if (!query.empty) {
-          query.forEach((doc) => {
-            const data = doc.data() as SignalOutcomeRecord;
-            if (data && isProductionRecord(data as any)) {
-              records.push(data);
-            }
-          });
+        for (const r of rows) {
+          if (r.payload_json && isProductionRecord(r.payload_json as any)) {
+            records.push(r.payload_json);
+          }
         }
-        return records.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
+        return records.sort((a, b) => (b.updatedAt || b.timestamp) - (a.updatedAt || a.timestamp)).slice(0, limit);
       } catch (err) {
-        logger.warn('[SignalOutcomeLogger] FAIL SAFELY: Firestore failed to retrieve outcome logs. Returning empty list without local fallback:', { error: String(err) });
+        logger.warn('[SignalOutcomeLogger] FAIL SAFELY: Neon failed to retrieve outcome logs. Returning empty list without local fallback:', { error: String(err) });
         return [];
       }
     }
 
-    // Dev/Test only queries (only reachable when NOT a production query and NOT in production)
+    // Dev/Test only queries
     this.init();
     let records: SignalOutcomeRecord[] = [];
 
-    if (firestore) {
+    if (getNeonPool()) {
       try {
-        const query = await firestore
-          .collection(FIRESTORE_OUTCOME_COL)
-          .orderBy('updatedAt', 'desc')
-          .limit(limit * 2)
-          .get();
-        if (!query.empty) {
-          query.forEach((doc) => records.push(doc.data() as SignalOutcomeRecord));
-        }
+        const rows = await queryNeon<{ payload_json: SignalOutcomeRecord }>(
+          `SELECT payload_json FROM signal_outcomes ORDER BY timestamp DESC LIMIT $1`,
+          [limit * 2]
+        );
+        records = rows.map((r) => r.payload_json);
       } catch (err) {
         records = Array.from(this.localLogs.values());
       }
@@ -284,7 +290,6 @@ export class SignalOutcomeLogger {
       records = Array.from(this.localLogs.values());
     }
 
-    // Filter out 50000 artificial records even in dev/test queries
     records = records.filter((r) => r.entryPrice !== 50000 && r.stopLoss !== 49000 && r.takeProfit !== 52000);
 
     if (provenanceFilter && provenanceFilter.toUpperCase() !== 'PRODUCTION') {
@@ -292,7 +297,7 @@ export class SignalOutcomeLogger {
     }
 
     return records
-      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .sort((a, b) => (b.updatedAt || b.timestamp) - (a.updatedAt || a.timestamp))
       .slice(0, limit);
   }
 
@@ -306,13 +311,12 @@ export class SignalOutcomeLogger {
       this.saveLocal();
     }
 
-    const firestore = getFirestoreAdmin();
-    if (firestore) {
+    if (getNeonPool()) {
       try {
-        await firestore.collection(FIRESTORE_OUTCOME_COL).doc(id).delete();
+        await queryNeon(`DELETE FROM signal_outcomes WHERE id = $1`, [id]);
         return true;
       } catch (err) {
-        logger.warn('[SignalOutcomeLogger] Firestore failed to delete record:', { id, error: String(err) });
+        logger.warn('[SignalOutcomeLogger] Neon failed to delete record:', { id, error: String(err) });
       }
     }
     return hadLocal;
@@ -326,18 +330,11 @@ export class SignalOutcomeLogger {
     this.localLogs.clear();
     this.saveLocal();
 
-    const firestore = getFirestoreAdmin();
-    if (firestore) {
+    if (getNeonPool()) {
       try {
-        const collectionRef = firestore.collection(FIRESTORE_OUTCOME_COL);
-        const snapshot = await collectionRef.get();
-        const batch = firestore.batch();
-        snapshot.docs.forEach((doc) => {
-          batch.delete(doc.ref);
-        });
-        await batch.commit();
+        await queryNeon(`DELETE FROM signal_outcomes`);
       } catch (err) {
-        logger.warn('[SignalOutcomeLogger] Firestore failed to clear logs:', { error: String(err) });
+        logger.warn('[SignalOutcomeLogger] Neon failed to clear logs:', { error: String(err) });
       }
     }
   }

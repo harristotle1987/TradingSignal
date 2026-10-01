@@ -1,82 +1,63 @@
 /**
- * Authentication & Admin Access Modal Component
+ * Authentication & Access Modal Component (Neon Auth Architecture)
  *
- * Provides authentication, token management, session status, and login/logout
- * workflows using the application's auth architecture.
+ * Implements:
+ * - Direct authentication against Neon PostgreSQL via secure HttpOnly session cookies
+ * - User Registration with atomic First-Admin promotion
+ * - Session status display showing authenticated user email & role (ADMIN vs USER)
+ * - Safe session logout and revocation
  */
 
 import React, { useState, useEffect } from 'react';
-import { api } from '../api/client.js';
+import { api, AuthUser } from '../api/client.js';
 import {
   X,
   Lock,
   Mail,
-  Key,
   LogOut,
   ShieldCheck,
   CheckCircle2,
   AlertCircle,
   Loader2,
   User,
+  ShieldAlert,
+  Sparkles,
 } from 'lucide-react';
 
 interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLoginSuccess?: (token: string) => void;
+  onLoginSuccess?: (user: AuthUser) => void;
 }
 
 export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps) {
-  const [activeTab, setActiveTab] = useState<'LOGIN' | 'TOKEN' | 'REGISTER'>('LOGIN');
+  const [activeTab, setActiveTab] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [adminToken, setAdminToken] = useState('');
+  const [displayName, setDisplayName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [currentSession, setCurrentSession] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
 
+  // Check current session state when opened
   useEffect(() => {
     if (isOpen) {
       setError(null);
       setSuccessMessage(null);
-      const existingToken = api.getAdminToken();
-      setCurrentSession(existingToken);
-      if (existingToken) {
-        setAdminToken(existingToken);
-      }
+      api.getAuthMe().then((res) => {
+        if (res.authenticated && res.user) {
+          setCurrentUser(res.user);
+        } else {
+          setCurrentUser(null);
+        }
+      }).catch(() => {
+        setCurrentUser(null);
+      });
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
-
-  const handleAdminTokenSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!adminToken.trim()) {
-      setError('Please enter a valid administrative key or token.');
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-
-    try {
-      const cleanToken = adminToken.trim();
-      api.setAdminToken(cleanToken);
-      setCurrentSession(cleanToken);
-      setSuccessMessage('Admin credentials saved successfully!');
-      if (onLoginSuccess) {
-        onLoginSuccess(cleanToken);
-      }
-      setTimeout(() => {
-        onClose();
-      }, 700);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to save admin token');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -89,17 +70,23 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
     setError(null);
 
     try {
-      // If admin password matches or token is configured
-      const tokenCandidate = password.trim();
-      api.setAdminToken(tokenCandidate);
-      setCurrentSession(tokenCandidate);
-      setSuccessMessage('Logged in successfully!');
-      if (onLoginSuccess) {
-        onLoginSuccess(tokenCandidate);
+      const res = await api.createAuthSession({
+        email: email.trim(),
+        password: password.trim(),
+      });
+
+      if (res.success && res.user) {
+        setCurrentUser(res.user);
+        setSuccessMessage(`Welcome back, ${res.user.displayName || res.user.email}!`);
+        if (onLoginSuccess) {
+          onLoginSuccess(res.user);
+        }
+        setTimeout(() => {
+          onClose();
+        }, 600);
+      } else {
+        setError(res.error || 'Authentication failed. Please check your credentials.');
       }
-      setTimeout(() => {
-        onClose();
-      }, 700);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Authentication failed. Please check credentials.');
     } finally {
@@ -107,14 +94,66 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
     }
   };
 
-  const handleLogout = () => {
-    api.setAdminToken(null);
-    setCurrentSession(null);
-    setAdminToken('');
-    setSuccessMessage('Logged out successfully.');
-    setTimeout(() => {
-      onClose();
-    }, 600);
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim() || !password.trim()) {
+      setError('Please provide an email and password.');
+      return;
+    }
+
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const res = await api.register({
+        email: email.trim(),
+        password: password.trim(),
+        displayName: displayName.trim() || undefined,
+      });
+
+      if (res.success && res.user) {
+        setCurrentUser(res.user);
+        const roleMsg = res.isFirstAdmin
+          ? 'Initial administrative account established!'
+          : 'User account created successfully!';
+        setSuccessMessage(roleMsg);
+        if (onLoginSuccess) {
+          onLoginSuccess(res.user);
+        }
+        setTimeout(() => {
+          onClose();
+        }, 700);
+      } else {
+        setError(res.error || 'Registration failed.');
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Registration request failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    setLoading(true);
+    try {
+      await api.logout();
+      setCurrentUser(null);
+      setEmail('');
+      setPassword('');
+      setSuccessMessage('Logged out successfully.');
+      setTimeout(() => {
+        onClose();
+      }, 500);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Logout failed');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -136,7 +175,7 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
               <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
                 Authentication & Access
               </h2>
-              <p className="text-xs text-slate-400">Trading Signal Control Panel</p>
+              <p className="text-xs text-slate-400">Trading Signal Control Panel (Neon Auth)</p>
             </div>
           </div>
           <button
@@ -164,22 +203,34 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
         )}
 
         {/* Current Session Indicator */}
-        {currentSession ? (
+        {currentUser ? (
           <div className="mt-4 p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
               <div className="truncate text-xs">
-                <span className="font-semibold text-slate-200">Active Session: </span>
-                <span className="font-mono text-emerald-400 truncate">
-                  {currentSession.slice(0, 6)}...{currentSession.slice(-4)}
-                </span>
+                <div className="font-semibold text-slate-200 truncate">{currentUser.email}</div>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span
+                    className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                      currentUser.admin
+                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                        : 'bg-sky-500/20 text-sky-400 border border-sky-500/40'
+                    }`}
+                  >
+                    {currentUser.admin ? 'ADMIN' : 'USER'}
+                  </span>
+                  <span className="text-slate-400 text-[11px]">
+                    {currentUser.admin ? 'Full System Privileges' : 'Standard Access'}
+                  </span>
+                </div>
               </div>
             </div>
             <button
               onClick={handleLogout}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-red-950/60 hover:bg-red-900 border border-red-800/60 text-red-200 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+              disabled={loading}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-red-950/60 hover:bg-red-900 border border-red-800/60 text-red-200 rounded-lg text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
             >
-              <LogOut className="w-3.5 h-3.5" />
+              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <LogOut className="w-3.5 h-3.5" />}
               <span>Log Out</span>
             </button>
           </div>
@@ -189,40 +240,35 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
         <div className="flex items-center gap-1 mt-4 p-1 bg-slate-950 rounded-xl border border-slate-800">
           <button
             type="button"
-            onClick={() => setActiveTab('LOGIN')}
+            onClick={() => {
+              setActiveTab('LOGIN');
+              setError(null);
+            }}
             className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
               activeTab === 'LOGIN'
                 ? 'bg-slate-800 text-white shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            Password
+            Sign In
           </button>
           <button
             type="button"
-            onClick={() => setActiveTab('TOKEN')}
-            className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-              activeTab === 'TOKEN'
-                ? 'bg-slate-800 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Admin Key
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('REGISTER')}
+            onClick={() => {
+              setActiveTab('REGISTER');
+              setError(null);
+            }}
             className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
               activeTab === 'REGISTER'
                 ? 'bg-slate-800 text-white shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            Register
+            Create Account
           </button>
         </div>
 
-        {/* Form Body */}
+        {/* Sign In Form */}
         {activeTab === 'LOGIN' && (
           <form onSubmit={handlePasswordLogin} className="mt-4 space-y-3">
             <div>
@@ -236,13 +282,14 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="admin@tradingsignal.io"
+                  required
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-colors"
                 />
               </div>
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1">
-                Password / Secret Key
+                Password
               </label>
               <div className="relative">
                 <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
@@ -251,6 +298,7 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
+                  required
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-colors font-mono"
                 />
               </div>
@@ -266,54 +314,50 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
           </form>
         )}
 
-        {activeTab === 'TOKEN' && (
-          <form onSubmit={handleAdminTokenSubmit} className="mt-4 space-y-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">
-                Admin Secret Key / Token
-              </label>
-              <div className="relative">
-                <Key className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
-                <input
-                  type="password"
-                  value={adminToken}
-                  onChange={(e) => setAdminToken(e.target.value)}
-                  placeholder="sk_admin_..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-colors font-mono"
-                />
-              </div>
-              <p className="text-[11px] text-slate-400 mt-1">
-                Matches server configured <code className="text-emerald-400">ADMIN_API_KEY</code> or <code className="text-emerald-400">ADMIN_SECRET</code>.
-              </p>
-            </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full mt-2 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/50 transition-all cursor-pointer"
-            >
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4" />}
-              <span>Authorize Session</span>
-            </button>
-          </form>
-        )}
-
+        {/* Register Form */}
         {activeTab === 'REGISTER' && (
-          <form onSubmit={handlePasswordLogin} className="mt-4 space-y-3">
+          <form onSubmit={handleRegister} className="mt-4 space-y-3">
+            <div className="p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-800/40 text-[11px] text-emerald-300 flex items-start gap-2">
+              <Sparkles className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-semibold text-white">First Account Promotion: </span>
+                The first registered account automatically becomes the sole System Administrator (ADMIN). Subsequent accounts receive standard USER access.
+              </div>
+            </div>
+
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1">
-                User Email
+                Email Address
               </label>
               <div className="relative">
-                <User className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
                 <input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="trader@domain.com"
+                  required
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-colors"
                 />
               </div>
             </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">
+                Display Name (Optional)
+              </label>
+              <div className="relative">
+                <User className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder="Trader One"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-colors"
+                />
+              </div>
+            </div>
+
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1">
                 Choose Password
@@ -324,11 +368,14 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••••••"
+                  placeholder="•••••••••••• (min 6 characters)"
+                  required
+                  minLength={6}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-colors font-mono"
                 />
               </div>
             </div>
+
             <button
               type="submit"
               disabled={loading}
@@ -343,4 +390,5 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
     </div>
   );
 }
+
 export default LoginModal;
