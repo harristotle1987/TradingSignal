@@ -323,7 +323,7 @@ export class TradeRankingEngine {
     }
 
     // 11. Execution Quality & Progressive R:R (Gate 9)
-    const activeMinRR = serverConfig.getConfig().thresholds.minimumRR || 1.8;
+    const activeMinRR = serverConfig.getConfig().thresholds.minimumRR || 1.4;
     const effRR = scoring.estimatedFriction?.netRiskRewardRatio ?? signal.netRiskRewardRatio ?? signal.riskRewardRatio;
     if (typeof effRR === 'number') {
       if (effRR >= 3.0) modifier += 3.0;

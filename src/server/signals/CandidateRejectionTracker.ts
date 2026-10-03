@@ -116,7 +116,7 @@ export class CandidateRejectionTracker {
       if (match) {
         return `Risk/reward only ${match[1]}:1; minimum required is ${match[2]}:1.`;
       }
-      const minimumRR = serverConfig?.getConfig?.()?.thresholds?.minimumRR ?? 1.8;
+      const minimumRR = serverConfig?.getConfig?.()?.thresholds?.minimumRR ?? 1.4;
       return `Risk/reward ratio below required minimum threshold (${minimumRR}:1).`;
     }
 

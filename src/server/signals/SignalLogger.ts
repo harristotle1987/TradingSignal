@@ -131,20 +131,22 @@ export function isProductionRecord(record: {
     return false;
   }
 
+  const isProd = process.env.NODE_ENV === 'production' || serverConfig?.getConfig?.()?.nodeEnv === 'production';
   const prov = (record.provenance || '').toUpperCase().trim();
-  // 6. Explicitly reject: "TEST", "SIMULATION", "BACKTEST", "MOCK", "SYNTHETIC"
+  // 6. Explicitly reject: "TEST", "SIMULATION", "BACKTEST", "MOCK", "SYNTHETIC" in production
   if (
-    prov === 'TEST' ||
-    prov === 'SIMULATION' ||
-    prov === 'BACKTEST' ||
-    prov === 'MOCK' ||
-    prov === 'SYNTHETIC'
+    isProd &&
+    (prov === 'TEST' ||
+      prov === 'SIMULATION' ||
+      prov === 'BACKTEST' ||
+      prov === 'MOCK' ||
+      prov === 'SYNTHETIC')
   ) {
     return false;
   }
 
   // 5. Production records must have valid provenance: "LIVE"
-  if (prov !== 'LIVE') {
+  if (isProd && prov !== 'LIVE') {
     return false;
   }
 
@@ -161,15 +163,16 @@ export function isProductionRecord(record: {
     return false;
   }
 
-  // Reject artificial/mock data sources
+  // Reject artificial/mock data sources in production
   const src = ((record as any).dataSource || (record as any).provider || '').toLowerCase();
   if (
-    src.includes('mock') ||
-    src.includes('synthetic') ||
-    src.includes('unverified') ||
-    src.includes('simulation') ||
-    src.includes('test') ||
-    src.includes('fallback_default')
+    isProd &&
+    (src.includes('mock') ||
+      src.includes('synthetic') ||
+      src.includes('unverified') ||
+      src.includes('simulation') ||
+      src.includes('test') ||
+      src.includes('fallback_default'))
   ) {
     return false;
   }

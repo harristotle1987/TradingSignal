@@ -39,6 +39,7 @@
 import { SignalDirection } from '../../types/index.js';
 import { logger } from '../logger.js';
 import { serverConfig } from '../config.js';
+import { MasterGuardrailEngine } from './MasterGuardrailEngine.js';
 
 export type Gate8ScoreClassification =
   | 'REJECT'
@@ -155,8 +156,8 @@ export class Gate8TradeabilityThreshold {
     if (entryQuality >= 4) highlights.push(`High-Precision Dynamic Entry Location (${entryQuality}/5)`);
 
     // Factor 8: R:R Quality (Weight: 5)
-    // Canonical minimum executable R:R floor is 1.8:1
-    const activeMinRR = Math.max(1.8, serverConfig.getConfig().thresholds?.minimumRR ?? 1.8);
+    // Canonical conservative safety floor R:R is 1.40:1
+    const activeMinRR = Math.max(MasterGuardrailEngine.CONSERVATIVE_SAFETY_FLOOR_RR, serverConfig.getConfig().thresholds?.minimumRR ?? 1.40);
     const effRr = input.netRiskRewardRatio ?? input.riskRewardRatio ?? 0;
     let rrScore = 1.0;
     if (effRr >= 3.0) rrScore = 5.0;

@@ -26,6 +26,12 @@ import { SymbolNormalizer } from '../market/SymbolNormalizer.js';
 import { logger } from '../logger.js';
 import { RiskRewardCalculator } from './RiskRewardCalculator.js';
 import { AdaptiveCalibrationEngine } from './AdaptiveCalibrationEngine.js';
+import { QlibEvidence } from './QlibQuantEngine.js';
+import { KronosEvidence } from './KronosForecastEngine.js';
+import { TradingAgentsResearchReport } from './TradingAgentsResearchEngine.js';
+import { PortfolioCandidateEvaluation } from './FinRLXPortfolioEngine.js';
+import { EMAVWAPPayoffResult } from './EMAVWAPPayoffEngine.js';
+import { FreqtradeExitEvaluationResult } from './FreqtradeExitEngine.js';
 
 export interface GuardrailEvaluationInput {
   symbol: string;
@@ -46,6 +52,7 @@ export interface GuardrailEvaluationInput {
   timeframesAligned?: number;
   agreeingStrategiesCount?: number;
   historicalWinRate?: number;
+  probabilitySource?: 'EMPIRICAL' | 'MODEL' | 'FALLBACK';
   walkForwardEfficiency?: number;
   estimatedFriction?: {
     spreadPipsOrPoints?: number;
@@ -55,6 +62,12 @@ export interface GuardrailEvaluationInput {
   correlationPenalty?: number;
   finrlRiskScaling?: number;
   newsSentiment?: string;
+  qlibEvidence?: QlibEvidence;
+  kronosEvidence?: KronosEvidence;
+  tradingAgentsResearch?: TradingAgentsResearchReport;
+  finrlEvaluation?: PortfolioCandidateEvaluation;
+  emaVwapPayoff?: EMAVWAPPayoffResult;
+  freqtradeExit?: FreqtradeExitEvaluationResult;
   currentTimeMs?: number;
 }
 
@@ -70,7 +83,7 @@ export class MasterGuardrailEngine {
   public static evaluateCandidate(input: GuardrailEvaluationInput): MasterGuardrailDecision {
     const now = input.currentTimeMs || Date.now();
     const config = serverConfig.getConfig();
-    const baseMinRR = Math.max(1.80, config.thresholds?.minimumRR || 1.80);
+    const baseMinRR = Math.max(MasterGuardrailEngine.CONSERVATIVE_SAFETY_FLOOR_RR, config.thresholds?.minimumRR || 1.60);
 
     const violations: string[] = [];
 
@@ -173,6 +186,14 @@ export class MasterGuardrailEngine {
       violations.push(`PORTFOLIO_CONCENTRATION_EXCEEDED: High correlation cluster penalty (${correlationPenalty}%).`);
     }
 
+    if (input.finrlEvaluation && !input.finrlEvaluation.allowed) {
+      violations.push(`FINRL_PORTFOLIO_CONSTRAINT_VIOLATION: ${input.finrlEvaluation.constraintViolations.join('; ')}`);
+    }
+
+    if (input.tradingAgentsResearch?.riskAnalysis?.riskStance === 'PROHIBITIVE') {
+      violations.push(`RESEARCH_TAIL_RISK_PROHIBITIVE: TradingAgents risk manager flagged prohibitive tail risk.`);
+    }
+
     // Overall final decision
     const allPassed = isHardSafe && evFloorPassed && passesAdaptiveRR && violations.length === 0;
     const guardrailDecision = allPassed ? 'ACCEPTED' : 'REJECTED';
@@ -184,6 +205,7 @@ export class MasterGuardrailEngine {
 
     return {
       probability: winProbability,
+      probabilitySource: probResult.source,
       expectedReturn,
       expectedAdverseMove,
       actualRR,
@@ -358,29 +380,42 @@ export class MasterGuardrailEngine {
   private static estimateCalibratedProbability(
     input: GuardrailEvaluationInput,
     regime: string
-  ): { probability: number; source: string } {
-    // 1. Check point-in-time empirical feedback if provided
+  ): { probability: number; source: 'EMPIRICAL' | 'MODEL' | 'FALLBACK' } {
+    // 1. Point-in-time empirical feedback if provided from completed live outcomes
     if (typeof input.historicalWinRate === 'number' && input.historicalWinRate > 0) {
       const baseProb = input.historicalWinRate > 1.0 ? input.historicalWinRate / 100 : input.historicalWinRate;
       const regimeMultiplier = regime === 'TRENDING' ? 1.05 : (regime === 'HIGH_VOLATILITY' ? 0.92 : 1.0);
       const calibrated = Math.min(0.85, Math.max(0.20, baseProb * regimeMultiplier));
-      return { probability: Number(calibrated.toFixed(3)), source: 'EMPIRICAL_INPUT' };
+      const source = input.probabilitySource === 'EMPIRICAL' ? 'EMPIRICAL' : 'MODEL';
+      return { probability: Number(calibrated.toFixed(3)), source };
     }
 
-    // 2. Score-to-probability sigmoid mapping (Bayesian prior model)
-    const baseScore = input.score || 70;
+    // 2. Multi-Model Bayesian calibration (Score + Qlib Alpha + Kronos Forecast + TradingAgents Consensus)
+    const baseScore = input.score || 65;
     const mtfRatio = input.timeframeAlignmentRatio ?? 0.67;
     const strategyRatio = (input.agreeingStrategiesCount ?? 2) / 6.0;
 
-    // Weight score, MTF confluence, and strategy agreement
-    const compositeQuality = (baseScore * 0.5) + (mtfRatio * 100 * 0.3) + (strategyRatio * 100 * 0.2);
+    const targetDirectionStance = input.direction === 'BUY' ? 'BULLISH' : 'BEARISH';
 
-    // Sigmoid mapping centered at score 70 -> 52% probability, score 85 -> 65%, score 55 -> 40%
-    const logit = (compositeQuality - 70) / 18.0;
+    let modelBoost = 0;
+    if (input.qlibEvidence?.direction === targetDirectionStance) {
+      modelBoost += (input.qlibEvidence.predictionProbability || 0.5) * 10;
+    }
+    if (input.kronosEvidence?.directionBias === targetDirectionStance) {
+      modelBoost += (input.kronosEvidence.confidence || 0.5) * 10;
+    }
+    if (input.tradingAgentsResearch?.synthesis?.consensusStance === targetDirectionStance) {
+      modelBoost += ((input.tradingAgentsResearch.synthesis.consensusScore || 50) / 100) * 10;
+    }
+
+    const compositeQuality = (baseScore * 0.4) + (mtfRatio * 100 * 0.25) + (strategyRatio * 100 * 0.15) + (modelBoost * 2.0);
+
+    const logit = (compositeQuality - 65) / 20.0;
     const sigmoid = 1.0 / (1.0 + Math.exp(-logit));
     const probability = Number((0.35 + sigmoid * 0.40).toFixed(3)); // Clamped between 0.35 and 0.75
 
-    return { probability, source: 'BAYESIAN_COMPOSITE_MODEL' };
+    const source = input.probabilitySource || 'MODEL';
+    return { probability, source };
   }
 
   /**
@@ -422,7 +457,37 @@ export class MasterGuardrailEngine {
       score -= 4;
     }
 
-    // 7. Execution Friction & Spread (0 - 7 pts)
+    const targetDirectionStance = input.direction === 'BUY' ? 'BULLISH' : 'BEARISH';
+
+    // 7. Qlib Alpha Factor (+- 6 pts)
+    if (input.qlibEvidence) {
+      if (input.qlibEvidence.direction === targetDirectionStance) {
+        score += Math.round((input.qlibEvidence.predictionProbability || 0.5) * 6);
+      } else {
+        score -= 5;
+      }
+    }
+
+    // 8. Kronos Forecast Alignment (+- 6 pts)
+    if (input.kronosEvidence) {
+      if (input.kronosEvidence.directionBias === targetDirectionStance) {
+        score += Math.round((input.kronosEvidence.confidence || 0.5) * 6);
+      } else {
+        score -= 5;
+      }
+    }
+
+    // 9. TradingAgents Research Consensus (+- 6 pts)
+    if (input.tradingAgentsResearch) {
+      const consensus = input.tradingAgentsResearch.synthesis;
+      if (consensus.consensusStance === targetDirectionStance) {
+        score += Math.round((consensus.consensusScore / 100) * 6);
+      } else if (consensus.consensusStance !== 'NEUTRAL') {
+        score -= 5;
+      }
+    }
+
+    // 10. Execution Friction & Spread (0 - 7 pts)
     const netRR = input.estimatedFriction?.netRiskRewardRatio;
     if (netRR && netRR >= 1.7) {
       score += 5;
@@ -430,11 +495,25 @@ export class MasterGuardrailEngine {
       score -= 8;
     }
 
-    // 8. Walk-Forward Efficiency (0 - 5 pts)
+    // 11. Walk-Forward Efficiency (0 - 5 pts)
     if (input.walkForwardEfficiency && input.walkForwardEfficiency >= 0.70) {
       score += 5;
     } else if (input.walkForwardEfficiency && input.walkForwardEfficiency < 0.40) {
       score -= 5;
+    }
+
+    // 12. EMA / VWAP Payoff Quality Factor (+- 6 pts)
+    if (input.emaVwapPayoff) {
+      if (input.emaVwapPayoff.payoffQuality === 'EXCELLENT') score += 6;
+      else if (input.emaVwapPayoff.payoffQuality === 'STRONG') score += 4;
+      else if (input.emaVwapPayoff.payoffQuality === 'WEAK') score -= 3;
+      else if (input.emaVwapPayoff.payoffQuality === 'UNFAVORABLE') score -= 6;
+    }
+
+    // 13. Freqtrade Dynamic Exit Quality Factor (+- 5 pts)
+    if (input.freqtradeExit) {
+      if (input.freqtradeExit.exitUrgency === 'NONE' && input.freqtradeExit.details.currentProfitPct >= 0) score += 5;
+      else if (input.freqtradeExit.exitUrgency === 'CRITICAL_EXIT') score -= 6;
     }
 
     return Math.min(100, Math.max(0, Math.round(score)));

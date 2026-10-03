@@ -31,6 +31,8 @@ import { KronosForecastEngine, KronosEvidence } from './KronosForecastEngine.js'
 import { TradingAgentsResearchEngine, TradingAgentsResearchReport } from './TradingAgentsResearchEngine.js';
 import { FinRLXPortfolioEngine, PortfolioCandidateEvaluation, PortfolioPosition } from './FinRLXPortfolioEngine.js';
 import { marketEventEngine, MarketEventEngine } from './MarketEventEngine.js';
+import { EMAVWAPPayoffResult } from './EMAVWAPPayoffEngine.js';
+import { FreqtradeExitEvaluationResult } from './FreqtradeExitEngine.js';
 
 export type EnsembleExecutionMode = 'SHADOW' | 'CANARY' | 'ACTIVE';
 
@@ -128,6 +130,8 @@ export interface EnsembleCandidateInput {
   activeSignals?: TradingSignal[];
   newsSentiment?: string;
   productionPassed?: boolean;
+  emaVwapPayoff?: EMAVWAPPayoffResult;
+  freqtradeExit?: FreqtradeExitEvaluationResult;
 }
 
 export class AdvancedEnsembleDecisionEngine {

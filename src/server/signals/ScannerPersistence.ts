@@ -58,6 +58,7 @@ export interface DailyCapState {
   lastScanTime: number;
   lastCronTriggerTime?: number;
   reservations?: DailyCapReservation[];
+  lastResetTime?: number;
 }
 
 export type LifecycleCheckStatus =
@@ -337,6 +338,7 @@ export class ScannerPersistence {
       lastSignalsFound: 0,
       lastAcceptedSignals: 0,
       reservations: [],
+      lastResetTime: 0,
     },
     sentSignals: [],
     rejectedCandidates: [],
@@ -855,10 +857,12 @@ export class ScannerPersistence {
     this.init();
     const today = new Date().toISOString().split('T')[0];
     const currentCap = this.localData.capState.dailySignalCap || serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 10;
+    const now = Date.now();
 
     this.localData.capState.date = today;
     this.localData.capState.dailySignalCount = 0;
     this.localData.capState.reservations = [];
+    this.localData.capState.lastResetTime = now;
     this.saveLocalData();
 
     if (getNeonPool()) {
@@ -871,9 +875,10 @@ export class ScannerPersistence {
             dailySignalCap: currentCap,
             lastScanTime: this.localData.capState.lastScanTime || 0,
             reservations: [],
+            lastResetTime: now,
           };
           if (res.rows.length > 0) {
-            state = { ...res.rows[0].state_json, date: today, dailySignalCount: 0, reservations: [] };
+            state = { ...res.rows[0].state_json, date: today, dailySignalCount: 0, reservations: [], lastResetTime: now };
           }
           await client.query(
             `INSERT INTO scanner_state (date, daily_signal_count, daily_signal_cap, state_json, updated_at)
@@ -882,7 +887,7 @@ export class ScannerPersistence {
                daily_signal_count = 0,
                state_json = EXCLUDED.state_json,
                updated_at = EXCLUDED.updated_at`,
-            [today, currentCap, JSON.stringify(state), Date.now()]
+            [today, currentCap, JSON.stringify(state), now]
           );
         });
         logger.info('[ScannerPersistence] Daily signal cap counter successfully reset to 0 in Neon.');

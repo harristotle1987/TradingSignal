@@ -53,9 +53,12 @@ import { CandidateRejectionTracker, StandardFailedGate } from './CandidateReject
 import { ScanPerformanceProfiler, setActiveProfiler } from './ScanPerformanceProfiler.js';
 import { TradingAgentsResearchEngine } from './TradingAgentsResearchEngine.js';
 import { FinRLXPortfolioEngine } from './FinRLXPortfolioEngine.js';
+import { HistoricalOutcomeFeedbackEngine } from './HistoricalOutcomeFeedbackEngine.js';
 import { marketEventEngine } from './MarketEventEngine.js';
 import { AdvancedEnsembleDecisionEngine } from './AdvancedEnsembleDecisionEngine.js';
 import { MasterGuardrailEngine } from './MasterGuardrailEngine.js';
+import { EMAVWAPPayoffEngine } from './EMAVWAPPayoffEngine.js';
+import { FreqtradeExitEngine } from './FreqtradeExitEngine.js';
 import { logger } from '../logger.js';
 import { getDynamicPrecision } from '../../utils/formatters.js';
 
@@ -877,20 +880,7 @@ export async function runStagedPipeline(
       });
 
       if (!gate8Eval.isTradeable) {
-        const failedGates: StandardFailedGate[] = [];
-        if (gate8Eval.finalScore < thresholds.signalThreshold) {
-          failedGates.push(StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD);
-        } else {
-          const factors: any = gate8Eval.factors || {};
-          if (factors.trendAlignment !== undefined && factors.trendAlignment < 14) failedGates.push(StandardFailedGate.TREND);
-          if (factors.momentum !== undefined && factors.momentum < 7) failedGates.push(StandardFailedGate.MOMENTUM);
-          if (factors.marketStructure !== undefined && factors.marketStructure < 10) failedGates.push(StandardFailedGate.MARKET_STRUCTURE);
-          if (factors.mtfConfirmation !== undefined && factors.mtfConfirmation < 10) failedGates.push(StandardFailedGate.MTF_ALIGNMENT);
-          if (factors.volumeLiquidity !== undefined && factors.volumeLiquidity < 6) failedGates.push(StandardFailedGate.VOLUME);
-          if (factors.volatilityAtrQuality !== undefined && factors.volatilityAtrQuality < 6) failedGates.push(StandardFailedGate.VOLATILITY);
-          if (factors.entryQuality !== undefined && factors.entryQuality < 3.5) failedGates.push(StandardFailedGate.VALID_ENTRY);
-          if (factors.rrQuality !== undefined && factors.rrQuality < 3.5) failedGates.push(StandardFailedGate.RR);
-        }
+        const failedGates: StandardFailedGate[] = [StandardFailedGate.FINAL_SCORE_BELOW_THRESHOLD];
 
         if (failedGates.length === 0) {
           if (gate8Eval.finalScore < thresholds.signalThreshold) {
@@ -964,7 +954,7 @@ export async function runStagedPipeline(
       const safeTp2 = tpEnforced.tp2;
       const safeTp3 = tpEnforced.tp3;
 
-      const minRequiredRR = Math.max(1.8, serverConfig.getConfig().thresholds.minimumRR);
+      const minRequiredRR = MasterGuardrailEngine.CONSERVATIVE_SAFETY_FLOOR_RR;
       const rrResult = RiskRewardCalculator.calculate(finalEntry, finalSL, safeTp1, safeTp2, safeTp3, scoring.direction, minRequiredRR);
       const safeTakeProfit = rrResult.selectedTarget === 'TP3' ? safeTp3 : safeTp2;
       const tp1Rr = rrResult.tp1RR;
@@ -977,11 +967,70 @@ export async function runStagedPipeline(
       const finalPublishedRR = finalRiskDistance > 0 ? Number((finalRewardDistance / finalRiskDistance).toFixed(2)) : 0;
 
       // =========================================================================
-      // MASTER GUARDRAIL UPGRADE — 7-STEP AUTHORITATIVE DECISION PIPELINE
-      // Upgrades R:R from a fixed profitability gate to an adaptive risk guardrail
-      // with Expected Value validation (EV = (P(win)*gain) - (P(loss)*loss) > 0)
-      // while keeping hard structural/geometry safety gates authoritative.
+      // REAL DECISION INPUTS BEFORE MASTER GUARDRAIL EVALUATION
+      // Evaluates TradingAgents research consensus, FinRLX portfolio risk overlay,
+      // and empirical outcome probability calibration before final acceptance.
       // =========================================================================
+
+      // 1. TradingAgents Multi-Agent Quantitative Research Consensus
+      let tradingAgentsResearch: any = undefined;
+      try {
+        tradingAgentsResearch = TradingAgentsResearchEngine.research({
+          snapshotId: validation.snapshotId,
+          symbol: asset,
+          direction: scoring.direction,
+          entryPrice: finalEntry,
+          stopLoss: finalSL,
+          takeProfit: safeTakeProfit,
+          tp1: safeTp1,
+          tp2: safeTp2,
+          tp3: safeTp3,
+          riskRewardRatio: rrResult.primaryRR,
+          score: gate8Eval.finalScore,
+          candlesMap,
+          liveTicker,
+          newsSentiment: commonTelemetry.newsStatus,
+          timestamp: now,
+        });
+      } catch (err: any) {
+        logger.warn(`[StagedScannerPipeline] TradingAgents research skipped for ${asset}:`, { error: String(err) });
+      }
+
+      // 2. FinRLX Quantitative Portfolio Risk & Concentration Overlay
+      let finrlEvalResult: any = undefined;
+      let finrlEvidence: any = undefined;
+      try {
+        const activeList = Array.from(engine.activeSignals.values());
+        const mockCandidateSignal = {
+          symbol: asset,
+          direction: scoring.direction,
+          entryPrice: finalEntry,
+          stopLoss: finalSL,
+          takeProfit: safeTakeProfit,
+          suggestedRiskAmount: scoring.hypotheticalRisk?.suggestedRiskAmount,
+          suggestedPositionSize: scoring.hypotheticalRisk?.suggestedPositionSize,
+          strategy: primaryStrategyName,
+        };
+        finrlEvalResult = FinRLXPortfolioEngine.evaluateSignalCandidate(mockCandidateSignal, activeList);
+        finrlEvidence = {
+          allowed: finrlEvalResult.allowed,
+          violations: finrlEvalResult.constraintViolations,
+          clusterName: finrlEvalResult.clusterName,
+          clusterWeightAfter: finrlEvalResult.clusterWeightAfter,
+          portfolioGrossExposureAfter: finrlEvalResult.portfolioGrossExposureAfter,
+          portfolioNetExposureAfter: finrlEvalResult.portfolioNetExposureAfter,
+          sizeReductionFactor: finrlEvalResult.sizeReductionFactor,
+          metrics: finrlEvalResult.evidence.exposureMetrics,
+          riskOverlay: finrlEvalResult.evidence.riskOverlay,
+        };
+      } catch (err: any) {
+        logger.warn(`[StagedScannerPipeline] FinRL portfolio evaluation skipped for ${asset}:`, { error: String(err) });
+      }
+
+      // 3. Empirical Live Production Outcome Feedback (Calibrated Win Rate)
+      const empiricalFeedback = await HistoricalOutcomeFeedbackEngine.getCalibratedWinRate(primaryStrategyName, scoring.marketRegime);
+
+      // 4. Authoritative Master Guardrail 7-Step Evaluation
       const masterDecision = MasterGuardrailEngine.evaluateCandidate({
         symbol: asset,
         direction: scoring.direction,
@@ -1000,9 +1049,16 @@ export async function runStagedPipeline(
         timeframeAlignmentRatio: scoring.timeframeAlignmentRatio,
         timeframesAligned: scoring.timeframesAligned,
         agreeingStrategiesCount: scoring.agreeingStrategiesCount,
-        historicalWinRate: scoring.estimatedWinRate,
+        historicalWinRate: empiricalFeedback?.winRate ?? scoring.estimatedWinRate,
+        probabilitySource: empiricalFeedback?.probabilitySource ?? 'MODEL',
         estimatedFriction: scoring.estimatedFriction,
         newsSentiment: commonTelemetry.newsStatus,
+        qlibEvidence: scoring.qlibEvidence,
+        kronosEvidence: scoring.kronosEvidence,
+        tradingAgentsResearch,
+        finrlEvaluation: finrlEvalResult,
+        emaVwapPayoff: scoring.emaVwapPayoff,
+        freqtradeExit: scoring.freqtradeExit,
         currentTimeMs: now,
       });
 
@@ -1074,60 +1130,6 @@ export async function runStagedPipeline(
       });
 
       scoring.score = gate8Eval.finalScore;
-
-      // Extract explainable multi-agent research evidence strictly after deterministic validation
-      let tradingAgentsResearch: any = undefined;
-      try {
-        tradingAgentsResearch = TradingAgentsResearchEngine.research({
-          snapshotId: validation.snapshotId,
-          symbol: asset,
-          direction: scoring.direction,
-          entryPrice: finalEntry,
-          stopLoss: finalSL,
-          takeProfit: safeTakeProfit,
-          tp1: safeTp1,
-          tp2: safeTp2,
-          tp3: safeTp3,
-          riskRewardRatio: rrResult.primaryRR,
-          score: gate8Eval.finalScore,
-          candlesMap,
-          liveTicker,
-          newsSentiment: commonTelemetry.newsStatus,
-          timestamp: now,
-        });
-      } catch (err: any) {
-        logger.warn(`[StagedScannerPipeline] TradingAgents research skipped for ${asset}:`, { error: String(err) });
-      }
-
-      // Extract FinRL Portfolio risk & constraint evaluation strictly against active portfolio
-      let finrlEvidence: any = undefined;
-      try {
-        const activeList = Array.from(engine.activeSignals.values());
-        const mockCandidateSignal = {
-          symbol: asset,
-          direction: scoring.direction,
-          entryPrice: finalEntry,
-          stopLoss: finalSL,
-          takeProfit: safeTakeProfit,
-          suggestedRiskAmount: scoring.hypotheticalRisk?.suggestedRiskAmount,
-          suggestedPositionSize: scoring.hypotheticalRisk?.suggestedPositionSize,
-          strategy: primaryStrategyName,
-        };
-        const evalResult = FinRLXPortfolioEngine.evaluateSignalCandidate(mockCandidateSignal, activeList);
-        finrlEvidence = {
-          allowed: evalResult.allowed,
-          violations: evalResult.constraintViolations,
-          clusterName: evalResult.clusterName,
-          clusterWeightAfter: evalResult.clusterWeightAfter,
-          portfolioGrossExposureAfter: evalResult.portfolioGrossExposureAfter,
-          portfolioNetExposureAfter: evalResult.portfolioNetExposureAfter,
-          sizeReductionFactor: evalResult.sizeReductionFactor,
-          metrics: evalResult.evidence.exposureMetrics,
-          riskOverlay: evalResult.evidence.riskOverlay,
-        };
-      } catch (err: any) {
-        logger.warn(`[StagedScannerPipeline] FinRL portfolio evaluation skipped for ${asset}:`, { error: String(err) });
-      }
 
       const signal: TradingSignal = {
         id: `sig_${now}_${Math.random().toString(36).substring(2, 7)}`,

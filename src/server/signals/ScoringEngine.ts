@@ -12,6 +12,8 @@ import { RiskRewardCalculator, logRrRejectionDiagnostic } from './RiskRewardCalc
 import { QlibQuantEngine } from './QlibQuantEngine.js';
 import { KronosForecastEngine } from './KronosForecastEngine.js';
 import { MasterGuardrailEngine } from './MasterGuardrailEngine.js';
+import { EMAVWAPPayoffEngine, EMAVWAPPayoffResult } from './EMAVWAPPayoffEngine.js';
+import { FreqtradeExitEngine, FreqtradeExitEvaluationResult } from './FreqtradeExitEngine.js';
 
 export interface TpCalculationDiagnostics {
   rawTp1BeforeClamp: number;
@@ -125,6 +127,8 @@ export interface ScoringResult {
   volatilityCondition?: 'NORMAL' | 'CAUTION' | 'UNSAFE';
   qlibEvidence?: any;
   kronosEvidence?: any;
+  emaVwapPayoff?: EMAVWAPPayoffResult;
+  freqtradeExit?: FreqtradeExitEvaluationResult;
 }
 
 interface AssetExecutionProfile {
@@ -275,6 +279,25 @@ export class ScoringEngine {
       }
     } catch (err) {
       logger.warn('[ScoringEngine] KronosForecastEngine forecast skipped due to error:', { error: String(err) });
+    }
+
+    // 2d. Evaluate EMA/VWAP Payoff Engine
+    let emaVwapPayoff: EMAVWAPPayoffResult | undefined = undefined;
+    try {
+      if (s1h && s1h.length >= 20) {
+        emaVwapPayoff = EMAVWAPPayoffEngine.evaluate({
+          symbol: cleanSymbol,
+          direction,
+          candles: s1h,
+          currentPrice: entryPrice,
+          timeframe: '1h',
+        });
+        if (emaVwapPayoff) {
+          logger.info(`[EMAVWAPPayoffEngine] Integrated payoff evidence produced for ${cleanSymbol}: trendState=${emaVwapPayoff.trendState} payoffQuality=${emaVwapPayoff.payoffQuality} expectedMovePct=${emaVwapPayoff.expectedMovePct}% confidence=${emaVwapPayoff.confidence}%`);
+        }
+      }
+    } catch (err) {
+      logger.warn('[ScoringEngine] EMAVWAPPayoffEngine evaluation skipped due to error:', { error: String(err) });
     }
 
     // Calculate core technical indicators
@@ -813,7 +836,7 @@ export class ScoringEngine {
 
     const isBuyDirection = direction === 'BUY';
 
-    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, thresholds.minimumRR);
+    const rrResult = RiskRewardCalculator.calculate(entryPrice, stopLoss, tp1, tp2, tp3, direction, MasterGuardrailEngine.CONSERVATIVE_SAFETY_FLOOR_RR);
     if (!rrResult.isValid && rrResult.rejectionReason !== 'GROSS_RR_BELOW_THRESHOLD') {
       logRrRejectionDiagnostic({
         symbol: cleanSymbol,
@@ -983,6 +1006,28 @@ export class ScoringEngine {
     // Update dynamic factor fields
     factors.riskRewardScore = rawRR >= 2.5 ? 10 : 8;
 
+    // Freqtrade Exit Engine Evaluation
+    let freqtradeExit: FreqtradeExitEvaluationResult | undefined = undefined;
+    try {
+      if (entryPrice > 0 && stopLoss > 0) {
+        freqtradeExit = FreqtradeExitEngine.evaluateExit({
+          symbol: cleanSymbol,
+          direction,
+          entryPrice,
+          currentPrice: entryPrice,
+          stopLoss,
+          takeProfit,
+          tp1,
+          tp2,
+          tp3,
+          atr: effectiveAtrForNoiseFloor,
+          trendState: emaVwapPayoff?.trendState,
+        });
+      }
+    } catch (err) {
+      logger.warn('[ScoringEngine] FreqtradeExitEngine evaluation skipped due to error:', { error: String(err) });
+    }
+
     // Master Guardrail Evaluation
     const guardrailDecision = MasterGuardrailEngine.evaluateCandidate({
       symbol: cleanSymbol,
@@ -1006,6 +1051,10 @@ export class ScoringEngine {
         feeBufferPct: feePct,
         netRiskRewardRatio: netRR,
       },
+      qlibEvidence,
+      kronosEvidence,
+      emaVwapPayoff,
+      freqtradeExit,
       currentTimeMs: Date.now(),
     });
 
@@ -1084,6 +1133,8 @@ export class ScoringEngine {
       volatilityCondition: strategyEval.volatilityCondition || 'NORMAL',
       qlibEvidence,
       kronosEvidence,
+      emaVwapPayoff,
+      freqtradeExit,
     };
   }
 
@@ -1566,37 +1617,19 @@ export class ScoringEngine {
     let finalTp2 = tpSetup.tp2;
     let finalTp3 = tpSetup.tp3;
 
-    // Enforce minimum 1.8 R:R requirement (point 4)
-    const minRequiredRR = Math.max(1.8, serverConfig.getConfig().thresholds.minimumRR);
-    const riskDist = Math.abs(currentPrice - newStopLoss);
-    const minReqReward = riskDist * minRequiredRR;
-
-    if (isBuy) {
-      if (finalTp2 < currentPrice + minReqReward) {
-        finalTp2 = Number((currentPrice + minReqReward).toFixed(precision));
-        if (finalTp3 <= finalTp2) {
-          finalTp3 = Number((finalTp2 + Math.max(riskDist * 0.5, effectiveAtrForNoiseFloor * 0.5)).toFixed(precision));
-        }
-      }
-    } else {
-      if (finalTp2 > currentPrice - minReqReward) {
-        finalTp2 = Number((currentPrice - minReqReward).toFixed(precision));
-        if (finalTp3 >= finalTp2) {
-          finalTp3 = Number((finalTp2 - Math.max(riskDist * 0.5, effectiveAtrForNoiseFloor * 0.5)).toFixed(precision));
-        }
-      }
-    }
+    // Do NOT artificially stretch TP2/TP3 to force a hardcoded R:R ratio. Preserve structural TP/SL generation.
+    const minRequiredRR = MasterGuardrailEngine.CONSERVATIVE_SAFETY_FLOOR_RR;
 
     const rrResult = RiskRewardCalculator.calculate(
       currentPrice, newStopLoss, finalTp1, finalTp2, finalTp3, direction, minRequiredRR
     );
 
-    // Validate all new levels before saving (point 5)
+    // Validate all new levels before saving
     const allPositive = currentPrice > 0 && newStopLoss > 0 && finalTp1 > 0 && finalTp2 > 0 && finalTp3 > 0;
     const isOrdered = isBuy
       ? (newStopLoss < currentPrice && currentPrice < finalTp1 && finalTp1 < finalTp2 && finalTp2 < finalTp3)
       : (newStopLoss > currentPrice && currentPrice > finalTp1 && finalTp1 > finalTp2 && finalTp2 > finalTp3);
-    const isRrValid = rrResult.primaryRR >= 1.8;
+    const isRrValid = rrResult.isValid;
 
     return {
       entryPrice: currentPrice,

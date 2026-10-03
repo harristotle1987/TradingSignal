@@ -175,4 +175,47 @@ export class HistoricalOutcomeFeedbackEngine {
       summary,
     };
   }
+
+  /**
+   * Retrieves calibrated probability sourced strictly from genuine completed live outcomes.
+   * If sample size is insufficient (< 20 live trades), returns null with probabilitySource="FALLBACK".
+   */
+  public static async getCalibratedWinRate(
+    strategy?: string,
+    regime?: string
+  ): Promise<{ winRate: number; sampleSize: number; probabilitySource: 'EMPIRICAL' | 'FALLBACK' } | null> {
+    try {
+      const report = await this.analyzeLiveOutcomeFeedback();
+      if (report.completedLiveCount >= 20 && report.liveWinRate !== null) {
+        if (strategy) {
+          const stratMatch = report.strategyCorrelations.find(s => s.factorName.toLowerCase() === strategy.toLowerCase());
+          if (stratMatch && stratMatch.sampleSize >= 10) {
+            return {
+              winRate: stratMatch.winRate / 100,
+              sampleSize: stratMatch.sampleSize,
+              probabilitySource: 'EMPIRICAL',
+            };
+          }
+        }
+        if (regime) {
+          const regimeMatch = report.regimeCorrelations.find(r => r.factorName.toLowerCase() === regime.toLowerCase());
+          if (regimeMatch && regimeMatch.sampleSize >= 10) {
+            return {
+              winRate: regimeMatch.winRate / 100,
+              sampleSize: regimeMatch.sampleSize,
+              probabilitySource: 'EMPIRICAL',
+            };
+          }
+        }
+        return {
+          winRate: report.liveWinRate / 100,
+          sampleSize: report.completedLiveCount,
+          probabilitySource: 'EMPIRICAL',
+        };
+      }
+    } catch (err) {
+      logger.warn('[HistoricalOutcomeFeedbackEngine] Failed to retrieve live win rate:', { error: String(err) });
+    }
+    return null;
+  }
 }

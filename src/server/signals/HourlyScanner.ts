@@ -1300,6 +1300,19 @@ export class HourlyScannerService {
     const capState = await ScannerPersistence.getCapState(serverConfig.getConfig().thresholds.dailySignalCap);
     const settings = ScannerPersistence.getSettings();
     const sentSignalsToday = await ScannerPersistence.getSentSignalsToday();
+
+    // Authoritative self-healing synchronization of today's signal count
+    const lastReset = capState.lastResetTime || 0;
+    const actualTradeableTodayCount = sentSignalsToday.filter(
+      (s) => s.isTradeableSignal === true && s.signalClassification === 'TRADEABLE' && (s.timestamp || 0) > lastReset
+    ).length;
+
+    if (capState.dailySignalCount !== actualTradeableTodayCount) {
+      logger.info(`[HourlyScanner] Daily cap state out-of-sync: ${capState.dailySignalCount} vs actual ${actualTradeableTodayCount}. Self-healing...`);
+      capState.dailySignalCount = actualTradeableTodayCount;
+      await ScannerPersistence.saveCapState({ dailySignalCount: actualTradeableTodayCount });
+    }
+
     const recentNotifications = await ScannerPersistence.getNotificationHistory(10);
     const recentRejected = await ScannerPersistence.getRejectedCandidatesToday(10);
 

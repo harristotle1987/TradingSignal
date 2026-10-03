@@ -280,6 +280,7 @@ export interface TradingSignal {
 
 export interface MasterGuardrailDecision {
   probability: number;
+  probabilitySource?: 'EMPIRICAL' | 'MODEL' | 'FALLBACK';
   expectedReturn: number;
   expectedAdverseMove: number;
   actualRR: number;

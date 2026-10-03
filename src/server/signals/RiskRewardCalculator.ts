@@ -242,39 +242,18 @@ export class RiskRewardCalculator {
       };
     }
 
-    // 5. Target Selection & Qualification Gate
-    const passesTp2 = tp2GrossRR >= configMinRR;
-    const passesTp3 = tp3GrossRR >= configMinRR;
+    // 5. Target Selection & Telemetry R:R Metrics
+    // Selected target defaults to TP2 for primary risk-reward assessment.
+    // TP3 is selected when TP2 R:R < configMinRR and TP3 R:R >= configMinRR.
+    const selectedTarget: 'TP2' | 'TP3' = (tp2GrossRR >= configMinRR)
+      ? 'TP2'
+      : ((tp3GrossRR >= configMinRR) ? 'TP3' : 'TP2');
+    const passedViaTp3 = selectedTarget === 'TP3' && tp3GrossRR >= configMinRR;
 
-    const selectedTarget: 'TP2' | 'TP3' | null =
-      passesTp2
-        ? 'TP2'
-        : passesTp3
-          ? 'TP3'
-          : null;
+    const grossRR = selectedTarget === 'TP3' ? tp3GrossRR : tp2GrossRR;
+    const evaluatedRewardDistance = selectedTarget === 'TP3' ? tp3RewardDistance : tp2RewardDistance;
 
-    const passesRR = selectedTarget !== null;
-    const passedViaTp3 = selectedTarget === 'TP3';
-
-    const grossRR =
-      selectedTarget === 'TP2'
-        ? tp2GrossRR
-        : selectedTarget === 'TP3'
-          ? tp3GrossRR
-          : 0;
-
-    const evaluatedRewardDistance =
-      selectedTarget === 'TP2'
-        ? tp2RewardDistance
-        : selectedTarget === 'TP3'
-          ? tp3RewardDistance
-          : 0;
-
-    const primaryRR = grossRR;
-    const effectiveGrossRR = grossRR;
-    const netRR = grossRR;
-
-    if (!passesRR) {
+    if (grossRR < configMinRR) {
       return {
         riskDistance: Number(riskDistance.toFixed(4)),
         rewardDistance: Number(evaluatedRewardDistance.toFixed(4)),
@@ -293,9 +272,13 @@ export class RiskRewardCalculator {
         tp2RR,
         tp3RR,
         rejectionReason: 'GROSS_RR_BELOW_THRESHOLD',
-        reason: `GROSS_RR_BELOW_THRESHOLD. Neither TP2 (${tp2GrossRR.toFixed(2)}:1) nor TP3 (${tp3GrossRR.toFixed(2)}:1) reaches the minimum configured R:R threshold of ${configMinRR.toFixed(2)}:1`,
+        reason: `REJECTED: GROSS_RR_BELOW_THRESHOLD. Risk/reward ratio (${grossRR.toFixed(2)}:1) is below required minimum threshold (${configMinRR.toFixed(2)}:1)`,
       };
     }
+
+    const primaryRR = grossRR;
+    const effectiveGrossRR = grossRR;
+    const netRR = grossRR;
 
     return {
       riskDistance: Number(riskDistance.toFixed(4)),

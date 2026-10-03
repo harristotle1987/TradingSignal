@@ -49,6 +49,8 @@ import { runFinRLTests } from './finrl-portfolio-engine.test.js';
 import { runMarketEventTests } from './market-event-engine.test.js';
 import { runEnsembleTests } from './advanced-ensemble-decision-engine.test.js';
 import { runMasterGuardrailTests } from './master-guardrail-engine.test.js';
+import { runFreqtradeExitEngineTests } from './freqtrade-exit-engine.test.js';
+import { runEmaVwapPayoffEngineTests } from './ema-vwap-payoff-engine.test.js';
 import { ScannerPersistence, PersistedSentSignal, isValidActiveSignal } from '../src/server/signals/ScannerPersistence.js';
 import { runGate9ActiveSignalRegression } from './gate9-active-signals-regression.test.js';
 import { runVercelEntrypointTests } from './vercel-entrypoint.test.js';
@@ -2720,8 +2722,8 @@ async function runAll() {
     });
   });
 
-  // --- SUITE 17: GATE 2 — LOCK THE CANONICAL FINAL R:R FLOOR (>= 1.8) ---
-  await describe('Gate 2 Canonical Final R:R Floor Locking (>= 1.8)', async () => {
+  // --- SUITE 17: GATE 2 — LOCK THE CANONICAL FINAL R:R SAFETY FLOOR (>= 1.8) ---
+  await describe('Gate 2 Canonical Final R:R Safety Floor Locking (>= 1.8)', async () => {
     await test('46. Sensitivity profiles cannot lower final executable R:R floor below 1.8', () => {
       assert(FINAL_EXECUTABLE_RR_FLOOR === 1.8, 'FINAL_EXECUTABLE_RR_FLOOR constant must be 1.8');
 
@@ -4326,6 +4328,14 @@ async function runAll() {
 
     await test('MasterGuardrailEngine: 7-step authoritative decision pipeline, EV validation, adaptive R:R, and hard safety floors', async () => {
       await runMasterGuardrailTests();
+    });
+
+    await test('FreqtradeExitEngine: Dynamic stoploss, minimal ROI table, and adaptive trailing stop verification', async () => {
+      await runFreqtradeExitEngineTests();
+    });
+
+    await test('EMAVWAPPayoffEngine: Multi-EMA trend stack, VWAP alignment, and expected move payoff quality verification', async () => {
+      await runEmaVwapPayoffEngineTests();
     });
   });
 
