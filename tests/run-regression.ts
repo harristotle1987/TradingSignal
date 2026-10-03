@@ -43,6 +43,12 @@ import { TradeRankingEngine } from '../src/server/signals/TradeRankingEngine.js'
 import { SignalLifecycleManager } from '../src/server/signals/SignalLifecycleManager.js';
 import { SignalLogger, isProductionRecord } from '../src/server/signals/SignalLogger.js';
 import { SignalOutcomeLogger } from '../src/server/signals/SignalOutcomeLogger.js';
+import { runKronosTests } from './kronos-forecast-engine.test.js';
+import { runTradingAgentsTests } from './trading-agents-research-engine.test.js';
+import { runFinRLTests } from './finrl-portfolio-engine.test.js';
+import { runMarketEventTests } from './market-event-engine.test.js';
+import { runEnsembleTests } from './advanced-ensemble-decision-engine.test.js';
+import { runMasterGuardrailTests } from './master-guardrail-engine.test.js';
 import { ScannerPersistence, PersistedSentSignal, isValidActiveSignal } from '../src/server/signals/ScannerPersistence.js';
 import { runGate9ActiveSignalRegression } from './gate9-active-signals-regression.test.js';
 import { runVercelEntrypointTests } from './vercel-entrypoint.test.js';
@@ -4296,6 +4302,30 @@ async function runAll() {
 
     await test('Vercel Entrypoint: Guarded serverless handler verification', async () => {
       await runVercelEntrypointTests();
+    });
+
+    await test('KronosForecastEngine: OHLCV Time-Series Foundation Model forecasting verification', async () => {
+      await runKronosTests();
+    });
+
+    await test('TradingAgentsResearchEngine: Multi-agent financial research consensus verification', async () => {
+      await runTradingAgentsTests();
+    });
+
+    await test('FinRLXPortfolioEngine: Portfolio exposure, correlation clustering, risk overlay, and constraints verification', async () => {
+      await runFinRLTests();
+    });
+
+    await test('MarketEventEngine: Normalized events, deterministic sequencing, lifecycle transitions, and replay verification', async () => {
+      await runMarketEventTests();
+    });
+
+    await test('AdvancedEnsembleDecisionEngine: 14-pillar regime-aware fusion, authoritative hard gates, Evidence Ledger, and shadow rollout', async () => {
+      await runEnsembleTests();
+    });
+
+    await test('MasterGuardrailEngine: 7-step authoritative decision pipeline, EV validation, adaptive R:R, and hard safety floors', async () => {
+      await runMasterGuardrailTests();
     });
   });
 

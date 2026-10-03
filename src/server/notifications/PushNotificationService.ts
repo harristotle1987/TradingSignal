@@ -8,7 +8,7 @@
  * 1. ONLY genuinely accepted qualifying signals are notified.
  * 2. Rejected candidates, failed scans, stale data, and duplicates are strictly ignored.
  * 3. Prevents duplicate push alerts when external schedulers retry.
- * 4. Subscriptions are stored securely in Firestore with local JSON persistence fallback.
+ * 4. Subscriptions are stored securely in Neon PostgreSQL with local JSON persistence fallback.
  * 5. Expired / invalid subscriptions (HTTP 410 / 404) are auto-pruned.
  */
 
@@ -41,9 +41,6 @@ interface VapidKeys {
 
 const LOCAL_SUBSCRIPTIONS_PATH = path.join(process.cwd(), 'push_subscriptions.json');
 const LOCAL_VAPID_PATH = path.join(process.cwd(), 'push_vapid_keys.json');
-
-const FIRESTORE_SUBSCRIPTIONS_COL = 'push_subscriptions';
-const FIRESTORE_VAPID_DOC = 'push_config/vapid_keys';
 
 export class PushNotificationService {
   private static vapidKeys: VapidKeys | null = null;
@@ -214,11 +211,28 @@ export class PushNotificationService {
       throw new Error('Invalid PushSubscription payload. Endpoint and cryptographic keys required.');
     }
 
+    const p256dhClean = subscription.keys.p256dh.trim();
+    const authClean = subscription.keys.auth.trim();
+
+    // Verify key length for P-256 standard (65-byte uncompressed public key)
+    try {
+      const normalizedBase64 = p256dhClean.replace(/-/g, '+').replace(/_/g, '/');
+      const p256dhBuf = Buffer.from(normalizedBase64, 'base64');
+      if (p256dhBuf.length !== 65) {
+        throw new Error(`Public key must decode to exactly 65 bytes (received ${p256dhBuf.length} bytes).`);
+      }
+    } catch (keyErr: any) {
+      throw new Error(`Invalid PushSubscription cryptographic key: ${keyErr.message || String(keyErr)}`);
+    }
+
     const id = this.getSubscriptionId(subscription.endpoint);
     const record: StoredPushSubscription = {
       id,
       endpoint: subscription.endpoint,
-      keys: subscription.keys,
+      keys: {
+        p256dh: p256dhClean,
+        auth: authClean,
+      },
       createdAt: Date.now(),
       userAgent: userAgent || 'Unknown Client',
       active: true,
@@ -374,14 +388,25 @@ export class PushNotificationService {
       } catch (err: any) {
         failureCount++;
         const statusCode = err?.statusCode;
-        if (statusCode === 410 || statusCode === 404) {
-          // Subscription has expired or been revoked by browser
-          logger.info(`[Push Notification Service] Subscription expired (HTTP ${statusCode}). Queued for removal: ${sub.id}`);
+        const msg = err?.message || String(err);
+        const isDeadOrMalformed =
+          statusCode === 410 ||
+          statusCode === 404 ||
+          statusCode === 400 ||
+          msg.includes('p256dh') ||
+          msg.includes('65 bytes') ||
+          msg.includes('auth') ||
+          msg.includes('subscription') ||
+          msg.includes('NotSupportedError');
+
+        if (isDeadOrMalformed) {
+          // Subscription has expired, been revoked, or has invalid crypto keys
+          logger.info(`[Push Notification Service] Malformed or expired subscription pruned: ${sub.id} (${msg})`);
           deadSubscriptions.push(sub.id);
         } else {
           logger.warn(`[Push Notification Service] Push delivery failed for ${sub.id}:`, {
             statusCode,
-            error: err?.message || String(err),
+            error: msg,
           });
         }
       }

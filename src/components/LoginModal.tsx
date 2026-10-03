@@ -70,6 +70,13 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
     setError(null);
 
     try {
+      // Clear any old stale cookies first so new session becomes immediately effective
+      try {
+        await api.logout();
+      } catch {
+        // Safe to ignore if already unauthenticated
+      }
+
       const res = await api.createAuthSession({
         email: email.trim(),
         password: password.trim(),
@@ -102,7 +109,7 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
     }
 
     if (password.length < 12) {
-      setError('Password must be at least 12 characters.');
+      setError('Password must be at least 12 characters long for account security.');
       return;
     }
 
@@ -110,6 +117,13 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
     setError(null);
 
     try {
+      // Clear any old stale cookies first so new admin/user registration is cleanly effective
+      try {
+        await api.logout();
+      } catch {
+        // Safe to ignore
+      }
+
       const res = await api.register({
         email: email.trim(),
         password: password.trim(),
@@ -368,9 +382,9 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="•••••••••••• (min 6 characters)"
+                  placeholder="•••••••••••• (min 12 characters)"
                   required
-                  minLength={6}
+                  minLength={12}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-colors font-mono"
                 />
               </div>
@@ -382,10 +396,31 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
               className="w-full mt-2 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/50 transition-all cursor-pointer"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <User className="w-4 h-4" />}
-              <span>Create Account</span>
+              <span>Create Admin / User Account</span>
             </button>
           </form>
         )}
+
+        {/* Global Reset / Purge Stale Sessions Option */}
+        <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-500">
+          <span>Having trouble signing in?</span>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await api.logout();
+                setCurrentUser(null);
+                setError(null);
+                setSuccessMessage('Stale session cookies cleared. You can now register or sign in cleanly.');
+              } catch {
+                setError('Failed to clear sessions.');
+              }
+            }}
+            className="text-emerald-400 hover:text-emerald-300 underline cursor-pointer"
+          >
+            Clear Stale Sessions
+          </button>
+        </div>
       </div>
     </div>
   );

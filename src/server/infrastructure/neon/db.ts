@@ -125,8 +125,15 @@ export async function initializeNeonSchema(): Promise<boolean> {
         role VARCHAR(50) NOT NULL DEFAULT 'USER',
         display_name VARCHAR(255),
         created_at BIGINT NOT NULL,
-        last_login_at BIGINT
+        last_login_at BIGINT,
+        failed_login_attempts INT NOT NULL DEFAULT 0,
+        locked_until BIGINT,
+        last_login_ip VARCHAR(100)
       );
+
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INT NOT NULL DEFAULT 0;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until BIGINT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_ip VARCHAR(100);
 
       CREATE UNIQUE INDEX IF NOT EXISTS idx_users_single_admin ON users (role) WHERE UPPER(role) = 'ADMIN';
 
@@ -147,8 +154,8 @@ export async function initializeNeonSchema(): Promise<boolean> {
       CREATE TABLE IF NOT EXISTS signals (
         id VARCHAR(255) PRIMARY KEY,
         snapshot_id VARCHAR(255) NOT NULL,
-        symbol VARCHAR(50) NOT NULL,
-        direction VARCHAR(10) NOT NULL,
+        symbol VARCHAR(100) NOT NULL,
+        direction VARCHAR(20) NOT NULL,
         entry_price NUMERIC NOT NULL,
         stop_loss NUMERIC NOT NULL,
         take_profit NUMERIC NOT NULL,
@@ -157,11 +164,11 @@ export async function initializeNeonSchema(): Promise<boolean> {
         tp3 NUMERIC,
         risk_reward_ratio NUMERIC NOT NULL,
         score NUMERIC NOT NULL,
-        rank_tier VARCHAR(50) NOT NULL,
-        strategy VARCHAR(100) NOT NULL,
-        timeframe VARCHAR(20) NOT NULL,
-        data_source VARCHAR(100) NOT NULL,
-        status VARCHAR(50) NOT NULL,
+        rank_tier VARCHAR(100) NOT NULL,
+        strategy VARCHAR(255) NOT NULL,
+        timeframe VARCHAR(100) NOT NULL,
+        data_source VARCHAR(255) NOT NULL,
+        status VARCHAR(100) NOT NULL,
         timestamp BIGINT NOT NULL,
         payload_json JSONB NOT NULL
       );
@@ -169,9 +176,9 @@ export async function initializeNeonSchema(): Promise<boolean> {
       CREATE TABLE IF NOT EXISTS signal_outcomes (
         id VARCHAR(255) PRIMARY KEY,
         signal_id VARCHAR(255),
-        symbol VARCHAR(50) NOT NULL,
-        direction VARCHAR(10) NOT NULL,
-        status VARCHAR(50) NOT NULL,
+        symbol VARCHAR(100) NOT NULL,
+        direction VARCHAR(20) NOT NULL,
+        status VARCHAR(100) NOT NULL,
         pnl NUMERIC,
         r_multiple NUMERIC,
         timestamp BIGINT NOT NULL,
@@ -180,8 +187,8 @@ export async function initializeNeonSchema(): Promise<boolean> {
 
       CREATE TABLE IF NOT EXISTS historical_trades (
         id VARCHAR(255) PRIMARY KEY,
-        symbol VARCHAR(50) NOT NULL,
-        direction VARCHAR(10) NOT NULL,
+        symbol VARCHAR(100) NOT NULL,
+        direction VARCHAR(20) NOT NULL,
         entry_price NUMERIC NOT NULL,
         exit_price NUMERIC,
         stop_loss NUMERIC NOT NULL,
@@ -189,14 +196,14 @@ export async function initializeNeonSchema(): Promise<boolean> {
         tp1 NUMERIC,
         tp2 NUMERIC,
         tp3 NUMERIC,
-        outcome VARCHAR(50) NOT NULL,
+        outcome VARCHAR(100) NOT NULL,
         pnl NUMERIC,
         r_multiple NUMERIC,
         entered_at BIGINT NOT NULL,
         closed_at BIGINT,
-        strategy VARCHAR(100),
-        timeframe VARCHAR(20),
-        rank_tier VARCHAR(50),
+        strategy VARCHAR(255),
+        timeframe VARCHAR(100),
+        rank_tier VARCHAR(100),
         score NUMERIC,
         payload_json JSONB NOT NULL
       );
@@ -206,19 +213,57 @@ export async function initializeNeonSchema(): Promise<boolean> {
         security_id VARCHAR(100) NOT NULL,
         action TEXT NOT NULL,
         timestamp BIGINT NOT NULL,
-        severity VARCHAR(20) DEFAULT 'INFO',
+        severity VARCHAR(50) DEFAULT 'INFO',
         details_json JSONB,
         client_ip VARCHAR(100),
         user_id VARCHAR(255)
       );
 
       CREATE TABLE IF NOT EXISTS scanner_state (
-        date VARCHAR(20) PRIMARY KEY,
+        date VARCHAR(50) PRIMARY KEY,
         daily_signal_count INT NOT NULL DEFAULT 0,
         daily_signal_cap INT NOT NULL DEFAULT 10,
         state_json JSONB NOT NULL,
         updated_at BIGINT NOT NULL
       );
+
+      -- Safe idempotent schema migrations for existing databases
+      DO $$
+      BEGIN
+        BEGIN
+          ALTER TABLE signals ALTER COLUMN timeframe TYPE VARCHAR(100);
+          ALTER TABLE signals ALTER COLUMN strategy TYPE VARCHAR(255);
+          ALTER TABLE signals ALTER COLUMN rank_tier TYPE VARCHAR(100);
+          ALTER TABLE signals ALTER COLUMN data_source TYPE VARCHAR(255);
+          ALTER TABLE signals ALTER COLUMN status TYPE VARCHAR(100);
+          ALTER TABLE signals ALTER COLUMN symbol TYPE VARCHAR(100);
+          ALTER TABLE signals ALTER COLUMN direction TYPE VARCHAR(20);
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+
+        BEGIN
+          ALTER TABLE historical_trades ALTER COLUMN timeframe TYPE VARCHAR(100);
+          ALTER TABLE historical_trades ALTER COLUMN strategy TYPE VARCHAR(255);
+          ALTER TABLE historical_trades ALTER COLUMN rank_tier TYPE VARCHAR(100);
+          ALTER TABLE historical_trades ALTER COLUMN outcome TYPE VARCHAR(100);
+          ALTER TABLE historical_trades ALTER COLUMN symbol TYPE VARCHAR(100);
+          ALTER TABLE historical_trades ALTER COLUMN direction TYPE VARCHAR(20);
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+
+        BEGIN
+          ALTER TABLE audit_events ALTER COLUMN severity TYPE VARCHAR(50);
+          ALTER TABLE audit_events ALTER COLUMN security_id TYPE VARCHAR(100);
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+
+        BEGIN
+          ALTER TABLE signal_outcomes ALTER COLUMN status TYPE VARCHAR(100);
+          ALTER TABLE signal_outcomes ALTER COLUMN symbol TYPE VARCHAR(100);
+          ALTER TABLE signal_outcomes ALTER COLUMN direction TYPE VARCHAR(20);
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+      END $$;
 
       CREATE TABLE IF NOT EXISTS scanner_locks (
         lock_name VARCHAR(100) PRIMARY KEY,

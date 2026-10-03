@@ -18,7 +18,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<NavigationTab>('SIGNALS');
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [isLoginOpen, setIsLoginOpen] = useState<boolean>(false);
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => api.getStoredUser());
 
   const [loadingHealth, setLoadingHealth] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +32,8 @@ export default function App() {
         setAuthUser(null);
       }
     } catch {
-      setAuthUser(null);
+      // If token expired or invalid, auth state was already cleared
+      setAuthUser(api.getStoredUser());
     }
   }, []);
 
@@ -60,8 +61,21 @@ export default function App() {
   }, [fetchHealth]);
 
   useEffect(() => {
+    const unsubUnauth = api.onUnauthorized(() => {
+      setAuthUser(null);
+    });
+
+    const unsubAuthChange = api.onAuthChange((user) => {
+      setAuthUser(user);
+    });
+
     fetchHealth();
     checkAuth();
+
+    return () => {
+      unsubUnauth();
+      unsubAuthChange();
+    };
   }, [fetchHealth, checkAuth]);
 
   return (

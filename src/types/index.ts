@@ -213,6 +213,12 @@ export interface TradingSignal {
   timeframeAlignmentRatio?: number;
   timeframesAligned?: number;
   totalTimeframesEvaluated?: number;
+  qlibEvidence?: any;
+  kronosEvidence?: any;
+  tradingAgentsResearch?: any;
+  finrlEvidence?: any;
+  marketEventEvidence?: any;
+  ensembleEvidenceLedger?: any;
   estimatedFriction?: {
     spreadPipsOrPoints: number;
     feeBufferPct: number;
@@ -260,6 +266,36 @@ export interface TradingSignal {
   runnerExitPrice?: number;
   runnerExitAt?: string;
   runnerExitReason?: string;
+  guardrailDecision?: MasterGuardrailDecision;
+  probability?: number;
+  expectedReturn?: number;
+  expectedAdverseMove?: number;
+  actualRR?: number;
+  expectedValue?: number;
+  confidence?: number;
+  regime?: string;
+  riskLevel?: 'LOW' | 'MODERATE' | 'ELEVATED' | 'HIGH' | 'CRITICAL';
+  modelVersion?: string;
+}
+
+export interface MasterGuardrailDecision {
+  probability: number;
+  expectedReturn: number;
+  expectedAdverseMove: number;
+  actualRR: number;
+  expectedValue: number;
+  confidence: number;
+  regime: string;
+  riskLevel: 'LOW' | 'MODERATE' | 'ELEVATED' | 'HIGH' | 'CRITICAL';
+  guardrailDecision: 'ACCEPTED' | 'REJECTED';
+  rejectionReason?: string;
+  modelVersion: string;
+  adaptiveMinRR: number;
+  hardGatesPassed: boolean;
+  qualityScore: number;
+  evFloorPassed: boolean;
+  multiFactorScore: number;
+  details?: Record<string, any>;
 }
 
 export interface ScannerFunnelCounters {

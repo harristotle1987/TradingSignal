@@ -56,10 +56,15 @@ export function extractSessionToken(req: Request): string | null {
     }
   }
 
-  // 2. Custom header token formats (x-admin-key, x-api-key)
+  // 2. Custom header token formats (x-admin-key, x-session-token, x-api-key)
   const xAdminKey = req.headers['x-admin-key'];
   if (xAdminKey && typeof xAdminKey === 'string' && xAdminKey.trim().length > 0) {
     return xAdminKey.trim();
+  }
+
+  const xSessionToken = req.headers['x-session-token'];
+  if (xSessionToken && typeof xSessionToken === 'string' && xSessionToken.trim().length > 0) {
+    return xSessionToken.trim();
   }
 
   const xApiKey = req.headers['x-api-key'];

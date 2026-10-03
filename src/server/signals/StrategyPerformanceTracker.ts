@@ -101,7 +101,6 @@ export interface StrategyPerformanceState {
 }
 
 const LOCAL_PERFORMANCE_PATH = path.join(process.cwd(), 'strategy_performance.json');
-const FIRESTORE_PERFORMANCE_DOC = 'analytics/strategy_performance';
 
 export class StrategyPerformanceTracker {
   private static state: StrategyPerformanceState = {

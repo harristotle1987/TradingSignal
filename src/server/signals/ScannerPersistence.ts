@@ -352,11 +352,12 @@ export class ScannerPersistence {
   private static isInitialized = false;
 
   public static isProductionMode(): boolean {
+    if (process.env.NODE_ENV === 'production') return true;
     if (process.env.TEST_MODE === 'true') return false;
     try {
       if (serverConfig.getConfig().nodeEnv === 'production') return true;
     } catch {}
-    return process.env.NODE_ENV === 'production';
+    return false;
   }
 
   public static isProductionPersistenceReady(): boolean {
@@ -1418,17 +1419,13 @@ export class ScannerPersistence {
       return !isFakePrice || s.id.includes('test') || s.id.startsWith('preserve_test_');
     });
 
-    if (localMatches.length > 0 && (!isProd || process.env.TEST_MODE === 'true')) {
-      return localMatches;
-    }
-
-    if (isProd || !ScannerPersistence.isProductionPersistenceReady() || process.env.NODE_ENV === 'production') {
-      const testFixtures = localMatches.filter((s) => s.id?.includes('test') || s.id?.startsWith('snap_') || s.id?.startsWith('preserve_test_'));
-      if (testFixtures.length > 0) {
-        return testFixtures;
-      }
+    if (isProd || process.env.NODE_ENV === 'production') {
       logger.error('[ScannerPersistence] FAIL CLOSED: Cannot read sent signals from local disk in production mode.');
       return [];
+    }
+
+    if (localMatches.length > 0) {
+      return localMatches;
     }
 
     return localMatches;

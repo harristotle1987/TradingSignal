@@ -68,7 +68,6 @@ export interface SignalOutcomeRecord {
 }
 
 const LOCAL_OUTCOME_LOG_PATH = path.join(process.cwd(), 'signal_outcome_logs.json');
-const FIRESTORE_OUTCOME_COL = 'signal_outcome_logs';
 
 export class SignalOutcomeLogger {
   private static localLogs: Map<string, SignalOutcomeRecord> = new Map();

@@ -9,6 +9,9 @@ import { logger } from '../logger.js';
 import { serverConfig } from '../config.js';
 import { ASSET_CLASS_GUARDRAILS, GuardrailRange, AtrTpGenerator } from './AtrTpGenerator.js';
 import { RiskRewardCalculator, logRrRejectionDiagnostic } from './RiskRewardCalculator.js';
+import { QlibQuantEngine } from './QlibQuantEngine.js';
+import { KronosForecastEngine } from './KronosForecastEngine.js';
+import { MasterGuardrailEngine } from './MasterGuardrailEngine.js';
 
 export interface TpCalculationDiagnostics {
   rawTp1BeforeClamp: number;
@@ -99,6 +102,16 @@ export interface ScoringResult {
   failedStrategies?: string[];
   primaryStrategy?: string;
   factors: ScoringFactors;
+  guardrailDecision?: any;
+  probability?: number;
+  expectedReturn?: number;
+  expectedAdverseMove?: number;
+  actualRR?: number;
+  expectedValue?: number;
+  confidence?: number;
+  regime?: string;
+  riskLevel?: string;
+  modelVersion?: string;
   technicalMetrics?: {
     htfEma9: number;
     htfEma21: number;
@@ -110,6 +123,8 @@ export interface ScoringResult {
     atr: number;
   };
   volatilityCondition?: 'NORMAL' | 'CAUTION' | 'UNSAFE';
+  qlibEvidence?: any;
+  kronosEvidence?: any;
 }
 
 interface AssetExecutionProfile {
@@ -232,6 +247,36 @@ export class ScoringEngine {
     const s5m = (candlesMap['5m'] && candlesMap['5m'].length >= 10) ? [...candlesMap['5m']].sort((a, b) => a.timestamp - b.timestamp) : [];
     const s30m = (candlesMap['30m'] && candlesMap['30m'].length >= 10) ? [...candlesMap['30m']].sort((a, b) => a.timestamp - b.timestamp) : [];
 
+    // 2b. Extract Qlib ML forecasting evidence strictly from validated production market data
+    let qlibEvidence: any = undefined;
+    try {
+      if (s1h && s1h.length >= 25) {
+        qlibEvidence = QlibQuantEngine.forecast(cleanSymbol, s1h);
+        if (qlibEvidence) {
+          logger.info(`[QlibQuantEngine] Integrated forecasting evidence produced for ${cleanSymbol}: version=${qlibEvidence.modelVersion} expectedReturn=${qlibEvidence.expectedReturn} direction=${qlibEvidence.direction} probability=${qlibEvidence.predictionProbability}`);
+        }
+      }
+    } catch (err) {
+      logger.warn('[ScoringEngine] QlibQuantEngine forecast skipped due to error:', { error: String(err) });
+    }
+
+    // 2c. Extract Kronos Foundation Model time-series forecasting evidence strictly as non-authoritative evidence
+    let kronosEvidence: any = undefined;
+    try {
+      if (s1h && s1h.length >= 15) {
+        kronosEvidence = KronosForecastEngine.forecast({
+          symbol: cleanSymbol,
+          timeframe: '1h',
+          candles: s1h,
+        });
+        if (kronosEvidence) {
+          logger.info(`[KronosForecastEngine] Integrated forecasting evidence produced for ${cleanSymbol}: timeframe=${kronosEvidence.timeframe} directionBias=${kronosEvidence.directionBias} return=${(kronosEvidence.forecastReturn * 100).toFixed(2)}% confidence=${(kronosEvidence.confidence * 100).toFixed(1)}%`);
+        }
+      }
+    } catch (err) {
+      logger.warn('[ScoringEngine] KronosForecastEngine forecast skipped due to error:', { error: String(err) });
+    }
+
     // Calculate core technical indicators
     const ema9_15m = TechnicalIndicators.calculateEMA(s15m, 9);
     const ema21_15m = TechnicalIndicators.calculateEMA(s15m, 21);
@@ -257,7 +302,7 @@ export class ScoringEngine {
       atr_15m <= 0 ||
       atr_1h <= 0
     ) {
-      return this.createRejection('REJECTED: INSUFFICIENT_DATA. Failed to compute authoritative baseline technical indicators (insufficient candle depth)', marketRegime, regimeDetails);
+      return this.createRejection('REJECTED: INSUFFICIENT_DATA. Failed to compute authoritative baseline technical indicators (insufficient candle depth)', marketRegime, regimeDetails, 0, 'BUY', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, undefined, undefined, qlibEvidence, kronosEvidence);
     }
 
     const lastEma9_15m = ema9_15m[ema9_15m.length - 1];
@@ -388,7 +433,24 @@ export class ScoringEngine {
         return this.createRejection(
           `REJECTED: HTF_STRUCTURAL_CONTRADICTION. 4H market structure (${struct4h.structureBias}) directly contradicts ${direction} trade direction`,
           marketRegime,
-          regimeDetails
+          regimeDetails,
+          0,
+          direction,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          undefined,
+          undefined,
+          qlibEvidence,
+          kronosEvidence
         );
       }
     }
@@ -400,7 +462,24 @@ export class ScoringEngine {
         return this.createRejection(
           `REJECTED: HTF_STRUCTURAL_CONTRADICTION. 1D market structure (${struct1d.structureBias}) directly contradicts ${direction} trade direction`,
           marketRegime,
-          regimeDetails
+          regimeDetails,
+          0,
+          direction,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          undefined,
+          undefined,
+          qlibEvidence,
+          kronosEvidence
         );
       }
     }
@@ -534,7 +613,24 @@ export class ScoringEngine {
       return this.createRejection(
         `REJECTED: EXTREME_VOLATILITY. Volatility filter rejected: ATR ratio (${vm1h.atrRatio.toFixed(2)}x) indicates extreme unsafe flash volatility`,
         marketRegime,
-        regimeDetails
+        regimeDetails,
+        0,
+        direction,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        undefined,
+        undefined,
+        qlibEvidence,
+        kronosEvidence
       );
     }
 
@@ -750,7 +846,9 @@ export class ScoringEngine {
         rrResult.tp2RR,
         rrResult.tp3RR,
         factors,
-        tpSetup.diagnostics
+        tpSetup.diagnostics,
+        qlibEvidence,
+        kronosEvidence
       );
     }
     const rawRR = rrResult.isValid
@@ -822,7 +920,9 @@ export class ScoringEngine {
         rrResult.tp2RR,
         rrResult.tp3RR,
         factors,
-        tpSetup.diagnostics
+        tpSetup.diagnostics,
+        qlibEvidence,
+        kronosEvidence
       );
     }
 
@@ -867,7 +967,9 @@ export class ScoringEngine {
         rrResult.tp2RR,
         rrResult.tp3RR,
         factors,
-        tpSetup.diagnostics
+        tpSetup.diagnostics,
+        qlibEvidence,
+        kronosEvidence
       );
     }
 
@@ -881,11 +983,47 @@ export class ScoringEngine {
     // Update dynamic factor fields
     factors.riskRewardScore = rawRR >= 2.5 ? 10 : 8;
 
+    // Master Guardrail Evaluation
+    const guardrailDecision = MasterGuardrailEngine.evaluateCandidate({
+      symbol: cleanSymbol,
+      direction,
+      entryPrice,
+      stopLoss,
+      takeProfit,
+      tp1,
+      tp2,
+      tp3,
+      score: totalScore,
+      atr: atr_15m,
+      marketRegime,
+      primaryStrategy: strategyEval.strategyResults?.find(s => s.passed)?.name,
+      timeframeAlignmentRatio,
+      timeframesAligned,
+      agreeingStrategiesCount: strategyEval.agreeingStrategiesCount,
+      historicalWinRate: estimatedWinRate,
+      estimatedFriction: {
+        spreadPipsOrPoints: spreadUnits,
+        feeBufferPct: feePct,
+        netRiskRewardRatio: netRR,
+      },
+      currentTimeMs: Date.now(),
+    });
+
     return {
       isValid: true,
       score: totalScore,
       coreScore: totalScore,
       qualityTier,
+      guardrailDecision,
+      probability: guardrailDecision.probability,
+      expectedReturn: guardrailDecision.expectedReturn,
+      expectedAdverseMove: guardrailDecision.expectedAdverseMove,
+      actualRR: guardrailDecision.actualRR,
+      expectedValue: guardrailDecision.expectedValue,
+      confidence: guardrailDecision.confidence,
+      regime: guardrailDecision.regime,
+      riskLevel: guardrailDecision.riskLevel,
+      modelVersion: guardrailDecision.modelVersion,
       direction,
       marketRegime,
       regimeDetails,
@@ -944,6 +1082,8 @@ export class ScoringEngine {
         atr: atr_15m,
       },
       volatilityCondition: strategyEval.volatilityCondition || 'NORMAL',
+      qlibEvidence,
+      kronosEvidence,
     };
   }
 
@@ -1182,7 +1322,9 @@ export class ScoringEngine {
     tp2RR = 0,
     tp3RR = 0,
     factors?: ScoringFactors,
-    tpDiagnostics?: TpCalculationDiagnostics
+    tpDiagnostics?: TpCalculationDiagnostics,
+    qlibEvidence?: any,
+    kronosEvidence?: any
   ): ScoringResult {
     return {
       isValid: false,
@@ -1237,6 +1379,8 @@ export class ScoringEngine {
         newsSentimentScore: 0,
         totalScore: 0,
       },
+      qlibEvidence,
+      kronosEvidence,
     };
   }
 

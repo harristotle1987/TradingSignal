@@ -47,7 +47,6 @@ export interface SignalAuditRecord {
 }
 
 const LOCAL_AUDIT_PATH = path.join(process.cwd(), 'signal_audits.json');
-const FIRESTORE_COLLECTION = 'scanner_audit_logs';
 
 export class SignalAuditStore {
   private static auditLogs: Map<string, SignalAuditRecord> = new Map();
@@ -100,7 +99,7 @@ export class SignalAuditStore {
     }
   }
 
-  private static async persistFirestore(record: SignalAuditRecord): Promise<void> {
+  private static async persistNeon(record: SignalAuditRecord): Promise<void> {
     try {
       if (getNeonPool()) {
         await queryNeon(
@@ -140,7 +139,7 @@ export class SignalAuditStore {
     this.auditLogs.set(id, record);
     this.pruneInMemory();
     this.persistLocal();
-    this.persistFirestore(record).catch(() => {});
+    this.persistNeon(record).catch(() => {});
 
     logger.info(`[Signal Audit Logged] ${input.symbol} (${input.status}): ${input.rejectionReason || 'Accepted for Signal Dispatch'}`);
     return record;

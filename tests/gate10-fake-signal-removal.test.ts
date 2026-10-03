@@ -125,6 +125,7 @@ async function runGate10Tests() {
     riskRewardRatio: 2.0,
     score: 85,
     candlesMap: {},
+    provenance: 'LIVE',
     liveTicker: {
       symbol: 'BTCUSDT',
       rawSymbol: 'BTCUSDT',
@@ -171,6 +172,216 @@ async function runGate10Tests() {
     process.env.NODE_ENV = originalEnv;
   }
   console.log('✓ Test 8 passed: Production fail-safe returns empty data safely without Firestore.');
+
+  // --- New Generic Market Data & Provenance Validation Tests (Gate 10 Hardening) ---
+  console.log('\n=== GATE 10 HARDENING: GENERIC MARKET-DATA & PROVENANCE VALIDATION ===\n');
+
+  // Helper function to create valid base candle map so candle checks pass
+  const validCandlesMap = {
+    '1h': Array.from({ length: 30 }, (_, i) => ({
+      timestamp: Date.now() - (30 - i) * 3600 * 1000,
+      open: 90000,
+      high: 91000,
+      low: 89000,
+      close: 90000,
+      volume: 100
+    }))
+  } as any;
+
+  // 1. BTC fake 50000
+  console.log('Test 9: BTC fake 50000 is rejected due to asset-class drift mismatch');
+  const btcFake50kRes = SignalValidator.validate({
+    symbol: 'BTCUSDT',
+    direction: 'BUY',
+    entryPrice: 50000,
+    stopLoss: 49000,
+    takeProfit: 52000,
+    riskRewardRatio: 2.0,
+    score: 85,
+    candlesMap: validCandlesMap,
+    provenance: 'LIVE',
+    liveTicker: {
+      symbol: 'BTCUSDT',
+      rawSymbol: 'BTCUSDT',
+      provider: 'bitget',
+      assetType: 'CRYPTO',
+      price: 90000, // Actual current trusted price is 90000
+      bid: 89999,
+      ask: 90001,
+      timestamp: Date.now(),
+      receivedAt: Date.now(),
+      isFresh: true,
+      status: 'OK',
+      source: 'LIVE',
+    } as any,
+  });
+  assert.strictEqual(btcFake50kRes.isValid, false, 'Fake BTC 50000 must be rejected');
+  assert(btcFake50kRes.detailedMessage.includes('drifted') || btcFake50kRes.detailedMessage.includes('rejected'), 'Should be rejected due to price drift or fake validation');
+  console.log('✓ Test 9 passed: BTC fake 50000 rejected.');
+
+  // 2. stale BTC price
+  console.log('Test 10: Stale BTC price is rejected');
+  const btcStalePriceRes = SignalValidator.validate({
+    symbol: 'BTCUSDT',
+    direction: 'BUY',
+    entryPrice: 90000,
+    stopLoss: 89000,
+    takeProfit: 92000,
+    riskRewardRatio: 2.0,
+    score: 85,
+    candlesMap: validCandlesMap,
+    provenance: 'LIVE',
+    liveTicker: {
+      symbol: 'BTCUSDT',
+      rawSymbol: 'BTCUSDT',
+      provider: 'bitget',
+      assetType: 'CRYPTO',
+      price: 90000,
+      bid: 89999,
+      ask: 90001,
+      timestamp: Date.now() - 24 * 3600 * 1000, // 1 day ago (very stale)
+      receivedAt: Date.now() - 24 * 3600 * 1000,
+      isFresh: false,
+      status: 'STALE',
+      source: 'LIVE',
+    } as any,
+  });
+  assert.strictEqual(btcStalePriceRes.isValid, false, 'Stale BTC quote must be rejected');
+  assert.strictEqual(btcStalePriceRes.validationReason, 'STALE_DATA', 'Expected reason to be STALE_DATA');
+  console.log('✓ Test 10 passed: Stale BTC quote rejected.');
+
+  // 3. missing provider
+  console.log('Test 11: Missing provider is rejected');
+  const btcMissingProviderRes = SignalValidator.validate({
+    symbol: 'BTCUSDT',
+    direction: 'BUY',
+    entryPrice: 90000,
+    stopLoss: 89000,
+    takeProfit: 92000,
+    riskRewardRatio: 2.0,
+    score: 85,
+    candlesMap: validCandlesMap,
+    provenance: 'LIVE',
+    liveTicker: {
+      symbol: 'BTCUSDT',
+      rawSymbol: 'BTCUSDT',
+      provider: '', // Missing provider
+      assetType: 'CRYPTO',
+      price: 90000,
+      bid: 89999,
+      ask: 90001,
+      timestamp: Date.now(),
+      receivedAt: Date.now(),
+      isFresh: true,
+      status: 'OK',
+      source: 'LIVE',
+    } as any,
+  });
+  assert.strictEqual(btcMissingProviderRes.isValid, false, 'Missing provider must be rejected');
+  assert(btcMissingProviderRes.detailedMessage.includes('MISSING_PROVIDER'), 'Expected missing provider warning');
+  console.log('✓ Test 11 passed: Missing provider rejected.');
+
+  // 4. missing provenance
+  console.log('Test 12: Missing provenance is rejected');
+  const btcMissingProvenanceRes = SignalValidator.validate({
+    symbol: 'BTCUSDT',
+    direction: 'BUY',
+    entryPrice: 90000,
+    stopLoss: 89000,
+    takeProfit: 92000,
+    riskRewardRatio: 2.0,
+    score: 85,
+    candlesMap: validCandlesMap,
+    // provenance: undefined, // Missing provenance
+    liveTicker: {
+      symbol: 'BTCUSDT',
+      rawSymbol: 'BTCUSDT',
+      provider: 'bitget',
+      assetType: 'CRYPTO',
+      price: 90000,
+      bid: 89999,
+      ask: 90001,
+      timestamp: Date.now(),
+      receivedAt: Date.now(),
+      isFresh: true,
+      status: 'OK',
+      source: 'LIVE',
+    } as any,
+  });
+  assert.strictEqual(btcMissingProvenanceRes.isValid, false, 'Missing provenance must be rejected');
+  assert(btcMissingProvenanceRes.detailedMessage.includes('MISSING_PROVENANCE'), 'Expected missing provenance warning');
+  console.log('✓ Test 12 passed: Missing provenance rejected.');
+
+  // 5. synthetic signal
+  console.log('Test 13: Synthetic signal is rejected');
+  const btcSyntheticRes = SignalValidator.validate({
+    symbol: 'BTCUSDT',
+    direction: 'BUY',
+    entryPrice: 90000,
+    stopLoss: 89000,
+    takeProfit: 92000,
+    riskRewardRatio: 2.0,
+    score: 85,
+    candlesMap: validCandlesMap,
+    provenance: 'LIVE',
+    isSynthetic: true, // Synthetic flag
+    liveTicker: {
+      symbol: 'BTCUSDT',
+      rawSymbol: 'BTCUSDT',
+      provider: 'bitget',
+      assetType: 'CRYPTO',
+      price: 90000,
+      bid: 89999,
+      ask: 90001,
+      timestamp: Date.now(),
+      receivedAt: Date.now(),
+      isFresh: true,
+      status: 'OK',
+      source: 'LIVE',
+    } as any,
+  });
+  assert.strictEqual(btcSyntheticRes.isValid, false, 'Synthetic signal must be rejected');
+  assert(btcSyntheticRes.detailedMessage.includes('SYNTHETIC_SIGNAL'), 'Expected synthetic signal warning');
+  console.log('✓ Test 13 passed: Synthetic signal rejected.');
+
+  // 6. valid current BTC signal
+  console.log('Test 14: Valid current BTC signal passes');
+  const btcValidRes = SignalValidator.validate({
+    symbol: 'BTCUSDT',
+    direction: 'BUY',
+    entryPrice: 90000,
+    stopLoss: 88500, // Safe distance > 0.85 * ATR
+    takeProfit: 94000,
+    riskRewardRatio: 2.0,
+    score: 85,
+    candlesMap: {
+      '1h': Array.from({ length: 30 }, (_, i) => ({
+        timestamp: Date.now() - (30 - i) * 3600 * 1000,
+        open: 90000,
+        high: 91000,
+        low: 89000,
+        close: 90000,
+        volume: 100
+      })) as any[]
+    },
+    provenance: 'LIVE',
+    liveTicker: {
+      symbol: 'BTCUSDT',
+      rawSymbol: 'BTCUSDT',
+      provider: 'bitget',
+      assetType: 'CRYPTO',
+      price: 90000,
+      bid: 89999,
+      ask: 90001,
+      timestamp: Date.now(),
+      receivedAt: Date.now(),
+      isFresh: true,
+      status: 'OK',
+      source: 'LIVE',
+    } as any,
+  });
+  assert.strictEqual(btcValidRes.isValid, true, `Valid current BTC signal must pass (got error: ${btcValidRes.detailedMessage})`);
+  console.log('✓ Test 14 passed: Valid current BTC signal passed successfully.');
 
   console.log('\n\x1b[32m[GATE 10 SUCCESS] All fake/test signal contamination regression checks passed perfectly!\x1b[0m\n');
 }

@@ -51,6 +51,11 @@ import { Gate31NewsRiskClassification } from './Gate31NewsRiskClassification.js'
 import { OpportunityFunnelStore } from './Gate26OpportunityFunnel.js';
 import { CandidateRejectionTracker, StandardFailedGate } from './CandidateRejectionTracker.js';
 import { ScanPerformanceProfiler, setActiveProfiler } from './ScanPerformanceProfiler.js';
+import { TradingAgentsResearchEngine } from './TradingAgentsResearchEngine.js';
+import { FinRLXPortfolioEngine } from './FinRLXPortfolioEngine.js';
+import { marketEventEngine } from './MarketEventEngine.js';
+import { AdvancedEnsembleDecisionEngine } from './AdvancedEnsembleDecisionEngine.js';
+import { MasterGuardrailEngine } from './MasterGuardrailEngine.js';
 import { logger } from '../logger.js';
 import { getDynamicPrecision } from '../../utils/formatters.js';
 
@@ -972,22 +977,45 @@ export async function runStagedPipeline(
       const finalPublishedRR = finalRiskDistance > 0 ? Number((finalRewardDistance / finalRiskDistance).toFixed(2)) : 0;
 
       // =========================================================================
-      // ONE AUTHORITATIVE FINAL R:R VALIDATION (GATE 6)
-      // Executed after final Entry, SL and selected TP are finalized.
-      // Required: FINAL_RR >= 1.8.
-      // TP2 preferred when genuinely >= 1.8R.
-      // TP3 allowed when TP2 does not qualify.
-      // No artificial TP stretching.
+      // MASTER GUARDRAIL UPGRADE — 7-STEP AUTHORITATIVE DECISION PIPELINE
+      // Upgrades R:R from a fixed profitability gate to an adaptive risk guardrail
+      // with Expected Value validation (EV = (P(win)*gain) - (P(loss)*loss) > 0)
+      // while keeping hard structural/geometry safety gates authoritative.
       // =========================================================================
+      const masterDecision = MasterGuardrailEngine.evaluateCandidate({
+        symbol: asset,
+        direction: scoring.direction,
+        entryPrice: finalEntry,
+        stopLoss: finalSL,
+        takeProfit: safeTakeProfit,
+        tp1: safeTp1,
+        tp2: safeTp2,
+        tp3: safeTp3,
+        score: gate8Eval.finalScore,
+        atr,
+        marketRegime: scoring.marketRegime,
+        primaryStrategy: primaryStrategyName,
+        liveTicker,
+        candlesMap,
+        timeframeAlignmentRatio: scoring.timeframeAlignmentRatio,
+        timeframesAligned: scoring.timeframesAligned,
+        agreeingStrategiesCount: scoring.agreeingStrategiesCount,
+        historicalWinRate: scoring.estimatedWinRate,
+        estimatedFriction: scoring.estimatedFriction,
+        newsSentiment: commonTelemetry.newsStatus,
+        currentTimeMs: now,
+      });
+
       const passesAuthoritativeFinalRR =
         rrResult.isValid &&
         rrResult.selectedTarget !== null &&
-        finalPublishedRR >= minRequiredRR &&
+        masterDecision.guardrailDecision === 'ACCEPTED' &&
         finalRiskDistance > 0 &&
         finalRewardDistance > 0;
 
       if (!passesAuthoritativeFinalRR) {
-        const rejectionReason = `REJECTED: GROSS_RR_BELOW_THRESHOLD. Final published Risk/Reward ratio (${finalPublishedRR.toFixed(2)}:1) is below ${minRequiredRR.toFixed(2)}:1 minimum acceptable R:R (TP2: ${rrResult.tp2GrossRR.toFixed(2)}:1, TP3: ${rrResult.tp3GrossRR.toFixed(2)}:1)`;
+        const rejectionReason = masterDecision.rejectionReason ||
+          `REJECTED: GROSS_RR_BELOW_THRESHOLD. Final published Risk/Reward ratio (${finalPublishedRR.toFixed(2)}:1) is below adaptive requirement (${masterDecision.adaptiveMinRR.toFixed(2)}:1) (TP2: ${rrResult.tp2GrossRR.toFixed(2)}:1, TP3: ${rrResult.tp3GrossRR.toFixed(2)}:1)`;
         logRrRejectionDiagnostic({
           symbol: asset,
           direction: scoring.direction,
@@ -1047,6 +1075,60 @@ export async function runStagedPipeline(
 
       scoring.score = gate8Eval.finalScore;
 
+      // Extract explainable multi-agent research evidence strictly after deterministic validation
+      let tradingAgentsResearch: any = undefined;
+      try {
+        tradingAgentsResearch = TradingAgentsResearchEngine.research({
+          snapshotId: validation.snapshotId,
+          symbol: asset,
+          direction: scoring.direction,
+          entryPrice: finalEntry,
+          stopLoss: finalSL,
+          takeProfit: safeTakeProfit,
+          tp1: safeTp1,
+          tp2: safeTp2,
+          tp3: safeTp3,
+          riskRewardRatio: rrResult.primaryRR,
+          score: gate8Eval.finalScore,
+          candlesMap,
+          liveTicker,
+          newsSentiment: commonTelemetry.newsStatus,
+          timestamp: now,
+        });
+      } catch (err: any) {
+        logger.warn(`[StagedScannerPipeline] TradingAgents research skipped for ${asset}:`, { error: String(err) });
+      }
+
+      // Extract FinRL Portfolio risk & constraint evaluation strictly against active portfolio
+      let finrlEvidence: any = undefined;
+      try {
+        const activeList = Array.from(engine.activeSignals.values());
+        const mockCandidateSignal = {
+          symbol: asset,
+          direction: scoring.direction,
+          entryPrice: finalEntry,
+          stopLoss: finalSL,
+          takeProfit: safeTakeProfit,
+          suggestedRiskAmount: scoring.hypotheticalRisk?.suggestedRiskAmount,
+          suggestedPositionSize: scoring.hypotheticalRisk?.suggestedPositionSize,
+          strategy: primaryStrategyName,
+        };
+        const evalResult = FinRLXPortfolioEngine.evaluateSignalCandidate(mockCandidateSignal, activeList);
+        finrlEvidence = {
+          allowed: evalResult.allowed,
+          violations: evalResult.constraintViolations,
+          clusterName: evalResult.clusterName,
+          clusterWeightAfter: evalResult.clusterWeightAfter,
+          portfolioGrossExposureAfter: evalResult.portfolioGrossExposureAfter,
+          portfolioNetExposureAfter: evalResult.portfolioNetExposureAfter,
+          sizeReductionFactor: evalResult.sizeReductionFactor,
+          metrics: evalResult.evidence.exposureMetrics,
+          riskOverlay: evalResult.evidence.riskOverlay,
+        };
+      } catch (err: any) {
+        logger.warn(`[StagedScannerPipeline] FinRL portfolio evaluation skipped for ${asset}:`, { error: String(err) });
+      }
+
       const signal: TradingSignal = {
         id: `sig_${now}_${Math.random().toString(36).substring(2, 7)}`,
         snapshotId: validation.snapshotId, symbol: asset, direction: scoring.direction,
@@ -1072,8 +1154,28 @@ export async function runStagedPipeline(
         status: 'WAITING_ENTRY', isActionableSignal: true, validationReason: 'VALID',
         aiAssessment: 'Pending NVIDIA AI comparative ranking...', score: gate8Eval.finalScore, coreScore: gate8Eval.finalScore,
         factors: gate8Eval.factors || scoring.factors,
+        qlibEvidence: scoring.qlibEvidence,
+        kronosEvidence: scoring.kronosEvidence,
+        tradingAgentsResearch,
+        finrlEvidence,
+        guardrailDecision: masterDecision,
+        probability: masterDecision.probability,
+        expectedReturn: masterDecision.expectedReturn,
+        expectedAdverseMove: masterDecision.expectedAdverseMove,
+        actualRR: masterDecision.actualRR,
+        expectedValue: masterDecision.expectedValue,
+        confidence: masterDecision.confidence,
+        regime: masterDecision.regime,
+        riskLevel: masterDecision.riskLevel,
+        modelVersion: masterDecision.modelVersion,
         entryHitTimestamp: null, tp1Status: 'PENDING', tp2Status: 'PENDING', tp3Status: 'PENDING', slStatus: 'ACTIVE_FOR_ENTRY_ONLY',
       };
+
+      try {
+        marketEventEngine.registerSignal(signal, 'CANDIDATE');
+      } catch (err: any) {
+        logger.warn(`[StagedScannerPipeline] MarketEventEngine candidate registration failed:`, { error: String(err) });
+      }
 
       candidates.push({
         signal, scoring, validation, aiConfidence: undefined,
@@ -1302,6 +1404,29 @@ export async function runStagedPipeline(
         stage: 'FINAL_DISPATCH',
         factors: sig.factors,
       });
+
+      try {
+        marketEventEngine.transitionSignal(sig.id, 'QUALIFIED', sig.entryPrice, now, 'Dispatched: Passed all qualification gates');
+      } catch (err: any) {
+        logger.warn(`[StagedScannerPipeline] MarketEvent transitionSignal failed:`, { error: String(err) });
+      }
+    }
+
+    // Advanced Ensemble Decision Engine: Regime-Aware Evidence Fusion & Evidence Ledger
+    for (const cand of filteredCandidates) {
+      try {
+        const isFinal = finalSignals.some(s => s.id === cand.signal.id);
+        const ledgerEntry = AdvancedEnsembleDecisionEngine.evaluateCandidate({
+          signal: cand.signal,
+          candlesMap: cand.candles ? { '1h': cand.candles } : undefined,
+          scoringDetails: cand.scoring,
+          activeSignals: Array.from(engine.activeSignals.values()),
+          productionPassed: isFinal,
+        });
+        cand.signal.ensembleEvidenceLedger = ledgerEntry;
+      } catch (err: any) {
+        logger.warn(`[StagedScannerPipeline] Ensemble evaluation skipped for ${cand.signal.symbol}:`, { error: String(err) });
+      }
     }
 
     rejectionTracker.logScanSummary(assetCategory || cleanSymbol);

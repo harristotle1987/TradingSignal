@@ -89,7 +89,7 @@ export function Header({
 
           {/* Backend Health Status Indicator & Admin Login */}
           <div className="flex items-center gap-2 sm:gap-3 text-xs">
-            <div className="flex items-center gap-2 text-slate-300 bg-slate-950 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-800">
+            <div className="hidden md:flex items-center gap-2 text-slate-300 bg-slate-950 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-800">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               <span className="text-slate-400 hidden sm:inline">Backend:</span>
               {health ? (
@@ -100,29 +100,43 @@ export function Header({
             </div>
 
             {authUser ? (
-              <button
-                id="header-admin-logout-btn"
-                onClick={onLogout}
-                title={`Signed in as ${authUser.admin ? 'System Admin' : 'User'} (${authUser.email}). Click to sign out.`}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                  authUser.admin
-                    ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                    : 'bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/30'
-                }`}
-              >
-                {authUser.admin ? <UserCheck className="w-3.5 h-3.5" /> : <User className="w-3.5 h-3.5" />}
-                <span className="hidden sm:inline">{authUser.admin ? 'Admin' : 'User'}</span>
-                <LogOut className="w-3 h-3 ml-0.5 opacity-70" />
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  id="header-user-badge-btn"
+                  onClick={onOpenLoginModal}
+                  title={`Signed in as ${authUser.admin ? 'System Admin' : 'User'} (${authUser.email}). Click to view account details.`}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold font-mono transition-all cursor-pointer border ${
+                    authUser.admin
+                      ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/40 shadow-sm shadow-emerald-900/20'
+                      : 'bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border-sky-500/40 shadow-sm shadow-sky-900/20'
+                  }`}
+                >
+                  {authUser.admin ? <UserCheck className="w-3.5 h-3.5 text-emerald-400" /> : <User className="w-3.5 h-3.5 text-sky-400" />}
+                  <span>{authUser.admin ? 'Admin' : 'User'}</span>
+                  <span className="text-[10px] opacity-70 hidden lg:inline max-w-[100px] truncate">({authUser.email})</span>
+                </button>
+
+                <button
+                  type="button"
+                  id="header-admin-logout-btn"
+                  onClick={onLogout}
+                  title="Sign Out"
+                  className="p-1.5 bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-rose-300 rounded-lg border border-slate-800 transition cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </div>
             ) : (
               <button
+                type="button"
                 id="header-admin-login-btn"
                 onClick={onOpenLoginModal}
-                title="Sign In / Register"
-                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-lg text-xs font-medium transition-colors cursor-pointer"
+                title="Sign In or Register as Admin"
+                className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-lg text-xs transition-all shadow-md shadow-emerald-950/40 border border-emerald-400/40 transform hover:scale-105 active:scale-95 cursor-pointer font-mono tracking-wide"
               >
-                <Lock className="w-3.5 h-3.5 text-slate-400" />
-                <span className="hidden sm:inline">Sign In / Register</span>
+                <Lock className="w-3.5 h-3.5 text-emerald-100" />
+                <span>Sign In / Admin</span>
               </button>
             )}
 

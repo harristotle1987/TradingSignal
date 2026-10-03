@@ -8,9 +8,9 @@
   },
   {
     "symbol": "BTCUSDT",
-    "lastAssetSignalMs": 1790255138969,
+    "lastAssetSignalMs": 1791028362948,
     "strategyCooldowns": {
-      "intraday breakout (h1/h4 + volume)": 1790255138969
+      "intraday breakout (h1/h4 + volume)": 1791028362948
     }
   },
   {
@@ -18,6 +18,13 @@
     "lastAssetSignalMs": 1790797343078,
     "strategyCooldowns": {
       "[automated best trade] trend following (ema stack rider & trend-pullback)": 1790797343078
+    }
+  },
+  {
+    "symbol": "BNBUSDT",
+    "lastAssetSignalMs": 1791027577788,
+    "strategyCooldowns": {
+      "[automated best trade] rsi + bollinger mean reversion": 1791027577788
     }
   }
 ]

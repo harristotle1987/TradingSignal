@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { api } from '../api/client.js';
 import { TradingSignal } from '../types/index.js';
 import { Rejected72PlusPanel } from './Rejected72PlusPanel.js';
@@ -38,6 +38,12 @@ export function AiMarketScannerWidget({
   const [isScanning, setIsScanning] = useState(false);
   const [scanStage, setScanStage] = useState<string>('');
   const [scanResult, setScanResult] = useState<any | null>(null);
+  const [customSymbol, setCustomSymbol] = useState<string>('');
+  const [selectedCategory, setSelectedCategory] = useState<'ALL' | 'CRYPTO' | 'FOREX' | 'STOCKS'>('ALL');
+  const [currentUser, setCurrentUser] = useState<{ email: string; role: string; admin: boolean } | null>(() => {
+    const stored = api.getStoredUser();
+    return stored ? { email: stored.email, role: stored.role, admin: stored.admin } : null;
+  });
 
   // Zoom controls state for AI Market Scanner report
   const { zoomLevel, zoomIn, zoomOut, resetZoom, setZoom } = useReportZoom(1.0, 0.7, 1.8, 0.15);
@@ -45,13 +51,56 @@ export function AiMarketScannerWidget({
   const [error, setError] = useState<string | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
-  const handleScanBestTrades = useCallback(async () => {
+  // Fetch admin session status on mount/open
+  const checkAuthStatus = useCallback(async () => {
+    try {
+      const res = await api.getAuthMe();
+      if (res.authenticated && res.user) {
+        const userObj = { email: res.user.email, role: res.user.role, admin: res.admin };
+        setCurrentUser(userObj);
+        return userObj;
+      } else {
+        setCurrentUser(null);
+        return null;
+      }
+    } catch {
+      const fallback = api.getStoredUser();
+      const userObj = fallback ? { email: fallback.email, role: fallback.role, admin: fallback.admin } : null;
+      setCurrentUser(userObj);
+      return userObj;
+    }
+  }, []);
+
+  const handleScanBestTrades = useCallback(async (targetSymbolOverride?: string) => {
     if (isScanning) return;
+
+    // Check live auth state with multi-tier verification
+    const stored = api.getStoredUser();
+    let authState = currentUser;
+    if (!authState?.admin && stored?.admin) {
+      authState = { email: stored.email, role: stored.role, admin: stored.admin };
+      setCurrentUser(authState);
+    }
+    if (!authState?.admin) {
+      authState = await checkAuthStatus();
+    }
+
+    if (!authState?.admin) {
+      setError('Admin authentication required: Please create your Admin account or sign in to run on-demand AI market scans.');
+      setIsAuthModalOpen(true);
+      return;
+    }
+
+    const targetToScan = (targetSymbolOverride ?? customSymbol).trim().toUpperCase();
 
     setIsScanning(true);
     setError(null);
     setScanResult(null);
-    setScanStage('Screening multi-asset universe (Crypto, Forex, Stocks)...');
+    setScanStage(
+      targetToScan
+        ? `Targeted scan: Analyzing ${targetToScan} across 14-pillar ensemble...`
+        : `Screening multi-asset universe (${selectedCategory})...`
+    );
 
     // Visual step feedback timers
     const t1 = setTimeout(() => {
@@ -67,7 +116,10 @@ export function AiMarketScannerWidget({
     }, 2300);
 
     try {
-      const result = await api.triggerScannerManualScan();
+      const result = await api.triggerScannerManualScan({
+        symbol: targetToScan || undefined,
+        category: !targetToScan && selectedCategory !== 'ALL' ? selectedCategory : undefined,
+      });
       clearTimeout(t1);
       clearTimeout(t2);
       clearTimeout(t3);
@@ -86,13 +138,48 @@ export function AiMarketScannerWidget({
       clearTimeout(t2);
       clearTimeout(t3);
       const msg = err instanceof Error ? err.message : String(err);
-      console.error('[AiMarketScannerWidget] Manual scan failed:', msg);
-      setError(msg || 'Failed to complete market scan. Please try again.');
+      if (msg.includes('401') || msg.toLowerCase().includes('unauthorized') || msg.toLowerCase().includes('administrative')) {
+        setError('Admin authentication required: Please sign in or register your Admin account to run AI market scans.');
+        setIsAuthModalOpen(true);
+      } else {
+        setError(msg || 'Failed to complete market scan. Please try again.');
+      }
       setScanResult(null);
     } finally {
       setIsScanning(false);
     }
-  }, [isScanning, onSignalsUpdated]);
+  }, [isScanning, currentUser, customSymbol, selectedCategory, checkAuthStatus, onSignalsUpdated]);
+
+  // Check auth status on mount and when modal opens, and listen to 401 unauth & auth change events
+  useEffect(() => {
+    const unsubUnauth = api.onUnauthorized(() => {
+      setCurrentUser(null);
+    });
+    const unsubAuthChange = api.onAuthChange((user) => {
+      if (user) {
+        setCurrentUser({ email: user.email, role: user.role, admin: user.admin });
+      } else {
+        setCurrentUser(null);
+      }
+    });
+    checkAuthStatus();
+    return () => {
+      unsubUnauth();
+      unsubAuthChange();
+    };
+  }, [checkAuthStatus, isOpen]);
+
+  const QUICK_SYMBOLS = [
+    { symbol: 'BTCUSDT', label: 'BTC/USDT', cat: 'Crypto' },
+    { symbol: 'ETHUSDT', label: 'ETH/USDT', cat: 'Crypto' },
+    { symbol: 'SOLUSDT', label: 'SOL/USDT', cat: 'Crypto' },
+    { symbol: 'EURUSD', label: 'EUR/USD', cat: 'Forex' },
+    { symbol: 'GBPUSD', label: 'GBP/USD', cat: 'Forex' },
+    { symbol: 'USDJPY', label: 'USD/JPY', cat: 'Forex' },
+    { symbol: 'AAPL', label: 'Apple', cat: 'Stocks' },
+    { symbol: 'NVDA', label: 'NVIDIA', cat: 'Stocks' },
+    { symbol: 'TSLA', label: 'Tesla', cat: 'Stocks' },
+  ];
 
   return (
     <>
@@ -101,7 +188,10 @@ export function AiMarketScannerWidget({
         <button
           type="button"
           id="btn-ai-scanner-fab"
-          onClick={() => setIsOpen((prev) => !prev)}
+          onClick={() => {
+            setIsOpen((prev) => !prev);
+            checkAuthStatus();
+          }}
           title="Open AI Market Scanner"
           className="group relative flex items-center gap-2.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-xs px-4 py-3 rounded-full shadow-2xl border border-emerald-400/40 transition-all duration-200 transform hover:scale-105 active:scale-95 cursor-pointer"
         >
@@ -116,7 +206,7 @@ export function AiMarketScannerWidget({
 
       {/* Compact Chatbot-Style Card Overlay */}
       {isOpen && (
-        <div className="fixed bottom-20 right-6 z-50 w-[92vw] sm:w-96 max-h-[580px] bg-slate-950/95 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl flex flex-col font-sans overflow-hidden animate-in fade-in slide-in-from-bottom-5 duration-200">
+        <div className="fixed bottom-20 right-6 z-50 w-[94vw] sm:w-[420px] max-h-[640px] bg-slate-950/95 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl flex flex-col font-sans overflow-hidden animate-in fade-in slide-in-from-bottom-5 duration-200">
           {/* Card Header */}
           <div className="flex items-center justify-between p-3.5 border-b border-slate-800/80 bg-slate-900/80">
             <div className="flex items-center gap-2.5">
@@ -128,7 +218,7 @@ export function AiMarketScannerWidget({
                   AI Market Scanner
                 </h4>
                 <span className="text-[10px] text-slate-400 block font-mono">
-                  36-Gate Confluence Engine
+                  14-Pillar Ensemble & 36-Gate Confluence Engine
                 </span>
               </div>
             </div>
@@ -145,20 +235,115 @@ export function AiMarketScannerWidget({
           </div>
 
           {/* Card Body - Chatbot Stream */}
-          <div className="p-4 overflow-y-auto space-y-4 flex-1 text-xs text-slate-300 min-h-[220px] max-h-[440px]">
-            {/* AI Assistant Message Bubble */}
+          <div className="p-4 overflow-y-auto space-y-3.5 flex-1 text-xs text-slate-300 min-h-[220px] max-h-[500px]">
+            {/* Admin Session Status Indicator */}
+            {currentUser?.admin ? (
+              <div className="flex items-center justify-between px-3 py-2 bg-emerald-950/40 border border-emerald-500/30 rounded-xl text-[11px] text-emerald-300">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span className="font-mono">Admin: <strong>{currentUser.email}</strong></span>
+                </div>
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded font-mono font-bold">
+                  AUTHORIZED
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between px-3 py-2 bg-amber-950/40 border border-amber-500/30 rounded-xl text-[11px] text-amber-300">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>Admin login required to scan</span>
+                </div>
+                <button
+                  type="button"
+                  id="btn-scanner-login-link"
+                  onClick={() => setIsAuthModalOpen(true)}
+                  className="text-[10px] bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 px-2 py-0.5 rounded font-mono font-bold cursor-pointer transition"
+                >
+                  Sign In / Register
+                </button>
+              </div>
+            )}
+
+            {/* AI Assistant Intro */}
             <div className="flex gap-2.5 items-start">
               <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shrink-0 mt-0.5">
                 <Bot className="w-3.5 h-3.5" />
               </div>
               <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-3 text-slate-300 leading-relaxed text-[11px] space-y-1.5 shadow-sm">
                 <p>
-                  Hello! I am your <strong className="text-emerald-300">AI Market Scanner</strong>.
-                </p>
-                <p className="text-slate-400">
-                  Click below to scan real-time market setups across Forex, Crypto, and Stocks passing strict 36-gate risk-reward (≥2:1) and MTF confluence rules.
+                  Enter any <strong className="text-emerald-300">Currency Pair, Crypto, Forex, or Stock</strong> symbol below, or pick from quick-select chips to scan on demand.
                 </p>
               </div>
+            </div>
+
+            {/* Symbol Input & Asset Class Filter */}
+            <div className="space-y-2 bg-slate-900/60 p-3 rounded-xl border border-slate-800/80">
+              <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                <span>TARGET SYMBOL / PAIR</span>
+                <span className="text-[10px] text-slate-500">Forex • Crypto • Stocks</span>
+              </div>
+
+              <div className="relative">
+                <input
+                  type="text"
+                  id="input-scanner-target-symbol"
+                  value={customSymbol}
+                  onChange={(e) => setCustomSymbol(e.target.value.toUpperCase())}
+                  placeholder="e.g. BTCUSDT, EURUSD, AAPL, NVDA, SOLUSDT..."
+                  className="w-full bg-slate-950 border border-slate-700/80 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/40 rounded-xl px-3 py-2 text-white font-mono text-xs placeholder:text-slate-600 uppercase tracking-wider outline-none transition"
+                />
+                {customSymbol && (
+                  <button
+                    type="button"
+                    onClick={() => setCustomSymbol('')}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-white cursor-pointer text-xs"
+                    title="Clear symbol"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Quick Select Chips */}
+              <div className="space-y-1 pt-1">
+                <span className="text-[10px] text-slate-500 font-mono block">QUICK SELECT:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {QUICK_SYMBOLS.map((s) => (
+                    <button
+                      key={s.symbol}
+                      type="button"
+                      onClick={() => setCustomSymbol(s.symbol)}
+                      className={`px-2 py-1 rounded-lg text-[10px] font-mono transition cursor-pointer border ${
+                        customSymbol === s.symbol
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
+                          : 'bg-slate-950/80 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border-slate-800'
+                      }`}
+                    >
+                      {s.symbol}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Category Filter Pills (When no specific symbol is entered) */}
+              {!customSymbol && (
+                <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between gap-1">
+                  {(['ALL', 'CRYPTO', 'FOREX', 'STOCKS'] as const).map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setSelectedCategory(cat)}
+                      className={`flex-1 py-1 rounded-lg text-[10px] font-mono text-center transition cursor-pointer border ${
+                        selectedCategory === cat
+                          ? 'bg-emerald-600 text-white font-bold border-emerald-400/40'
+                          : 'bg-slate-950 text-slate-400 hover:text-slate-200 border-slate-800'
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Scan Action Control */}
@@ -166,19 +351,19 @@ export function AiMarketScannerWidget({
               <button
                 type="button"
                 id="btn-scan-best-trades"
-                onClick={handleScanBestTrades}
+                onClick={() => handleScanBestTrades()}
                 disabled={isScanning}
-                className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-60 text-white font-bold py-2.5 px-4 rounded-xl shadow-lg border border-emerald-400/30 transition flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed text-xs font-mono uppercase tracking-wider"
+                className="w-full bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-60 text-white font-bold py-2.5 px-4 rounded-xl shadow-lg border border-emerald-400/30 transition flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed text-xs font-mono uppercase tracking-wider"
               >
                 {isScanning ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin text-emerald-200" />
-                    <span>Scanning Market...</span>
+                    <span>Analyzing {customSymbol || selectedCategory}...</span>
                   </>
                 ) : (
                   <>
                     <Sparkles className="w-4 h-4 text-emerald-200" />
-                    <span>Scan Best Trades</span>
+                    <span>{customSymbol ? `Scan ${customSymbol} with AI` : `Scan ${selectedCategory} Markets`}</span>
                   </>
                 )}
               </button>
@@ -513,9 +698,13 @@ export function AiMarketScannerWidget({
       <LoginModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
-        onLoginSuccess={() => {
+        onLoginSuccess={(user) => {
+          setCurrentUser({ email: user.email, role: user.role, admin: user.admin });
           setIsAuthModalOpen(false);
-          handleScanBestTrades();
+          setError(null);
+          setTimeout(() => {
+            handleScanBestTrades();
+          }, 200);
         }}
       />
     </>

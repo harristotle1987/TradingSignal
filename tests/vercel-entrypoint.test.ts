@@ -103,13 +103,55 @@ export async function runVercelEntrypointTests(): Promise<void> {
   assert(healthTest.getBody()?.status !== undefined, 'Health response must contain status field');
   console.log('✓ Test 1 passed: GET /api/health returns valid response.');
 
-  // Test 2: GET /api/signals returns HTTP response when Neon is unavailable
-  console.log('Test 2: GET /api/signals returns HTTP response (503 PERSISTENCE_UNAVAILABLE) when Neon is unavailable');
   const failingPool = {
     query: async () => {
       throw new Error('Neon connection failed');
     },
   } as any;
+
+  // Test 1b: GET /api/health/readiness returns readiness state
+  console.log('Test 1b: GET /api/health/readiness returns readiness state');
+  const readinessTest = mockReqRes('GET', '/api/health/readiness');
+  await handler(readinessTest.req, readinessTest.res);
+  await readinessTest.done();
+  console.log('DEBUG [readinessTest status]:', readinessTest.getStatus());
+  console.log('DEBUG [readinessTest body]:', JSON.stringify(readinessTest.getBody()));
+  assert(readinessTest.getStatus() === 200 || readinessTest.getStatus() === 503, 'Readiness test must return HTTP 200 or 503');
+  assert(readinessTest.getBody()?.ready !== undefined, 'Readiness response must contain ready field');
+  console.log('✓ Test 1b passed: GET /api/health/readiness returns valid response.');
+
+  // Test 2b: GET /api/health returns HTTP 503 when Neon is unavailable
+  console.log('Test 2b: GET /api/health returns HTTP 503 when Neon is unavailable');
+  setMockNeonPool(failingPool);
+  try {
+    const healthFailTest = mockReqRes('GET', '/api/health');
+    await handler(healthFailTest.req, healthFailTest.res);
+    await healthFailTest.done();
+    assert.strictEqual(healthFailTest.getStatus(), 503, 'GET /api/health must return HTTP 503 during DB outage');
+    assert.strictEqual(healthFailTest.getBody()?.status, 'UNAVAILABLE', 'Expected status to be UNAVAILABLE');
+    assert.strictEqual(healthFailTest.getBody()?.productionPersistenceReady, false, 'Expected productionPersistenceReady to be false');
+    console.log('✓ Test 2b passed: GET /api/health returns HTTP 503 when Neon is unavailable.');
+  } finally {
+    setMockNeonPool(null);
+  }
+
+  // Test 2c: GET /api/health/readiness returns ready:false when Neon is unavailable
+  console.log('Test 2c: GET /api/health/readiness returns ready:false when Neon is unavailable');
+  setMockNeonPool(failingPool);
+  try {
+    const readinessFailTest = mockReqRes('GET', '/api/health/readiness');
+    await handler(readinessFailTest.req, readinessFailTest.res);
+    await readinessFailTest.done();
+    assert.strictEqual(readinessFailTest.getStatus(), 503, 'GET /api/health/readiness must return HTTP 503 during DB outage');
+    assert.strictEqual(readinessFailTest.getBody()?.ready, false, 'Expected ready to be false');
+    assert.strictEqual(readinessFailTest.getBody()?.failedComponent, 'database', 'Expected failedComponent to identify database');
+    console.log('✓ Test 2c passed: GET /api/health/readiness returns HTTP 503 with ready:false when Neon is unavailable.');
+  } finally {
+    setMockNeonPool(null);
+  }
+
+  // Test 2: GET /api/signals returns HTTP response when Neon is unavailable
+  console.log('Test 2: GET /api/signals returns HTTP response (503 PERSISTENCE_UNAVAILABLE) when Neon is unavailable');
   setMockNeonPool(failingPool);
 
   try {

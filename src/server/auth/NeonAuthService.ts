@@ -229,7 +229,7 @@ export class NeonAuthService {
 
     try {
       const rows = await queryNeon<any>(
-        'SELECT id, email, password_hash, role, display_name, created_at, last_login_at FROM users WHERE LOWER(email) = LOWER($1)',
+        'SELECT id, email, password_hash, role, display_name, created_at, last_login_at, failed_login_attempts, locked_until FROM users WHERE LOWER(email) = LOWER($1)',
         [email]
       );
 
@@ -239,18 +239,50 @@ export class NeonAuthService {
       }
 
       const userRow = rows[0];
+      const now = Date.now();
+
+      // Check if account is currently locked out
+      if (userRow.locked_until && Number(userRow.locked_until) > now) {
+        const remainingMinutes = Math.ceil((Number(userRow.locked_until) - now) / 60000);
+        SecurityAuditLogger.logViolation(SEC_AUTH, `Login blocked: Account ${email} is locked for ${remainingMinutes} more minutes`);
+        return {
+          success: false,
+          error: `Account is temporarily locked due to excessive failed login attempts. Please try again in ${remainingMinutes} minute(s).`,
+        };
+      }
+
       const isPasswordValid = NeonAuthService.verifyPassword(password, userRow.password_hash);
       if (!isPasswordValid) {
-        SecurityAuditLogger.logWarning(SEC_AUTH, `Failed password verification for user: ${email}`);
-        return { success: false, error: 'Invalid email or password.' };
+        const currentFailed = Number(userRow.failed_login_attempts || 0) + 1;
+        let lockUntil: number | null = null;
+        let lockoutMsg = '';
+
+        if (currentFailed >= 5) {
+          lockUntil = now + 15 * 60 * 1000; // 15-minute temporary lockout
+          lockoutMsg = ' Account locked for 15 minutes due to 5 consecutive failed attempts.';
+          SecurityAuditLogger.logViolation(SEC_AUTH, `Account ${email} LOCKED OUT for 15 minutes after 5 failed login attempts`);
+        }
+
+        await queryNeon(
+          'UPDATE users SET failed_login_attempts = $1, locked_until = $2 WHERE id = $3',
+          [currentFailed, lockUntil, userRow.id]
+        );
+
+        SecurityAuditLogger.logWarning(SEC_AUTH, `Failed password verification for user: ${email} (Attempt ${currentFailed}/5)`);
+        return {
+          success: false,
+          error: `Invalid email or password.${lockoutMsg}`,
+        };
       }
 
       const role = String(userRow.role || 'USER').toUpperCase() as 'ADMIN' | 'USER';
       const isAdmin = role === 'ADMIN';
-      const now = Date.now();
 
-      // Update last login timestamp
-      await queryNeon('UPDATE users SET last_login_at = $1 WHERE id = $2', [now, userRow.id]);
+      // Reset failed login attempts on successful login & record last login IP
+      await queryNeon(
+        'UPDATE users SET last_login_at = $1, failed_login_attempts = 0, locked_until = NULL, last_login_ip = $2 WHERE id = $3',
+        [now, params.clientIp || null, userRow.id]
+      );
 
       // Create session
       const sessionId = `sess_${now}_${crypto.randomBytes(6).toString('hex')}`;
@@ -373,7 +405,7 @@ export class NeonAuthService {
     res.cookie(SESSION_COOKIE_NAME, token, {
       httpOnly: true,
       secure: isProd,
-      sameSite: 'lax',
+      sameSite: isProd ? 'none' : 'lax',
       maxAge: SESSION_MAX_AGE_MS,
       path: '/',
     });
@@ -387,7 +419,7 @@ export class NeonAuthService {
     res.clearCookie(SESSION_COOKIE_NAME, {
       httpOnly: true,
       secure: isProd,
-      sameSite: 'lax',
+      sameSite: isProd ? 'none' : 'lax',
       path: '/',
     });
   }

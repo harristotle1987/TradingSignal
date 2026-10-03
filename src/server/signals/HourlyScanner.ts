@@ -241,8 +241,15 @@ export class HourlyScannerService {
   /**
    * Manually triggers a scan execution (e.g. from UI admin actions).
    */
-  async triggerManualScan(isExternal = false, scanStartTime?: number): Promise<ManualScanResult> {
-    return await this.executeIntelligentScan(isExternal, scanStartTime ? { scanStartedAt: scanStartTime } : undefined);
+  async triggerManualScan(
+    isExternal = false,
+    scanStartTime?: number,
+    targetSymbolOrCategory?: string
+  ): Promise<ManualScanResult> {
+    return await this.executeIntelligentScan(isExternal, {
+      scanStartedAt: scanStartTime,
+      targetSymbolOrCategory,
+    });
   }
 
   /**
@@ -267,13 +274,13 @@ export class HourlyScannerService {
    */
   private async executeIntelligentScan(
     isExternal = false,
-    options?: { scanStartedAt?: number; globalScanBudgetMs?: number }
+    options?: { scanStartedAt?: number; globalScanBudgetMs?: number; targetSymbolOrCategory?: string }
   ): Promise<ManualScanResult> {
     const scanStartTime = options?.scanStartedAt ?? Date.now();
     const globalScanStartMs = scanStartTime;
     const GLOBAL_SCAN_BUDGET_MS = options?.globalScanBudgetMs ?? 24000;
     const globalScanDeadlineMs = globalScanStartMs + GLOBAL_SCAN_BUDGET_MS;
-    logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | startTime: ${scanStartTime} | deadline: ${globalScanDeadlineMs}`);
+    logger.info(`[Scanner Telemetry] MARKET_SCAN_ENGINE_START | isExternal: ${isExternal} | target: ${options?.targetSymbolOrCategory || 'ALL'} | startTime: ${scanStartTime} | deadline: ${globalScanDeadlineMs}`);
 
     if (process.env.NODE_ENV === 'production' && !ScannerPersistence.isProductionPersistenceReady()) {
       logger.error('[Hourly Scanner] AUTOMATED SCANNER DISPATCH DISABLED: Production persistence is unavailable (DATABASE_URL required for Neon PostgreSQL).');
@@ -367,9 +374,32 @@ export class HourlyScannerService {
       const remainingAllowance = dailyCap - currentDailyCount;
       logger.info(`[Hourly Scanner] Daily Cap status: ${currentDailyCount}/${dailyCap} used. Remaining allowance: ${remainingAllowance}`);
 
-      // 2. Scan all three universes in parallel: CRYPTO, FOREX, STOCKS
+      // 2. Scan targeted symbol, category, or all three universes
+      const cleanTarget = options?.targetSymbolOrCategory?.trim().toUpperCase();
+      let targetsToScan: Array<{ category: 'CRYPTO' | 'FOREX' | 'STOCKS'; symbolToScan: string }>;
+
+      if (cleanTarget && cleanTarget !== 'ALL' && cleanTarget !== 'UNIVERSE') {
+        if (cleanTarget === 'CRYPTO') {
+          targetsToScan = [{ category: 'CRYPTO', symbolToScan: 'CRYPTO' }];
+        } else if (cleanTarget === 'FOREX') {
+          targetsToScan = [{ category: 'FOREX', symbolToScan: 'FOREX' }];
+        } else if (cleanTarget === 'STOCKS' || cleanTarget === 'STOCK') {
+          targetsToScan = [{ category: 'STOCKS', symbolToScan: 'STOCKS' }];
+        } else {
+          // Specific exact symbol (e.g. BTCUSDT, EURUSD, AAPL, etc.)
+          const detectedType = SymbolNormalizer.getAssetClassification(cleanTarget);
+          const cat = detectedType === 'FOREX' ? 'FOREX' : (detectedType === 'STOCK' ? 'STOCKS' : 'CRYPTO');
+          targetsToScan = [{ category: cat, symbolToScan: cleanTarget }];
+        }
+      } else {
+        targetsToScan = [
+          { category: 'CRYPTO', symbolToScan: 'CRYPTO' },
+          { category: 'FOREX', symbolToScan: 'FOREX' },
+          { category: 'STOCKS', symbolToScan: 'STOCKS' },
+        ];
+      }
+
       const marketDataFetchStart = Date.now();
-      const categories: Array<'CRYPTO' | 'FOREX' | 'STOCKS'> = ['CRYPTO', 'FOREX', 'STOCKS'];
       const rawCandidates: TradingSignal[] = [];
       const universeDiagnostics: Array<{ symbol: string; reason: string }> = [];
       const rejectedDuringScan: Array<{ symbol: string; direction?: string; score?: number; reason: string }> = [];
@@ -380,16 +410,16 @@ export class HourlyScannerService {
       let aggregatedProviderRequestsStoppedByBudget = false;
 
       const categoryScanResults = await Promise.all(
-        categories.map(async (category) => {
+        targetsToScan.map(async ({ category, symbolToScan }) => {
           try {
-            logger.info(`[Hourly Scanner] Scanning universe: [${category}]...`);
-            const result = await signalEngine.generateSignal(category, category, false, {
+            logger.info(`[Hourly Scanner] Scanning: [${symbolToScan}] (Category: ${category})...`);
+            const result = await signalEngine.generateSignal(symbolToScan, category, false, {
               scanStartedAt: globalScanStartMs,
               globalScanBudgetMs: GLOBAL_SCAN_BUDGET_MS,
             });
             return { category, result };
           } catch (catErr) {
-            logger.error(`[Hourly Scanner] Scan error for ${category}:`, { error: String(catErr) });
+            logger.error(`[Hourly Scanner] Scan error for ${symbolToScan}:`, { error: String(catErr) });
             return { category, result: { success: false, reason: String(catErr) } as any };
           }
         })

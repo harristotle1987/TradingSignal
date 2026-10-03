@@ -5,7 +5,6 @@ import { queryNeon, getNeonPool } from '../infrastructure/neon/db.js';
 import { quotaManager } from '../market/QuotaManager.js';
 
 const LOCAL_HISTORY_PATH = path.join(process.cwd(), 'scan_performance_history.json');
-const FIRESTORE_COL = 'scan_performance_history';
 
 export type ProviderHealthStatus = 'HEALTHY' | 'DEGRADED' | 'RATE_LIMITED' | 'TIMEOUT' | 'UNAVAILABLE';
 

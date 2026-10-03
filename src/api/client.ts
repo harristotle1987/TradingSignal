@@ -48,6 +48,198 @@ export interface AuthUser {
 }
 
 export class ApiClient {
+  private unauthorizedListeners = new Set<() => void>();
+  private authChangeListeners = new Set<(user: AuthUser | null) => void>();
+
+  constructor() {
+    // Listen for storage events across tabs to synchronize auth state
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', (e) => {
+        if (e.key === 'neon_auth_user' || e.key === 'neon_session_token') {
+          const user = this.getStoredUser();
+          this.notifyAuthChange(user);
+        }
+      });
+      window.addEventListener('auth:change', (e: any) => {
+        const user = e.detail ?? this.getStoredUser();
+        for (const listener of this.authChangeListeners) {
+          try {
+            listener(user);
+          } catch (err) {
+            console.error('[ApiClient] Error in authChange listener:', err);
+          }
+        }
+      });
+    }
+  }
+
+  /**
+   * Subscribe to auth state changes (login, logout, session expiration)
+   */
+  public onAuthChange(callback: (user: AuthUser | null) => void): () => void {
+    this.authChangeListeners.add(callback);
+    return () => this.authChangeListeners.delete(callback);
+  }
+
+  private notifyAuthChange(user: AuthUser | null): void {
+    for (const listener of this.authChangeListeners) {
+      try {
+        listener(user);
+      } catch (e) {
+        console.error('[ApiClient] Error in auth change listener:', e);
+      }
+    }
+  }
+
+  /**
+   * Subscribe to 401 Unauthorized events
+   */
+  public onUnauthorized(callback: () => void): () => void {
+    this.unauthorizedListeners.add(callback);
+    return () => this.unauthorizedListeners.delete(callback);
+  }
+
+  /**
+   * Read stored token from sessionStorage or localStorage
+   */
+  public getStoredToken(): string | null {
+    if (typeof sessionStorage !== 'undefined') {
+      const token = sessionStorage.getItem('neon_session_token');
+      if (token && token.trim().length > 0) return token.trim();
+    }
+    if (typeof localStorage !== 'undefined') {
+      const token = localStorage.getItem('neon_session_token');
+      if (token && token.trim().length > 0) {
+        // Sync to sessionStorage for current tab session
+        if (typeof sessionStorage !== 'undefined') {
+          try {
+            sessionStorage.setItem('neon_session_token', token.trim());
+          } catch {
+            // Ignore
+          }
+        }
+        return token.trim();
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Save auth token to sessionStorage and localStorage for persistence across reloads
+   */
+  public setStoredToken(token: string | null): void {
+    const cleanToken = token?.trim() || null;
+    if (cleanToken) {
+      if (typeof sessionStorage !== 'undefined') {
+        try { sessionStorage.setItem('neon_session_token', cleanToken); } catch {}
+      }
+      if (typeof localStorage !== 'undefined') {
+        try { localStorage.setItem('neon_session_token', cleanToken); } catch {}
+      }
+    } else {
+      if (typeof sessionStorage !== 'undefined') {
+        try { sessionStorage.removeItem('neon_session_token'); } catch {}
+      }
+      if (typeof localStorage !== 'undefined') {
+        try { localStorage.removeItem('neon_session_token'); } catch {}
+      }
+    }
+  }
+
+  /**
+   * Read stored user profile from sessionStorage or localStorage
+   */
+  public getStoredUser(): AuthUser | null {
+    try {
+      const raw = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('neon_auth_user')) ||
+                  (typeof localStorage !== 'undefined' && localStorage.getItem('neon_auth_user'));
+      if (raw) {
+        const parsed = JSON.parse(raw) as AuthUser;
+        if (parsed && typeof parsed === 'object') {
+          // Normalize admin boolean to ensure consistency
+          const role = String(parsed.role || 'USER').toUpperCase() as 'ADMIN' | 'USER';
+          const isAdmin = Boolean(parsed.admin || role === 'ADMIN');
+          return {
+            ...parsed,
+            role: isAdmin ? 'ADMIN' : 'USER',
+            admin: isAdmin,
+          };
+        }
+      }
+    } catch {
+      // ignore JSON parse error
+    }
+    return null;
+  }
+
+  /**
+   * Save user profile to sessionStorage and localStorage, then notify subscribers
+   */
+  public setStoredUser(user: AuthUser | null): void {
+    try {
+      if (user) {
+        const role = String(user.role || 'USER').toUpperCase() as 'ADMIN' | 'USER';
+        const isAdmin = Boolean(user.admin || role === 'ADMIN');
+        const normalizedUser: AuthUser = {
+          ...user,
+          role: isAdmin ? 'ADMIN' : 'USER',
+          admin: isAdmin,
+        };
+        const json = JSON.stringify(normalizedUser);
+        if (typeof sessionStorage !== 'undefined') {
+          try { sessionStorage.setItem('neon_auth_user', json); } catch {}
+        }
+        if (typeof localStorage !== 'undefined') {
+          try { localStorage.setItem('neon_auth_user', json); } catch {}
+        }
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('auth:change', { detail: normalizedUser }));
+        }
+        this.notifyAuthChange(normalizedUser);
+      } else {
+        if (typeof sessionStorage !== 'undefined') {
+          try { sessionStorage.removeItem('neon_auth_user'); } catch {}
+        }
+        if (typeof localStorage !== 'undefined') {
+          try { localStorage.removeItem('neon_auth_user'); } catch {}
+        }
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('auth:change', { detail: null }));
+        }
+        this.notifyAuthChange(null);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * Clears local authentication state and notifies listeners
+   */
+  public clearLocalAuthState(): void {
+    this.setStoredToken(null);
+    this.setStoredUser(null);
+    if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.removeItem('admin_api_token');
+        localStorage.removeItem('admin_token');
+        localStorage.removeItem('admin_api_key');
+      } catch {}
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('auth:unauthorized'));
+      window.dispatchEvent(new CustomEvent('auth:change', { detail: null }));
+    }
+    for (const listener of this.unauthorizedListeners) {
+      try {
+        listener();
+      } catch (e) {
+        console.error('[ApiClient] Error in unauthorized listener:', e);
+      }
+    }
+    this.notifyAuthChange(null);
+  }
+
   /**
    * Deprecated token setting kept for interface compatibility (does not write to localStorage)
    */
@@ -63,7 +255,7 @@ export class ApiClient {
    * Deprecated token getter kept for interface compatibility
    */
   public getAdminToken(): string | null {
-    return null;
+    return this.getStoredToken();
   }
 
   /**
@@ -73,19 +265,29 @@ export class ApiClient {
     success: boolean;
     authenticated?: boolean;
     user?: AuthUser;
+    session?: { id: string; token: string; expiresAt: number };
     isFirstAdmin?: boolean;
     error?: string;
   }> {
-    return this.fetchJson<{
+    const res = await this.fetchJson<{
       success: boolean;
       authenticated?: boolean;
       user?: AuthUser;
+      session?: { id: string; token: string; expiresAt: number };
       isFirstAdmin?: boolean;
       error?: string;
     }>('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify(params),
     });
+
+    if (res?.session?.token) {
+      this.setStoredToken(res.session.token);
+    }
+    if (res?.user) {
+      this.setStoredUser(res.user);
+    }
+    return res;
   }
 
   /**
@@ -96,23 +298,33 @@ export class ApiClient {
     success: boolean;
     authenticated?: boolean;
     user?: AuthUser;
+    session?: { id: string; token: string; expiresAt: number };
     isFirstAdmin?: boolean;
     error?: string;
   }> {
-    return this.fetchJson<{
+    const res = await this.fetchJson<{
       success: boolean;
       authenticated?: boolean;
       user?: AuthUser;
+      session?: { id: string; token: string; expiresAt: number };
       isFirstAdmin?: boolean;
       error?: string;
     }>('/api/auth/session', {
       method: 'POST',
       body: JSON.stringify(params),
     });
+
+    if (res?.session?.token) {
+      this.setStoredToken(res.session.token);
+    }
+    if (res?.user) {
+      this.setStoredUser(res.user);
+    }
+    return res;
   }
 
   /**
-   * Retrieves current authenticated user state based on HttpOnly session cookie.
+   * Retrieves current authenticated user state based on HttpOnly session cookie or persistent token.
    */
   public async getAuthMe(): Promise<{
     success: boolean;
@@ -122,20 +334,35 @@ export class ApiClient {
     user?: AuthUser;
     error?: string;
   }> {
-    return this.fetchJson<{
-      success: boolean;
-      authenticated: boolean;
-      admin: boolean;
-      role: 'ADMIN' | 'USER';
-      user?: AuthUser;
-      error?: string;
-    }>('/api/auth/me');
+    try {
+      const res = await this.fetchJson<{
+        success: boolean;
+        authenticated: boolean;
+        admin: boolean;
+        role: 'ADMIN' | 'USER';
+        user?: AuthUser;
+        error?: string;
+      }>('/api/auth/me');
+
+      if (res.authenticated && res.user) {
+        this.setStoredUser(res.user);
+      } else {
+        this.clearLocalAuthState();
+      }
+      return res;
+    } catch (err: any) {
+      if (err?.status === 401) {
+        this.clearLocalAuthState();
+      }
+      throw err;
+    }
   }
 
   /**
-   * Clears the authenticated session cookie.
+   * Clears the authenticated session cookie and stored token.
    */
   public async logout(): Promise<{ success: boolean; message?: string }> {
+    this.clearLocalAuthState();
     return this.fetchJson<{ success: boolean; message?: string }>('/api/auth/logout', {
       method: 'POST',
     });
@@ -165,6 +392,15 @@ export class ApiClient {
         }
       }
 
+      // Attach saved session token for reliable cross-origin / iframe authentication
+      let authHeader: Record<string, string> = {};
+      const savedToken = this.getStoredToken();
+      if (savedToken && savedToken.trim().length > 0) {
+        authHeader['Authorization'] = `Bearer ${savedToken.trim()}`;
+        authHeader['x-admin-key'] = savedToken.trim();
+        authHeader['x-session-token'] = savedToken.trim();
+      }
+
       const response = await fetch(fullUrl, {
         credentials: 'include',
         headers: {
@@ -172,6 +408,7 @@ export class ApiClient {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache',
           'x-client-app': 'trading-signal-ui',
+          ...authHeader,
           ...csrfHeader,
           ...(options?.headers || {}),
         },
@@ -193,6 +430,10 @@ export class ApiClient {
       }
 
       if (!response.ok && response.status !== 503) {
+        if (response.status === 401) {
+          // Automatically clear local auth state on 401 Unauthorized
+          this.clearLocalAuthState();
+        }
         const err = new Error(`HTTP ${response.status} (${response.statusText}): ${JSON.stringify(data)}`);
         (err as any).status = response.status;
         throw err;
@@ -365,9 +606,9 @@ export class ApiClient {
   }
 
   /**
-   * Manually trigger a complete background scan
+   * Manually trigger a complete background scan or specific symbol scan
    */
-  async triggerScannerManualScan(): Promise<{
+  async triggerScannerManualScan(params?: { symbol?: string; category?: string }): Promise<{
     success: boolean;
     status: string;
     message: string;
@@ -393,6 +634,7 @@ export class ApiClient {
   }> {
     return this.fetchJson<any>('/api/scanner/manual-trigger', {
       method: 'POST',
+      body: params ? JSON.stringify(params) : undefined,
     });
   }
 

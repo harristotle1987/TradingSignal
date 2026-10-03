@@ -402,9 +402,11 @@ router.get('/scanner/trigger', handleScannerTrigger);
  * [Access Boundary: Manual Signal Generation]
  * Endpoint for in-app UI manual scanner execution. Accessible without administrative token so users can initiate scans on demand.
  */
-router.post('/scanner/manual-trigger', adminAuthMiddleware, async (_req: Request, res: Response) => {
+router.post('/scanner/manual-trigger', adminAuthMiddleware, async (req: Request, res: Response) => {
   try {
-    const result = await hourlyScanner.triggerManualScan();
+    const { symbol, category } = req.body || {};
+    const target = symbol || category || undefined;
+    const result = await hourlyScanner.triggerManualScan(false, undefined, target);
     const httpCode = result.status === 'ERROR' ? 500 : 200;
     res.status(httpCode).json(result);
   } catch (err: unknown) {

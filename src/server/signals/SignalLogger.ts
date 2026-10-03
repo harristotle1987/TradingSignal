@@ -211,12 +211,11 @@ export function isTradeableLogRecord(record: SignalLogRecord | undefined | null)
 }
 
 const LOCAL_SIGNAL_LOG_PATH = path.join(process.cwd(), 'signal_logs.json');
-const FIRESTORE_COLLECTION = 'signal_logs';
 
 export class SignalLogger {
   private static logs: Map<string, SignalLogRecord> = new Map();
   private static isInitialized = false;
-  private static lastFirestoreSync = 0;
+  private static lastNeonSync = 0;
 
   /**
    * Helper to detect Market Type from Symbol structure
@@ -255,7 +254,7 @@ export class SignalLogger {
   /**
    * Re-synchronizes in-memory and local disk cache with master Neon PostgreSQL logs collection.
    */
-  public static async syncFromFirestore(): Promise<void> {
+  public static async syncFromNeon(): Promise<void> {
     if (!getNeonPool()) return;
 
     try {
@@ -273,7 +272,7 @@ export class SignalLogger {
         }
       }
 
-      this.lastFirestoreSync = Date.now();
+      this.lastNeonSync = Date.now();
       if (dbIds.size > 0) {
         this.flushToDisk();
       }
@@ -310,7 +309,7 @@ export class SignalLogger {
     }
 
     // 2. Sync from Neon if available
-    await this.syncFromFirestore();
+    await this.syncFromNeon();
 
     this.isInitialized = true;
   }
@@ -330,7 +329,7 @@ export class SignalLogger {
   /**
    * Persists a record into Neon PostgreSQL asynchronously
    */
-  private static syncToFirestore(record: SignalLogRecord): void {
+  private static syncToNeon(record: SignalLogRecord): void {
     if (!getNeonPool()) return;
 
     const cleanRecord = JSON.parse(JSON.stringify(record));
@@ -516,7 +515,7 @@ export class SignalLogger {
       };
     }
 
-    this.syncToFirestore(record);
+    this.syncToNeon(record);
     return {
       success: true,
       status: 'TRADEABLE_RECORD_PERSISTED',
@@ -552,7 +551,7 @@ export class SignalLogger {
 
     this.logs.set(record.id, record);
     this.flushToDisk();
-    this.syncToFirestore(record);
+    this.syncToNeon(record);
 
     logger.info(`[SignalLogger] UPDATED SIGNAL LOG STATUS: ${record.symbol} -> ${status}`);
     return true;
@@ -597,7 +596,7 @@ export class SignalLogger {
 
     this.logs.set(record.id, record);
     this.flushToDisk();
-    this.syncToFirestore(record);
+    this.syncToNeon(record);
 
     logger.info(`[SignalLogger] UPDATED SIGNAL LOG TPs for ${record.symbol}: T1: ${tp1}, T2: ${tp2}, T3: ${tp3}`);
     return true;
@@ -620,8 +619,8 @@ export class SignalLogger {
     await this.init();
 
     const now = Date.now();
-    if (now - this.lastFirestoreSync > 5000) {
-      await this.syncFromFirestore();
+    if (now - this.lastNeonSync > 5000) {
+      await this.syncFromNeon();
     }
 
     // Load latest sent signals from ScannerPersistence to merge real-time lifecycle check metadata
