@@ -52,7 +52,7 @@ export interface Gate9CapSelectionResult<T = any> {
 }
 
 export class Gate9FinalSignalCap {
-  public static readonly MAX_SIGNALS_PER_SCAN = 3;
+  public static readonly MAX_SIGNALS_PER_SCAN = 2;
 
   /**
    * Applies Gate 9 signal cap to candidates validated and scored at or above the configured final tradeability threshold.

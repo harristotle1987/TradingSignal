@@ -904,8 +904,9 @@ export class ScoringEngine {
     const hasGoodMomentum = momentumScore >= 9;
     const isGoodMomentumPath = hasGoodMomentum && hasValidEntry && hasAcceptableRisk;
 
-    const isOptimizedPath = isStrongTrendPath || isGoodBreakoutPath || isGoodReversalPath || isGoodMomentumPath;
-    const effectiveMinWinProb = isOptimizedPath ? 35 : thresholds.minimumWinProbability;
+    // STEP 1: Calibrated probability evidence required without 35% optimized-path loophole.
+    // Minimum win probability floor strictly adheres to calibrated evidence or conservative fallback (>= 50%).
+    const calibratedMinWinProb = Math.max(50, thresholds.minimumWinProbability);
 
     // GATE 6 & GATE 7: Historical Win Rate & Mathematical Expectancy Analytics
     // Model-estimated win rate and expectancy are recorded for analytics, ranking, and confidence modification,
@@ -915,8 +916,8 @@ export class ScoringEngine {
 
     // Score Classification using Centralized Configuration (GATE 5):
     // score >= 80 → HIGH_CONFLUENCE_SIGNAL
-    // score >= signalThreshold (65) → ACTIONABLE SIGNAL (HIGH_QUALITY)
-    // score >= qualifiedCandidateThreshold (63) → QUALIFIED CANDIDATE (VALID)
+    // score >= signalThreshold (70) → ACTIONABLE SIGNAL (HIGH_QUALITY)
+    // score >= qualifiedCandidateThreshold (65) → QUALIFIED CANDIDATE (VALID)
     // score >= watchingThreshold (60) → WATCHING (VALID)
     // Below watchingThreshold (60) → REJECT
     let qualityTier: QualityTier = 'REJECT';

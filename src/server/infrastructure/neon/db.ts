@@ -280,6 +280,13 @@ export async function initializeNeonSchema(): Promise<boolean> {
         created_at BIGINT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS asset_cooldowns (
+        symbol VARCHAR(50) PRIMARY KEY,
+        last_asset_signal_ms BIGINT NOT NULL,
+        strategy_cooldowns JSONB NOT NULL DEFAULT '{}',
+        updated_at BIGINT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS performance_history (
         id VARCHAR(255) PRIMARY KEY,
         period_key VARCHAR(100) NOT NULL,

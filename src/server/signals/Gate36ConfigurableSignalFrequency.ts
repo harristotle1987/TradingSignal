@@ -46,8 +46,8 @@ export interface FrequencyMetrics {
 
 export class Gate36ConfigurableSignalFrequency {
   private static config: FrequencyConfig = {
-    dailySignalCap: 10, // Canonical default daily automated signal cap is 10
-    preset: '10',
+    dailySignalCap: 5, // Canonical default daily automated signal cap is 5
+    preset: '5',
     maxClusterAllocationPct: 0.40, // Max 40% of daily cap per correlation cluster
   };
 
@@ -72,7 +72,7 @@ export class Gate36ConfigurableSignalFrequency {
    * Returns current signal frequency configuration
    */
   public static getConfig(): FrequencyConfig {
-    const currentCap = serverConfig.getConfig().thresholds.dailySignalCap || this.config.dailySignalCap || 10;
+    const currentCap = serverConfig.getConfig().thresholds.dailySignalCap || this.config.dailySignalCap || 5;
     return {
       dailySignalCap: currentCap,
       preset: this.config.preset,

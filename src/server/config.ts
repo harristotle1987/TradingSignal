@@ -107,20 +107,20 @@ class ConfigService {
     const twelvedataConfigured = Boolean(process.env.TWELVE_DATA_API_KEY && process.env.TWELVE_DATA_API_KEY.trim().length > 0);
 
     // Canonical production values:
-    // Minimum/final score floor: 65, Signal threshold: 65, Minimum executable R:R: 1.8
-    // Do NOT use 70, 72, or 75 as an executable threshold.
-    // Do NOT reduce the 1.8 R:R requirement.
-    const authoritativeMinScore = 65;
+    // Minimum/final score floor: 70, Signal threshold: 70, Minimum executable R:R: 1.8
+    // Net R:R floor: 1.30 after verifying spread, fees and slippage
+    // Default daily cap: 5 unique signals/day
+    const authoritativeMinScore = 70;
     const rawWinProb = parseFloat(process.env.THRESHOLD_MIN_WIN_PROB || '55');
     const rawAiConf = parseFloat(process.env.THRESHOLD_MIN_AI_CONFIDENCE || '55');
 
     const thresholds: SignalThresholds = {
       minimumScore: authoritativeMinScore,
       watchingThreshold: parseInt(process.env.THRESHOLD_WATCHING_SCORE || '60', 10),
-      qualifiedCandidateThreshold: parseInt(process.env.THRESHOLD_QUALIFIED_CANDIDATE_SCORE || '63', 10),
+      qualifiedCandidateThreshold: parseInt(process.env.THRESHOLD_QUALIFIED_CANDIDATE_SCORE || '65', 10),
       signalThreshold: authoritativeMinScore,
       minimumRR: 1.8,
-      minimumNetRR: parseFloat(process.env.THRESHOLD_MIN_NET_RR || '1.1'),
+      minimumNetRR: parseFloat(process.env.THRESHOLD_MIN_NET_RR || '1.3'),
       minimumAdverseNetRR: process.env.THRESHOLD_MIN_ADVERSE_NET_RR ? parseFloat(process.env.THRESHOLD_MIN_ADVERSE_NET_RR) : 1.0,
       enforceAdverseNetRRHardGate: process.env.ENFORCE_ADVERSE_NET_RR_HARD_GATE === 'true',
       minimumWinProbability: rawWinProb <= 1.0 ? rawWinProb * 100 : rawWinProb,
@@ -128,7 +128,9 @@ class ConfigService {
       minimumTimeframeAlignment: 0.50,
       AIConfirmationMode: (process.env.THRESHOLD_AI_CONFIRMATION_MODE as 'REQUIRED' | 'OPTIONAL' | 'DISABLED') || 'OPTIONAL',
       minimumAiConfidence: rawAiConf <= 1.0 ? rawAiConf * 100 : rawAiConf,
-      dailySignalCap: parseInt(process.env.THRESHOLD_DAILY_SIGNAL_CAP || '10', 10),
+      dailySignalCap: process.env.THRESHOLD_DAILY_SIGNAL_CAP && process.env.THRESHOLD_DAILY_SIGNAL_CAP !== '10'
+        ? parseInt(process.env.THRESHOLD_DAILY_SIGNAL_CAP, 10)
+        : 5,
       candidateLimit: parseInt(process.env.THRESHOLD_CANDIDATE_LIMIT || '10', 10),
       probabilitySource: (process.env.THRESHOLD_PROBABILITY_SOURCE || process.env.PROBABILITY_SOURCE || 'EMPIRICAL') as 'EMPIRICAL' | 'MODEL' | 'NONE',
       requireEmpiricalCalibration: process.env.REQUIRE_EMPIRICAL_CALIBRATION === 'true',

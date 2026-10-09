@@ -328,7 +328,7 @@ export class ScannerPersistence {
     capState: {
       date: new Date().toISOString().split('T')[0],
       dailySignalCount: 0,
-      dailySignalCap: 10,
+      dailySignalCap: 5,
       lastScanTime: 0,
       lastCronExecution: 0,
       lastAutomatedScan: 0,
@@ -457,11 +457,12 @@ export class ScannerPersistence {
     }
   }
 
-  static async getCapState(defaultCap = 10): Promise<DailyCapState> {
+  static async getCapState(defaultCap?: number): Promise<DailyCapState> {
     this.init();
     this.checkDailyRollover();
 
     const today = new Date().toISOString().split('T')[0];
+    const canonicalCap = defaultCap !== undefined ? defaultCap : (serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 5);
 
     if (getNeonPool()) {
       try {
@@ -472,18 +473,22 @@ export class ScannerPersistence {
             const resetState: DailyCapState = {
               date: today,
               dailySignalCount: 0,
-              dailySignalCap: remote.dailySignalCap || defaultCap,
+              dailySignalCap: defaultCap !== undefined ? defaultCap : (remote.dailySignalCap || canonicalCap),
               lastScanTime: remote.lastScanTime || Date.now(),
             };
             await stateRepo.saveCapState(resetState as any);
             return resetState;
+          }
+          if (defaultCap !== undefined && remote.dailySignalCap !== defaultCap) {
+            remote.dailySignalCap = defaultCap;
+            await stateRepo.saveCapState(remote as any);
           }
           return remote as DailyCapState;
         }
         const newState: DailyCapState = {
           date: today,
           dailySignalCount: this.localData.capState.dailySignalCount || 0,
-          dailySignalCap: defaultCap,
+          dailySignalCap: canonicalCap,
           lastScanTime: this.localData.capState.lastScanTime || Date.now(),
         };
         await stateRepo.saveCapState(newState as any);
@@ -497,21 +502,25 @@ export class ScannerPersistence {
       logger.error('[ScannerPersistence] FAIL CLOSED: Production mode requires Neon DATABASE_URL persistence for daily cap state.');
       return {
         date: today,
-        dailySignalCount: defaultCap,
-        dailySignalCap: defaultCap,
+        dailySignalCount: canonicalCap,
+        dailySignalCap: canonicalCap,
         lastScanTime: this.localData.capState.lastScanTime || 0,
       };
     }
 
+    if (defaultCap !== undefined && this.localData.capState.dailySignalCap !== defaultCap) {
+      this.localData.capState.dailySignalCap = defaultCap;
+    }
     return this.localData.capState;
   }
 
-  static async tryIncrementCap(defaultCap = 10): Promise<{ allowed: boolean; count: number; cap: number; reservationId?: string }> {
+  static async tryIncrementCap(defaultCap?: number): Promise<{ allowed: boolean; count: number; cap: number; reservationId?: string }> {
     this.init();
     this.checkDailyRollover();
 
     const today = new Date().toISOString().split('T')[0];
-    const limit = this.localData.capState.dailySignalCap || defaultCap;
+    const configuredCap = defaultCap !== undefined ? defaultCap : (serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 5);
+    const limit = defaultCap !== undefined ? defaultCap : (this.localData.capState.dailySignalCap || configuredCap);
     const reservationId = `res_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
     if (getNeonPool()) {
@@ -546,7 +555,7 @@ export class ScannerPersistence {
           }
 
           currentCount = currentState.dailySignalCount || 0;
-          currentCap = currentState.dailySignalCap || limit;
+          currentCap = defaultCap !== undefined ? defaultCap : (currentState.dailySignalCap || limit);
 
           if (currentCount >= currentCap) {
             return { allowed: false, count: currentCount, cap: currentCap };
@@ -829,7 +838,7 @@ export class ScannerPersistence {
       this.localData.capState = {
         date: new Date().toISOString().split('T')[0],
         dailySignalCount: 0,
-        dailySignalCap: serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 10,
+        dailySignalCap: serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 5,
         lastScanTime: this.localData.capState.lastScanTime || 0,
       };
       this.saveLocalData();
@@ -842,7 +851,7 @@ export class ScannerPersistence {
         await getScannerStateRepository().saveCapState({
           date: new Date().toISOString().split('T')[0],
           dailySignalCount: 0,
-          dailySignalCap: serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 10,
+          dailySignalCap: serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 5,
           lastScanTime: this.localData.capState.lastScanTime || 0,
         } as any);
       } catch (err) {
@@ -853,14 +862,15 @@ export class ScannerPersistence {
     }
   }
 
-  static async resetDailyCapCount(): Promise<DailyCapState> {
+  static async resetDailyCapCount(targetCap?: number): Promise<DailyCapState> {
     this.init();
     const today = new Date().toISOString().split('T')[0];
-    const currentCap = this.localData.capState.dailySignalCap || serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 10;
+    const canonicalCap = targetCap !== undefined ? targetCap : (serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || 5);
     const now = Date.now();
 
     this.localData.capState.date = today;
     this.localData.capState.dailySignalCount = 0;
+    this.localData.capState.dailySignalCap = canonicalCap;
     this.localData.capState.reservations = [];
     this.localData.capState.lastResetTime = now;
     this.saveLocalData();
@@ -872,22 +882,23 @@ export class ScannerPersistence {
           let state: DailyCapState = {
             date: today,
             dailySignalCount: 0,
-            dailySignalCap: currentCap,
+            dailySignalCap: canonicalCap,
             lastScanTime: this.localData.capState.lastScanTime || 0,
             reservations: [],
             lastResetTime: now,
           };
           if (res.rows.length > 0) {
-            state = { ...res.rows[0].state_json, date: today, dailySignalCount: 0, reservations: [], lastResetTime: now };
+            state = { ...res.rows[0].state_json, date: today, dailySignalCount: 0, dailySignalCap: canonicalCap, reservations: [], lastResetTime: now };
           }
           await client.query(
             `INSERT INTO scanner_state (date, daily_signal_count, daily_signal_cap, state_json, updated_at)
              VALUES ($1, 0, $2, $3, $4)
              ON CONFLICT (date) DO UPDATE SET
                daily_signal_count = 0,
+               daily_signal_cap = EXCLUDED.daily_signal_cap,
                state_json = EXCLUDED.state_json,
                updated_at = EXCLUDED.updated_at`,
-            [today, currentCap, JSON.stringify(state), now]
+            [today, canonicalCap, JSON.stringify(state), now]
           );
         });
         logger.info('[ScannerPersistence] Daily signal cap counter successfully reset to 0 in Neon.');

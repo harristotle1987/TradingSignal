@@ -363,7 +363,7 @@ export class NeonScannerStateRepository implements IScannerStateRepository {
           [
             state.date,
             state.dailySignalCount || 0,
-            state.dailySignalCap || 10,
+            state.dailySignalCap || 5,
             JSON.stringify(cleanJson),
             Date.now(),
           ]

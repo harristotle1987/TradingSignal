@@ -114,7 +114,7 @@ export async function runStagedPipeline(
   profiler.setGlobalDeadline(globalScanDeadlineMs);
   setActiveProfiler(profiler);
 
-  // 1. Check duplicate / active signal cooldown
+  // 1. Check duplicate / active signal cooldown (6-hour window)
   const existingSignal = engine.activeSignals.get(cleanSymbol);
   const isExistingExpired = existingSignal && (
     existingSignal.status === 'EXPIRED' ||
@@ -129,18 +129,21 @@ export async function runStagedPipeline(
   );
   if (isExistingExpired) {
     engine.activeSignals.delete(cleanSymbol);
-  } else if (existingSignal && isActionableSignal(existingSignal) && now - existingSignal.timestamp < 8 * 60 * 1000) {
-    logger.info('Returning existing active signal within cooldown window', { symbol: cleanSymbol, id: existingSignal.id, snapshotId: existingSignal.snapshotId });
-    profiler.endScan();
-    setActiveProfiler(null);
-    return {
-      success: true,
-      message: `Active signal retrieved for ${cleanSymbol} (Snapshot ${existingSignal.snapshotId})`,
-      symbol: cleanSymbol,
-      marketPrice: existingSignal.entryPrice,
-      signal: existingSignal,
-      timestamp: now,
-    };
+  } else if (existingSignal && isActionableSignal(existingSignal)) {
+    const assetCooldown = CooldownManager.isAssetInCooldown(cleanSymbol);
+    if (assetCooldown.inCooldown) {
+      logger.info('Returning existing active signal within 6-hour cooldown window', { symbol: cleanSymbol, id: existingSignal.id, snapshotId: existingSignal.snapshotId });
+      profiler.endScan();
+      setActiveProfiler(null);
+      return {
+        success: true,
+        message: `Active signal retrieved for ${cleanSymbol} (6-hour asset cooldown active: ${assetCooldown.remainingMinutes}m remaining)`,
+        symbol: cleanSymbol,
+        marketPrice: existingSignal.entryPrice,
+        signal: existingSignal,
+        timestamp: now,
+      };
+    }
   }
 
   logger.info(`================================================================`);
@@ -1298,6 +1301,43 @@ export async function runStagedPipeline(
       }
     }
 
+    // STEP 3: 6-Hour Asset & Strategy Cooldown / Material Improvement Filter
+    const nonCooldownCandidates: typeof filteredCandidates = [];
+    for (const cand of filteredCandidates) {
+      const sym = cand.signal.symbol.toUpperCase();
+      const strat = cand.signal.strategy || 'UNKNOWN';
+      const existingActive = engine.activeSignals.get(sym);
+      const isAssetCooldown = CooldownManager.isAssetInCooldown(sym);
+      const isStratCooldown = CooldownManager.isStrategyInCooldown(sym, strat);
+
+      if ((isAssetCooldown.inCooldown || isStratCooldown.inCooldown) && existingActive) {
+        const replacementCheck = CooldownManager.canReplaceEarly(
+          { score: existingActive.score, riskRewardRatio: existingActive.riskRewardRatio },
+          { score: cand.signal.score, riskRewardRatio: cand.signal.riskRewardRatio, passesQualityGates: cand.validation.isValid }
+        );
+
+        if (!replacementCheck.allowed) {
+          rejectionTracker.recordCandidate({
+            symbol: cand.signal.symbol,
+            direction: cand.signal.direction,
+            score: cand.signal.score || 0,
+            primaryRejectionReason: `6-Hour Cooldown: ${replacementCheck.reason}`,
+            failedGates: [StandardFailedGate.COOLDOWN],
+            finalDecision: 'REJECTED',
+            stage: 'GATE_7',
+            timestamp: now,
+            factors: cand.signal.factors,
+          });
+          continue;
+        } else {
+          logger.info(`[StagedScannerPipeline] Authorized early replacement for ${sym}: ${replacementCheck.reason}`);
+        }
+      }
+      nonCooldownCandidates.push(cand);
+    }
+    filteredCandidates.length = 0;
+    filteredCandidates.push(...nonCooldownCandidates);
+
     for (const cand of filteredCandidates) {
       const detectedRegime = (cand.scoring as any)?.regime || cand.signal.marketRegime || 'UNKNOWN';
       const regimeSelection = Gate18RegimeStrategySelection.selectStrategy({
@@ -1593,8 +1633,25 @@ export async function runStagedPipeline(
         }
 
         if (persistAndActivate) {
-          const inc = await ScannerPersistence.tryIncrementCap(thresholds.dailySignalCap || 10);
+          const inc = await ScannerPersistence.tryIncrementCap(thresholds.dailySignalCap || 5);
           if (!inc.allowed) break;
+
+          const sigFp = SignalFingerprint.generateFingerprint({
+            symbol: sig.symbol,
+            direction: sig.direction,
+            entryPrice: sig.entryPrice,
+            timeframe: sig.timeframe,
+            primaryStrategy: sig.strategy,
+          });
+
+          // Uniqueness / Idempotency check against database to prevent concurrent publication
+          const claim = await SignalFingerprint.claimFingerprintIdempotent(sigFp, sig.symbol, sig.direction);
+          if (!claim.success) {
+            await ScannerPersistence.releaseCap(inc.reservationId);
+            sig.isTradeableSignal = false;
+            sig.signalClassification = 'DIAGNOSTIC';
+            continue;
+          }
 
           sig.isTradeableSignal = true;
           sig.signalClassification = 'TRADEABLE';

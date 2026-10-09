@@ -21,7 +21,9 @@ import { serverConfig, TP1_ALLOCATION, TP2_ALLOCATION, TP3_ALLOCATION, RUNNER_AL
 import { AtrTpGenerator, ASSET_CLASS_GUARDRAILS } from '../src/server/signals/AtrTpGenerator.js';
 import { SignalValidator } from '../src/server/signals/SignalValidator.js';
 import { MarketStructureDetector } from '../src/server/signals/MarketStructureDetector.js';
-import { CooldownManager } from '../src/server/signals/CooldownManager.js';
+import { CooldownManager, ASSET_COOLDOWN_MS, STRATEGY_COOLDOWN_MS } from '../src/server/signals/CooldownManager.js';
+import { Gate9FinalSignalCap } from '../src/server/signals/Gate9FinalSignalCap.js';
+import { SignalFingerprint } from '../src/server/signals/SignalFingerprint.js';
 import { CandidateRejectionTracker, StandardFailedGate } from '../src/server/signals/CandidateRejectionTracker.js';
 import { OpportunityFunnelStore, OpportunityFunnelEngine, HardGatesEvaluator } from '../src/server/signals/Gate26OpportunityFunnel.js';
 import { Gate28ConfirmationDiversity } from '../src/server/signals/Gate28ConfirmationDiversity.js';
@@ -724,7 +726,7 @@ async function runAll() {
       assert(resolvedStocks.universe.length === 48, `Expected 48 Stock assets, got ${resolvedStocks.universe.length}`);
     });
 
-    await test('65 is authoritative actionable signal threshold and R:R minimum is 1.8', () => {
+    await test('70 is authoritative actionable signal threshold and R:R minimum is 1.8', () => {
       // Test default system fallbacks when env overrides are cleared
       const origMinScore = process.env.THRESHOLD_MIN_SCORE;
       const origSigScore = process.env.THRESHOLD_SIGNAL_SCORE;
@@ -736,7 +738,7 @@ async function runAll() {
 
       // Create a fresh config instance to test code defaults
       const freshConfig = (serverConfig as any).loadAndValidate();
-      assert(freshConfig.thresholds.signalThreshold === 65, `Default signalThreshold must be 65, got ${freshConfig.thresholds.signalThreshold}`);
+      assert(freshConfig.thresholds.signalThreshold === 70, `Default signalThreshold must be 70, got ${freshConfig.thresholds.signalThreshold}`);
       assert(freshConfig.thresholds.minimumRR === 1.8, `Default minimumRR must be 1.8, got ${freshConfig.thresholds.minimumRR}`);
       assert(freshConfig.thresholds.minimumNetRR === 1.5, `Default minimumNetRR must be 1.5, got ${freshConfig.thresholds.minimumNetRR}`);
 
@@ -3714,29 +3716,29 @@ async function runAll() {
         await ScannerPersistence.deleteSentSignal(testSig.id);
       });
 
-      await test('Canonical default daily cap is 10 across config, persistence, frequency engine, and scanner', async () => {
+      await test('Canonical default daily cap is 5 across config, persistence, frequency engine, and scanner', async () => {
         const configCap = serverConfig.getConfig().thresholds.dailySignalCap;
-        assert(configCap === 10, `serverConfig dailySignalCap must default to 10, got ${configCap}`);
+        assert(configCap === 5, `serverConfig dailySignalCap must default to 5, got ${configCap}`);
 
         const capState = await ScannerPersistence.getCapState();
-        assert(capState.dailySignalCap === 10, `ScannerPersistence dailySignalCap must default to 10, got ${capState.dailySignalCap}`);
+        assert(capState.dailySignalCap === 5, `ScannerPersistence dailySignalCap must default to 5, got ${capState.dailySignalCap}`);
 
         const freqConfig = Gate36ConfigurableSignalFrequency.getConfig();
-        assert(freqConfig.dailySignalCap === 10, `Gate36 dailySignalCap must default to 10, got ${freqConfig.dailySignalCap}`);
+        assert(freqConfig.dailySignalCap === 5, `Gate36 dailySignalCap must default to 5, got ${freqConfig.dailySignalCap}`);
 
         const scanner = new HourlyScannerService();
         const syncSettings = scanner.getSettings();
-        assert(syncSettings.limit === 10, `HourlyScanner sync limit must be 10, got ${syncSettings.limit}`);
-        assert(syncSettings.dailySignalCap === 10, `HourlyScanner sync dailySignalCap must be 10, got ${syncSettings.dailySignalCap}`);
+        assert(syncSettings.limit === 5, `HourlyScanner sync limit must be 5, got ${syncSettings.limit}`);
+        assert(syncSettings.dailySignalCap === 5, `HourlyScanner sync dailySignalCap must be 5, got ${syncSettings.dailySignalCap}`);
 
         const asyncSettings = await scanner.getSettingsAsync();
-        assert(asyncSettings.limit === 10, `HourlyScanner async limit must be 10, got ${asyncSettings.limit}`);
-        assert(asyncSettings.dailySignalCap === 10, `HourlyScanner async dailySignalCap must be 10, got ${asyncSettings.dailySignalCap}`);
+        assert(asyncSettings.limit === 5, `HourlyScanner async limit must be 5, got ${asyncSettings.limit}`);
+        assert(asyncSettings.dailySignalCap === 5, `HourlyScanner async dailySignalCap must be 5, got ${asyncSettings.dailySignalCap}`);
       });
 
       await test('POST /api/scanner/reset-cap resets count to 0 and returns updated settings with canonical cap', async () => {
         // Increment cap count
-        await ScannerPersistence.tryIncrementCap(10);
+        await ScannerPersistence.tryIncrementCap(5);
 
         const authRes = await NeonAuthService.authenticate({
           email: 'suite5_admin@tradingsignal.io',
@@ -3757,8 +3759,8 @@ async function runAll() {
         assert(data.success === true, 'Response success must be true');
         assert(data.settings?.dailySignalCount === 0, 'dailySignalCount in returned settings must be 0');
         assert(data.capState?.dailySignalCount === 0, 'dailySignalCount in capState must be 0');
-        assert(data.settings?.limit === 10, `limit in returned settings must be 10, got ${data.settings?.limit}`);
-        assert(data.capState?.dailySignalCap === 10, `dailySignalCap in capState must be 10, got ${data.capState?.dailySignalCap}`);
+        assert(data.settings?.limit === 5, `limit in returned settings must be 5, got ${data.settings?.limit}`);
+        assert(data.capState?.dailySignalCap === 5, `dailySignalCap in capState must be 5, got ${data.capState?.dailySignalCap}`);
       });
     } finally {
       if (server) {
@@ -4336,6 +4338,134 @@ async function runAll() {
 
     await test('EMAVWAPPayoffEngine: Multi-EMA trend stack, VWAP alignment, and expected move payoff quality verification', async () => {
       await runEmaVwapPayoffEngineTests();
+    });
+
+    await describe('STEPS 1-4 REGRESSION: Signal Quality, Frequency Cap (Max 2/Scan, Max 5/Day), 6H Cooldown & Database Idempotency', async () => {
+      await test('1. Gate 9 strictly limits publication to a maximum of 2 signals per scan', () => {
+        assert(Gate9FinalSignalCap.MAX_SIGNALS_PER_SCAN === 2, `MAX_SIGNALS_PER_SCAN must be 2, got ${Gate9FinalSignalCap.MAX_SIGNALS_PER_SCAN}`);
+
+        // Provide 5 qualified candidates
+        const candidates = [1, 2, 3, 4, 5].map((i) => ({
+          signal: {
+            id: `cand_${i}`,
+            symbol: `SYM${i}USDT`,
+            direction: 'BUY',
+            entryPrice: 100,
+            stopLoss: 95,
+            takeProfit: 110,
+            score: 70 + i,
+            riskRewardRatio: 2.0,
+            netRiskRewardRatio: 1.8,
+            status: 'WAITING_ENTRY',
+          } as any,
+          finalScore: 70 + i,
+        }));
+
+        const res = Gate9FinalSignalCap.applySignalCap(candidates);
+        assert(res.publishedSignalsCount === 2, `Expected exactly 2 published signals, got ${res.publishedSignalsCount}`);
+        assert(res.publishedSignals.length === 2, `Expected publishedSignals array length 2, got ${res.publishedSignals.length}`);
+        assert(res.spilloverCandidates.length === 3, `Expected 3 spillover candidates, got ${res.spilloverCandidates.length}`);
+        assert(res.publishedSignals[0].symbol === 'SYM5USDT', 'Highest score must be published first');
+        assert(res.publishedSignals[1].symbol === 'SYM4USDT', 'Second highest score must be published second');
+      });
+
+      await test('2. Default daily signal cap is 5 and stops publishing once 5 signals are committed', async () => {
+        const defaultCap = serverConfig.getConfig().thresholds.dailySignalCap;
+        assert(defaultCap === 5, `Default dailySignalCap must be 5, got ${defaultCap}`);
+
+        await ScannerPersistence.resetDailyCapCount();
+        const capState = await ScannerPersistence.getCapState(5);
+        assert(capState.dailySignalCap === 5, `Daily cap must be 5, got ${capState.dailySignalCap}`);
+        assert(capState.dailySignalCount === 0, 'Initial daily count must be 0 after reset');
+
+        // Increment 5 times
+        for (let i = 0; i < 5; i++) {
+          const inc = await ScannerPersistence.tryIncrementCap(5);
+          assert(inc.allowed === true, `Increment ${i + 1} must be allowed`);
+          assert(Boolean(inc.reservationId), 'Reservation ID must be returned');
+          await ScannerPersistence.commitCap(inc.reservationId);
+        }
+
+        const fullCapState = await ScannerPersistence.getCapState(5);
+        assert(fullCapState.dailySignalCount === 5, `Daily signal count must be 5, got ${fullCapState.dailySignalCount}`);
+
+        // 6th attempt must be rejected by cap
+        const overflowInc = await ScannerPersistence.tryIncrementCap(5);
+        assert(overflowInc.allowed === false, '6th increment must be rejected when daily cap of 5 is reached');
+      });
+
+      await test('3. Only newly persisted unique tradeable signals consume quota; released candidates do not consume cap', async () => {
+        await ScannerPersistence.resetDailyCapCount();
+
+        // Simulate candidate evaluation that reserves cap but fails persistence
+        const inc = await ScannerPersistence.tryIncrementCap(5);
+        assert(inc.allowed === true, 'Reservation must succeed');
+
+        // Candidate fails downstream or is demoted -> release cap
+        await ScannerPersistence.releaseCap(inc.reservationId);
+
+        const currentCap = await ScannerPersistence.getCapState(5);
+        assert(currentCap.dailySignalCount === 0, `Released reservation must NOT increment dailySignalCount, got ${currentCap.dailySignalCount}`);
+      });
+
+      await test('4. CooldownManager enforces 6-hour asset and 6-hour strategy cooldowns', () => {
+        assert(ASSET_COOLDOWN_MS === 6 * 60 * 60 * 1000, `ASSET_COOLDOWN_MS must be 6 hours, got ${ASSET_COOLDOWN_MS / 3600000}h`);
+        assert(STRATEGY_COOLDOWN_MS === 6 * 60 * 60 * 1000, `STRATEGY_COOLDOWN_MS must be 6 hours, got ${STRATEGY_COOLDOWN_MS / 3600000}h`);
+
+        const now = Date.now();
+        CooldownManager.clearCooldown('BTCUSDT');
+        assert(CooldownManager.isAssetInCooldown('BTCUSDT').inCooldown === false, 'BTCUSDT must not be in cooldown initially');
+
+        CooldownManager.recordSignalEmit('BTCUSDT', 'TREND_FOLLOWING', now);
+
+        const assetCd = CooldownManager.isAssetInCooldown('BTCUSDT');
+        assert(assetCd.inCooldown === true, 'BTCUSDT must be in asset cooldown after emission');
+        assert(assetCd.remainingMinutes > 350, `Remaining minutes should be approx 360m, got ${assetCd.remainingMinutes}`);
+
+        const stratCd = CooldownManager.isStrategyInCooldown('BTCUSDT', 'TREND_FOLLOWING');
+        assert(stratCd.inCooldown === true, 'TREND_FOLLOWING strategy must be in cooldown on BTCUSDT');
+
+        CooldownManager.clearCooldown('BTCUSDT');
+        assert(CooldownManager.isAssetInCooldown('BTCUSDT').inCooldown === false, 'BTCUSDT cooldown cleared');
+      });
+
+      await test('5. Early replacement permitted ONLY when documented material improvement occurs and quality gates pass', () => {
+        const prevSignal = { score: 72, riskRewardRatio: 1.9 };
+
+        // Sub-scenario A: Weak improvement (+2 pts score, +0.1 RR) -> REJECT
+        const weakCand = { score: 74, riskRewardRatio: 2.0, passesQualityGates: true };
+        const checkWeak = CooldownManager.canReplaceEarly(prevSignal, weakCand);
+        assert(checkWeak.allowed === false, 'Weak improvement must NOT bypass cooldown');
+
+        // Sub-scenario B: Failed quality gates -> REJECT even if score jumped
+        const failedGatesCand = { score: 85, riskRewardRatio: 2.8, passesQualityGates: false };
+        const checkFailed = CooldownManager.canReplaceEarly(prevSignal, failedGatesCand);
+        assert(checkFailed.allowed === false, 'Candidate with failed quality gates must NOT replace early');
+
+        // Sub-scenario C: Material score improvement (+6 pts) & passes gates -> ALLOW
+        const scoreImprovedCand = { score: 78, riskRewardRatio: 1.9, passesQualityGates: true };
+        const checkScore = CooldownManager.canReplaceEarly(prevSignal, scoreImprovedCand);
+        assert(checkScore.allowed === true, 'Material score improvement (+6 pts) must authorize early replacement');
+
+        // Sub-scenario D: Material R:R improvement (+0.6 RR) & passes gates -> ALLOW
+        const rrImprovedCand = { score: 72, riskRewardRatio: 2.6, passesQualityGates: true };
+        const checkRR = CooldownManager.canReplaceEarly(prevSignal, rrImprovedCand);
+        assert(checkRR.allowed === true, 'Material R:R improvement (+0.7 RR) must authorize early replacement');
+      });
+
+      await test('6. Database uniqueness / idempotency safeguard prevents duplicate or concurrent Cron publishes', async () => {
+        const testFp = `BTCUSDT_BUY_65000_1h_momentum_breakout_${Date.now()}`;
+
+        // First worker claims fingerprint -> succeeds
+        const firstClaim = await SignalFingerprint.claimFingerprintIdempotent(testFp, 'BTCUSDT', 'BUY');
+        assert(firstClaim.success === true, 'First worker claim must succeed');
+        assert(firstClaim.isDuplicate === false, 'First worker must not be duplicate');
+
+        // Concurrent or duplicate worker tries claiming the exact same fingerprint -> rejected
+        const duplicateClaim = await SignalFingerprint.claimFingerprintIdempotent(testFp, 'BTCUSDT', 'BUY');
+        assert(duplicateClaim.success === false, 'Duplicate concurrent claim must fail');
+        assert(duplicateClaim.isDuplicate === true, 'Duplicate flag must be true');
+      });
     });
   });
 

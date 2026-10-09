@@ -41,6 +41,8 @@ export class MockNeonStore {
   public historicalTrades: Map<string, any> = new Map();
   public auditEvents: any[] = [];
   public scannerState: Map<string, any> = new Map();
+  public fingerprints: Map<string, any> = new Map();
+  public cooldowns: Map<string, any> = new Map();
 
   private advisoryLockHeld = false;
   private advisoryWaiters: (() => void)[] = [];
@@ -53,6 +55,8 @@ export class MockNeonStore {
     this.historicalTrades.clear();
     this.auditEvents = [];
     this.scannerState.clear();
+    this.fingerprints.clear();
+    this.cooldowns.clear();
     this.advisoryLockHeld = false;
     this.advisoryWaiters = [];
   }
@@ -315,7 +319,7 @@ export class MockNeonStore {
 
       const isReset = normalized.toLowerCase().includes('daily_signal_count = 0') || normalized.includes('($1, 0,');
       const count = isReset ? 0 : (stateObj.dailySignalCount ?? (typeof params[1] === 'number' ? params[1] : 0));
-      const cap = stateObj.dailySignalCap ?? (typeof params[2] === 'number' ? params[2] : 10);
+      const cap = stateObj.dailySignalCap ?? (typeof params[2] === 'number' && params[2] <= 1000 ? params[2] : (typeof params[1] === 'number' && params[1] <= 1000 ? params[1] : 5));
 
       const record = {
         date,
@@ -330,6 +334,10 @@ export class MockNeonStore {
     // 14. signal_fingerprints queries
     if (normalized.toLowerCase().includes('from signal_fingerprints where fingerprint = $1')) {
       const fp = String(params[0] || '');
+      const rec = this.fingerprints.get(fp);
+      if (rec) {
+        return { rows: [{ ...rec }], rowCount: 1 };
+      }
       for (const val of this.signals.values()) {
         if (val.fingerprint === fp) {
           return { rows: [{ id: val.id, fingerprint: fp }], rowCount: 1 };
@@ -340,7 +348,42 @@ export class MockNeonStore {
 
     if (normalized.toLowerCase().startsWith('insert into signal_fingerprints')) {
       const [id, fingerprint, symbol, direction, createdAt] = params;
-      return { rows: [{ id, fingerprint, symbol, direction, created_at: createdAt }], rowCount: 1 };
+      const fpKey = String(fingerprint);
+      if (this.fingerprints.has(fpKey)) {
+        // Idempotency: ON CONFLICT DO NOTHING returns 0 inserted rows
+        return { rows: [], rowCount: 0 };
+      }
+      const record = { id: String(id), fingerprint: fpKey, symbol: String(symbol), direction: String(direction), created_at: Number(createdAt || Date.now()) };
+      this.fingerprints.set(fpKey, record);
+      return { rows: [{ ...record }], rowCount: 1 };
+    }
+
+    // 14b. asset_cooldowns queries
+    if (normalized.toLowerCase().includes('from asset_cooldowns where symbol = $1')) {
+      const sym = String(params[0] || '').toUpperCase();
+      const rec = this.cooldowns.get(sym);
+      if (rec) {
+        return { rows: [{ ...rec }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    }
+
+    if (normalized.toLowerCase().includes('from asset_cooldowns')) {
+      const rows = Array.from(this.cooldowns.values());
+      return { rows, rowCount: rows.length };
+    }
+
+    if (normalized.toLowerCase().startsWith('insert into asset_cooldowns')) {
+      const sym = String(params[0] || '').toUpperCase();
+      const lastMs = Number(params[1] || Date.now());
+      let stratCooldowns = params[2];
+      if (typeof stratCooldowns === 'string') {
+        try { stratCooldowns = JSON.parse(stratCooldowns); } catch { stratCooldowns = {}; }
+      }
+      const updated = Number(params[3] || Date.now());
+      const record = { symbol: sym, last_asset_signal_ms: lastMs, strategy_cooldowns: stratCooldowns || {}, updated_at: updated };
+      this.cooldowns.set(sym, record);
+      return { rows: [{ ...record }], rowCount: 1 };
     }
 
     // 15. signals queries
@@ -402,17 +445,29 @@ export class MockNeonStore {
       if (normalized.toLowerCase().includes('where id = $1')) {
         const id = String(params[0] || '');
         const deleted = this.signals.delete(id);
+        for (const [fp, rec] of this.fingerprints.entries()) {
+          if (rec.id === id) {
+            this.fingerprints.delete(fp);
+          }
+        }
         return { rows: [], rowCount: deleted ? 1 : 0 };
       } else if (normalized.toLowerCase().includes('where id in')) {
         let deletedCount = 0;
         for (const p of params) {
-          if (this.signals.delete(String(p))) {
+          const idStr = String(p);
+          if (this.signals.delete(idStr)) {
             deletedCount++;
+            for (const [fp, rec] of this.fingerprints.entries()) {
+              if (rec.id === idStr) {
+                this.fingerprints.delete(fp);
+              }
+            }
           }
         }
         return { rows: [], rowCount: deletedCount };
       }
       this.signals.clear();
+      this.fingerprints.clear();
       return { rows: [], rowCount: 0 };
     }
 

@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from '../logger.js';
 import { serverConfig } from '../config.js';
+import { queryNeon, getNeonPool } from '../infrastructure/neon/db.js';
 
 export interface FingerprintRecord {
   fingerprint: string;
@@ -28,8 +29,36 @@ export class SignalFingerprint {
   private static records: Map<string, FingerprintRecord> = new Map();
   private static isInitialized = false;
 
-  private static init(): void {
+  public static async initAsync(): Promise<void> {
     if (this.isInitialized) return;
+
+    // 1. Load active fingerprints from Neon PostgreSQL if available
+    if (getNeonPool()) {
+      try {
+        const minTime = Date.now() - serverConfig.getConfig().signalExpirationMs;
+        const res = await queryNeon<any>(`SELECT fingerprint, symbol, direction, created_at FROM signal_fingerprints WHERE created_at >= $1`, [minTime]);
+        const rows: any[] = Array.isArray(res) ? res : ((res as any)?.rows || []);
+        if (rows.length > 0) {
+          for (const row of rows) {
+            this.records.set(row.fingerprint, {
+              fingerprint: row.fingerprint,
+              symbol: row.symbol,
+              direction: row.direction,
+              entryZone: 0,
+              timeframe: '1h',
+              primaryStrategy: 'consolidated',
+              timestamp: Number(row.created_at),
+            });
+          }
+          this.isInitialized = true;
+          return;
+        }
+      } catch (err) {
+        logger.warn('[SignalFingerprint] Could not load fingerprints from Neon DB:', err);
+      }
+    }
+
+    // 2. Fallback to local snapshot
     try {
       if (fs.existsSync(FINGERPRINT_FILE_PATH)) {
         const raw = fs.readFileSync(FINGERPRINT_FILE_PATH, 'utf-8');
@@ -44,8 +73,16 @@ export class SignalFingerprint {
         }
       }
     } catch (err) {
-      logger.warn('[SignalFingerprint] Could not load persisted fingerprints:', err);
+      logger.warn('[SignalFingerprint] Could not load persisted fingerprints from file:', err);
     }
+    this.isInitialized = true;
+  }
+
+  private static init(): void {
+    if (this.isInitialized) return;
+    this.initAsync().catch((err) => {
+      logger.warn('[SignalFingerprint] Asynchronous init failed:', err);
+    });
     this.isInitialized = true;
   }
 
@@ -53,8 +90,7 @@ export class SignalFingerprint {
    * Removes fingerprint records that have aged out of the
    * signal-expiration window. Runs on every write so neither the
    * in-memory Map nor the on-disk snapshot grow unbounded over a
-   * long-running process (previously this only happened once, at
-   * process startup, inside init()).
+   * long-running process.
    */
   private static pruneExpired(): void {
     const now = Date.now();
@@ -66,12 +102,24 @@ export class SignalFingerprint {
     }
   }
 
-  private static persist(): void {
+  private static persist(rec?: FingerprintRecord): void {
+    if (getNeonPool() && rec) {
+      const id = `fp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      queryNeon(
+        `INSERT INTO signal_fingerprints (id, fingerprint, symbol, direction, created_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (fingerprint) DO NOTHING`,
+        [id, rec.fingerprint, rec.symbol, rec.direction, rec.timestamp]
+      ).catch((err) => {
+        logger.warn('[SignalFingerprint] DB persistence warning:', err);
+      });
+    }
+
     try {
       const arr = Array.from(this.records.values());
       fs.writeFileSync(FINGERPRINT_FILE_PATH, JSON.stringify(arr, null, 2), 'utf-8');
     } catch (err) {
-      logger.warn('[SignalFingerprint] Could not save fingerprints to disk:', err);
+      // safe
     }
   }
 
@@ -164,7 +212,57 @@ export class SignalFingerprint {
 
     this.records.set(fingerprint, rec);
     this.pruneExpired();
-    this.persist();
+    this.persist(rec);
     return fingerprint;
+  }
+
+  /**
+   * Database Uniqueness/Idempotency Safeguard:
+   * Atomically claims a fingerprint using Neon PostgreSQL UNIQUE constraint.
+   * Returns true if newly claimed, false if duplicate/concurrently claimed by another Cron worker.
+   */
+  public static async claimFingerprintIdempotent(
+    fingerprint: string,
+    symbol: string,
+    direction: string
+  ): Promise<{ success: boolean; isDuplicate: boolean }> {
+    this.init();
+    const existing = this.checkDuplicateFingerprint(fingerprint);
+    if (existing.isDuplicate) {
+      return { success: false, isDuplicate: true };
+    }
+
+    if (getNeonPool()) {
+      try {
+        const id = `fp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        const res = await queryNeon(
+          `INSERT INTO signal_fingerprints (id, fingerprint, symbol, direction, created_at)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (fingerprint) DO NOTHING
+           RETURNING id`,
+          [id, fingerprint, symbol.toUpperCase(), direction.toUpperCase(), Date.now()]
+        );
+        if (Array.isArray(res) && res.length === 0) {
+          // Already inserted concurrently by another transaction/Cron worker!
+          return { success: false, isDuplicate: true };
+        }
+      } catch (err) {
+        logger.warn('[SignalFingerprint] claimFingerprintIdempotent DB check error:', err);
+      }
+    }
+
+    // Cache in memory for instant local deduplication
+    this.records.set(fingerprint, {
+      fingerprint,
+      symbol: symbol.toUpperCase(),
+      direction: direction.toUpperCase(),
+      entryZone: 0,
+      timeframe: '1h',
+      primaryStrategy: 'claimed',
+      timestamp: Date.now(),
+    });
+    this.pruneExpired();
+
+    return { success: true, isDuplicate: false };
   }
 }

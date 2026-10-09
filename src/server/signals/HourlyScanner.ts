@@ -851,10 +851,15 @@ export class HourlyScannerService {
       // 6. Stage D: Final Ranking & Daily Cap Selection
       qualifiedUncorrelated.sort((a, b) => ((b as any).rankingScore ?? b.score ?? b.confidenceScore ?? 0) - ((a as any).rankingScore ?? a.score ?? a.confidenceScore ?? 0));
 
+      // Limit publication to 2 signals per scan and respect remaining daily cap allowance
+      const MAX_SIGNALS_PER_SCAN = 2;
+      const effectiveCapForScan = Math.min(remainingAllowance, MAX_SIGNALS_PER_SCAN);
       const selectedSetups: TradingSignal[] = [];
       for (const sig of qualifiedUncorrelated) {
-        if (selectedSetups.length >= remainingAllowance) {
-          const reason = `REJECTED: DAILY_CAP_REACHED. Daily automated notification cap (${dailyCap}/day) reached. Remaining slots full.`;
+        if (selectedSetups.length >= effectiveCapForScan) {
+          const reason = selectedSetups.length >= remainingAllowance
+            ? `REJECTED: DAILY_CAP_REACHED. Daily automated notification cap (${dailyCap}/day) reached. Remaining slots full.`
+            : `REJECTED: SCAN_SIGNAL_CAP_REACHED. Maximum publication limit of ${MAX_SIGNALS_PER_SCAN} signals per scan reached. Preserving signal focus.`;
           rejectedDuringScan.push({
             symbol: sig.symbol,
             direction: sig.direction,
@@ -932,7 +937,20 @@ export class HourlyScannerService {
       for (const sig of selectedSetups) {
         const score = sig.score ?? sig.confidenceScore ?? 0;
 
+        const sigFp = SignalFingerprint.generateFingerprint({
+          symbol: sig.symbol,
+          direction: sig.direction,
+          entryPrice: sig.entryPrice,
+          timeframe: sig.timeframe,
+          primaryStrategy: sig.strategy,
+        });
 
+        // Database uniqueness / idempotency safeguard to prevent concurrent Cron jobs from publishing duplicate signals
+        const claim = await SignalFingerprint.claimFingerprintIdempotent(sigFp, sig.symbol, sig.direction);
+        if (!claim.success) {
+          logger.warn(`[Hourly Scanner] Idempotency safeguard: ${sig.symbol} fingerprint ${sigFp} already claimed. Skipping duplicate dispatch.`);
+          continue;
+        }
 
         // Atomically increment cap
         const inc = await ScannerPersistence.tryIncrementCap(dailyCap);
@@ -1373,7 +1391,7 @@ export class HourlyScannerService {
    */
   getSettings(): ScannerSettings & { limit: number; dailySignalCap: number } {
     const settings = ScannerPersistence.getSettings();
-    const cap = ScannerPersistence.localData?.capState?.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap || 10;
+    const cap = ScannerPersistence.localData?.capState?.dailySignalCap || serverConfig.getConfig().thresholds.dailySignalCap || 5;
     return {
       enabled: settings.enabled,
       notificationsEnabled: settings.notificationsEnabled,

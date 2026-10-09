@@ -131,7 +131,7 @@ const resetDailyCapHandler = async (_req: Request, res: Response) => {
     const settings = await hourlyScanner.getSettingsAsync();
     res.status(200).json({
       success: true,
-      message: `Daily signal cap counter successfully reset to 0 / ${updatedCapState.dailySignalCap || settings.limit || 10}.`,
+      message: `Daily signal cap counter successfully reset to 0 / ${updatedCapState.dailySignalCap || settings.limit || 5}.`,
       settings: {
         ...settings,
         dailySignalCount: 0,
