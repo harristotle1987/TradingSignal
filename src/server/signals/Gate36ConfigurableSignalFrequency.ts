@@ -88,14 +88,14 @@ export class Gate36ConfigurableSignalFrequency {
     customCap?: number;
     maxClusterAllocationPct?: number;
   }): FrequencyConfig {
-    let newCap = 10;
-    let preset: SignalCapPreset = params.preset || '10';
+    let newCap = 5;
+    let preset: SignalCapPreset = params.preset || '5';
 
     if (preset === '5') newCap = 5;
     else if (preset === '10') newCap = 10;
     else if (preset === '15') newCap = 15;
     else if (preset === 'CUSTOM') {
-      const customVal = typeof params.customCap === 'number' ? params.customCap : 10;
+      const customVal = typeof params.customCap === 'number' ? params.customCap : 5;
       newCap = Math.max(1, Math.min(100, Math.floor(customVal)));
     } else if (typeof params.customCap === 'number') {
       preset = 'CUSTOM';
@@ -119,6 +119,8 @@ export class Gate36ConfigurableSignalFrequency {
 
     return this.getConfig();
   }
+
+  public static updateConfig = Gate36ConfigurableSignalFrequency.setConfig;
 
   /**
    * Increments candidate count (candidate/watchlist item).

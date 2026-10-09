@@ -190,17 +190,29 @@ class ConfigService {
   }
 
   updateThresholds(partial: Partial<SignalThresholds>): SignalThresholds {
-    const minScore = 65; // Canonical production score floor and signal threshold is strictly 65
+    const minScore = 65; // Canonical floor bound
     const minRR = Math.max(1.8, partial.minimumRR ?? this.config.thresholds.minimumRR);
+
+    const resolvedScore = Math.max(minScore, partial.signalThreshold ?? this.config.thresholds.signalThreshold);
+    const resolvedMinScore = Math.max(minScore, partial.minimumScore ?? this.config.thresholds.minimumScore);
 
     this.config.thresholds = {
       ...this.config.thresholds,
       ...partial,
-      signalThreshold: minScore,
-      minimumScore: minScore,
+      signalThreshold: resolvedScore,
+      minimumScore: resolvedMinScore,
       minimumRR: minRR,
     };
     logger.info('Signal thresholds updated', { updatedThresholds: this.config.thresholds });
+    return this.config.thresholds;
+  }
+
+  /**
+   * Resets configuration and thresholds to canonical authoritative production defaults
+   */
+  resetToDefaults(): SignalThresholds {
+    this.config = this.loadAndValidate();
+    logger.info('Server configuration reset to defaults', { thresholds: this.config.thresholds });
     return this.config.thresholds;
   }
 

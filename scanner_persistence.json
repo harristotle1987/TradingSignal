@@ -1,40 +1,11 @@
 {
   "capState": {
-    "date": "2026-10-03",
+    "date": "2026-10-09",
     "dailySignalCount": 0,
-    "dailySignalCap": 10,
-    "lastScanTime": 1790706606762,
-    "reservations": []
+    "dailySignalCap": 5,
+    "lastScanTime": 1790706606762
   },
-  "sentSignals": [
-    {
-      "id": "sig_1791027577788_h2ebd",
-      "snapshotId": "snap_1791027595496_BNBUSDT_i82j9",
-      "symbol": "BNBUSDT",
-      "direction": "BUY",
-      "entryPrice": 769.39,
-      "stopLoss": 764.42,
-      "takeProfit": 784.78,
-      "tp1": 773.24,
-      "tp2": 777.08,
-      "tp3": 784.78,
-      "riskRewardRatio": 3.1,
-      "score": 79,
-      "rankTier": "BEST_TRADE",
-      "strategy": "[Automated BEST TRADE] RSI + Bollinger Mean Reversion",
-      "timeframe": "Multi-TF Realism Setup",
-      "dataSource": "Bitget Live Feed with Live Price & Sentiment Cross-Validation",
-      "status": "WAITING_ENTRY",
-      "isTradeableSignal": true,
-      "signalClassification": "TRADEABLE",
-      "timestamp": 1791027577788,
-      "expiresAt": 1791041977788,
-      "notificationSent": true,
-      "notificationTimestamp": 1791027596281,
-      "date": "2026-10-03",
-      "provenance": "TEST"
-    }
-  ],
+  "sentSignals": [],
   "rejectedCandidates": [
     {
       "id": "rej_1787224048739_vv27f",
@@ -737,30 +708,15 @@
       "date": "2026-08-25"
     }
   ],
-  "notifications": [
-    {
-      "id": "notif_1791027597027_heumw",
-      "timestamp": 1791027597027,
-      "type": "BEST_TRADE",
-      "symbol": "BNBUSDT",
-      "title": "🚨 [BEST TRADE (Rank #1)] BNBUSDT [BUY]",
-      "message": "Live Entry: 769.39 | TP: 784.78 | SL: 764.42 (R:R 3.1:1, Score: 79/100)",
-      "score": 79,
-      "rankTier": "BEST_TRADE",
-      "date": "2026-10-03"
-    }
-  ],
+  "notifications": [],
   "settings": {
-    "enabled": true,
-    "notificationsEnabled": true,
-    "notifyOnNoTrade": false,
-    "intervalMinutes": 15,
-    "sensitivityProfile": "BALANCED"
+    "enabled": true
   },
   "deletedSignals": [
-    "test_delete_auth_1|TESTUSD|BUY",
-    "bulk_test_1|BULKPAIR|BUY",
-    "bulk_test_2||",
-    "bulk_test_3||"
+    "test_sig_id_1||",
+    "test_log_1||",
+    "id1||",
+    "id2||",
+    "funnel-analytics||"
   ]
 }

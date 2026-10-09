@@ -4466,6 +4466,63 @@ async function runAll() {
         assert(duplicateClaim.success === false, 'Duplicate concurrent claim must fail');
         assert(duplicateClaim.isDuplicate === true, 'Duplicate flag must be true');
       });
+
+      await test('7. Concurrent scan requests with duplicate symbols and directions cannot bypass daily cap or publish duplicates', async () => {
+        await ScannerPersistence.resetDailyCapCount(5);
+        const testSymbol = `CONCURRENT_${Date.now()}`;
+        const fp = SignalFingerprint.generateFingerprint({
+          symbol: testSymbol,
+          direction: 'BUY',
+          entryPrice: 3200,
+          timeframe: '1h',
+          primaryStrategy: 'TREND_FOLLOWING',
+        });
+
+        // Simulate 4 concurrent workers attempting to claim the same fingerprint
+        const claims = await Promise.all([
+          SignalFingerprint.claimFingerprintIdempotent(fp, testSymbol, 'BUY'),
+          SignalFingerprint.claimFingerprintIdempotent(fp, testSymbol, 'BUY'),
+          SignalFingerprint.claimFingerprintIdempotent(fp, testSymbol, 'BUY'),
+          SignalFingerprint.claimFingerprintIdempotent(fp, testSymbol, 'BUY'),
+        ]);
+
+        const successfulClaims = claims.filter((c) => c.success);
+        assert(successfulClaims.length === 1, `Exactly 1 concurrent worker must succeed in claiming fingerprint, got ${successfulClaims.length}`);
+      });
+
+      await test('8. Cooldown expiry restores candidate eligibility after 6 hours', () => {
+        const testSymbol = 'SOLUSDT';
+        const pastTime = Date.now() - (6 * 60 * 60 * 1000 + 1000); // 6 hours and 1 second ago
+        CooldownManager.recordSignalEmit(testSymbol, 'BREAKOUT', pastTime);
+
+        const check = CooldownManager.isAssetInCooldown(testSymbol);
+        assert(check.inCooldown === false, 'SOLUSDT must no longer be in cooldown after 6 hours have elapsed');
+        assert(check.remainingMinutes === 0, 'Remaining cooldown minutes must be 0');
+      });
+
+      await test('9. Settings cap override dynamically updates limit across pipeline and persistence', async () => {
+        // Override daily cap to 8 via Gate36
+        Gate36ConfigurableSignalFrequency.updateConfig({ preset: 'CUSTOM', customCap: 8 });
+        const updatedConfig = Gate36ConfigurableSignalFrequency.getConfig();
+        assert(updatedConfig.dailySignalCap === 8, `Gate36 daily cap should be updated to 8, got ${updatedConfig.dailySignalCap}`);
+
+        const capState = await ScannerPersistence.getCapState();
+        assert(capState.dailySignalCap === 8, `ScannerPersistence daily cap should reflect 8, got ${capState.dailySignalCap}`);
+
+        // Reset back to canonical 5
+        Gate36ConfigurableSignalFrequency.updateConfig({ preset: '5', customCap: 5 });
+        await ScannerPersistence.resetDailyCapCount(5);
+        const restoredState = await ScannerPersistence.getCapState(5);
+        assert(restoredState.dailySignalCap === 5, 'Daily cap should be restored to 5');
+      });
+
+      await test('10. Authoritative limits: 70 min score, 1.8 min gross R:R, and 1.3 net R:R enforced consistently', () => {
+        serverConfig.resetToDefaults();
+        const cfg = serverConfig.getConfig().thresholds;
+        assert(cfg.signalThreshold >= 70, `Authoritative signalThreshold must be >= 70, got ${cfg.signalThreshold}`);
+        assert(cfg.minimumRR >= 1.8, `Authoritative gross minimumRR must be >= 1.8, got ${cfg.minimumRR}`);
+        assert(cfg.minimumNetRR >= 1.3, `Authoritative minimumNetRR floor must be >= 1.3, got ${cfg.minimumNetRR}`);
+      });
     });
   });
 

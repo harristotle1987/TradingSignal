@@ -479,10 +479,12 @@ export class ScannerPersistence {
             await stateRepo.saveCapState(resetState as any);
             return resetState;
           }
-          if (defaultCap !== undefined && remote.dailySignalCap !== defaultCap) {
-            remote.dailySignalCap = defaultCap;
+          const targetCap = defaultCap !== undefined ? defaultCap : (serverConfig?.getConfig?.()?.thresholds?.dailySignalCap || canonicalCap);
+          if (remote.dailySignalCap !== targetCap) {
+            remote.dailySignalCap = targetCap;
             await stateRepo.saveCapState(remote as any);
           }
+          this.localData.capState.dailySignalCap = remote.dailySignalCap;
           return remote as DailyCapState;
         }
         const newState: DailyCapState = {

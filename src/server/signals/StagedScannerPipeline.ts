@@ -843,9 +843,8 @@ export async function runStagedPipeline(
 
       // GATE 6 & GATE 7: Win rate and mathematical expectancy analytics
       // Model-estimated win rate and mathematical expectancy are preserved for analytics,
-      // ranking, and confidence modification, rather than acting as independent hard vetoes.
-      const anyOptimizedPathPassed = !!(scoring as any).anyOptimizedPathPassed;
-      const effectiveMinWinProb = anyOptimizedPathPassed ? 35 : thresholds.minimumWinProbability;
+      // ranking, and confidence modification, enforcing configured probability floor consistently without 35% loophole.
+      const configuredMinWinProb = thresholds.minimumWinProbability;
 
       const classification = SymbolNormalizer.getAssetClassification(asset);
 

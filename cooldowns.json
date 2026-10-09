@@ -1,1 +1,9 @@
-[]
+[
+  {
+    "symbol": "SOLUSDT",
+    "lastAssetSignalMs": 1791554373772,
+    "strategyCooldowns": {
+      "breakout": 1791554373772
+    }
+  }
+]

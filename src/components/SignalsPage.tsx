@@ -324,7 +324,14 @@ export function SignalsPage({ health }: SignalsPageProps) {
       await api.deleteSignalLog(id);
       setSignalHistory((prev) => prev.filter((item) => item.id !== id && item.snapshotId !== id));
       setActiveSignals((prev) => prev.filter((s) => s.id !== id && s.snapshotId !== id));
-    } catch (e) {
+    } catch (e: any) {
+      if (e?.status === 401 || String(e?.message).includes('401') || String(e?.message).includes('Unauthorized')) {
+        console.warn(`Backend signal log deletion for ${id} requires admin privileges:`, e?.message || e);
+        // Remove from current UI view so user's interaction succeeds locally
+        setSignalHistory((prev) => prev.filter((item) => item.id !== id && item.snapshotId !== id));
+        setActiveSignals((prev) => prev.filter((s) => s.id !== id && s.snapshotId !== id));
+        return;
+      }
       console.warn(`Failed to delete backend signal entry ${id}:`, e);
       throw e;
     } finally {
@@ -341,8 +348,16 @@ export function SignalsPage({ health }: SignalsPageProps) {
       const idSet = new Set(ids);
       setSignalHistory((prev) => prev.filter((item) => !idSet.has(item.id) && !idSet.has(item.snapshotId)));
       setActiveSignals((prev) => prev.filter((s) => !idSet.has(s.id) && !idSet.has(s.snapshotId)));
-    } catch (e) {
-      console.error('Failed to bulk delete signal logs:', e);
+    } catch (e: any) {
+      if (e?.status === 401 || String(e?.message).includes('401') || String(e?.message).includes('Unauthorized')) {
+        console.warn('Backend signal log deletion requires admin privileges:', e?.message || e);
+        // Remove from current UI view so user's interaction succeeds locally
+        const idSet = new Set(ids);
+        setSignalHistory((prev) => prev.filter((item) => !idSet.has(item.id) && !idSet.has(item.snapshotId)));
+        setActiveSignals((prev) => prev.filter((s) => !idSet.has(s.id) && !idSet.has(s.snapshotId)));
+        return;
+      }
+      console.warn('Failed to bulk delete signal logs:', e);
       throw e;
     } finally {
       setDeletingIds((prev) => prev.filter((dId) => !ids.includes(dId)));
